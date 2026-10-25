@@ -1014,66 +1014,55 @@ class FileExchangeMainWindow(QMainWindow):
         return (self.sync_folder / self.current_subpath).resolve()
 
     def _load_departments(self):
-        """تحميل قائمة أقسام الدائرة المعتمدة مع تهيئة الأقسام الافتراضية للغرفة ومزامنتها سحابياً"""
-        DEFAULT_DEPTS = [
-            {"name": "أمانة السر والإدارة العامة", "icon": "📜"},
-            {"name": "شعبة الكفالات والعقود القانونية", "icon": "⚖️"},
-            {"name": "شعبة التسجيل والشركات التجارية", "icon": "🏢"},
-            {"name": "القسم المالي والحسابات", "icon": "💰"},
-            {"name": "قسم تكنولوجيا المعلومات والتحول الرقمي", "icon": "💻"},
-            {"name": "العلاقات العامة والإعلام", "icon": "📢"},
-            {"name": "المخازن والتجهيزات", "icon": "📦"}
-        ]
-        stored = self.state_mgr.get_departments()
-        if stored:
-            self.departments_list = list(stored)
-        else:
-            self.departments_list = list(DEFAULT_DEPTS)
-            self.state_mgr.set_departments(self.departments_list)
-
+        """تحميل قائمة الأقسام المعتمدة من السحابة والقرص الفعلي بدون أي أقسام وهمية أو افتراضية"""
+        self.departments_list = []
         self._sync_departments_from_remote_and_disk(force=True)
 
     def _sync_departments_from_remote_and_disk(self, force=False):
-        """مزامنة الأقسام والمجلدات الرسمية من لوحة تحكم الأدمن بالسحابة ومن القرص المحلي فورياً"""
+        """مزامنة الأقسام والمجلدات الرسمية من لوحة تحكم الأدمن بالسحابة فورياً وبدون أي أقسام ثابتة وهمية"""
         import time
         now = time.time()
-        should_check_cloud = force or (now - getattr(self, '_last_dept_cloud_check', 0) > 10)
+        should_check_cloud = force or (now - getattr(self, '_last_dept_cloud_check', 0) > 3)
         has_changes = False
-        existing_names = {d['name'] for d in self.departments_list}
 
-        # 1. فحص المجلد المشترك على القرص المحلي
-        try:
-            for item in self.sync_folder.iterdir():
-                if item.is_dir() and not item.name.startswith(".") and item.name != ".trash":
-                    if item.name not in existing_names:
-                        self.departments_list.append({"name": item.name, "icon": "🏛️"})
-                        existing_names.add(item.name)
-                        has_changes = True
-        except Exception:
-            pass
-
-        # 2. فحص الأقسام المنشأة عبر لوحة الأدمن من السحابة (shared_folders)
+        # 1. جلب الأقسام من سحابة Supabase (shared_folders)
         if should_check_cloud and hasattr(self, 'client') and self.client and self.client.is_configured():
             self._last_dept_cloud_check = now
             try:
                 if hasattr(self.client, 'list_folders'):
                     cloud_folders = self.client.list_folders() or []
+                    cloud_names = []
                     for cf in cloud_folders:
                         cf_name = str(cf.get('name', '')).strip()
                         if cf_name and not cf_name.startswith('.'):
+                            cloud_names.append(cf_name)
                             dept_dir = (self.sync_folder / cf_name).resolve()
                             dept_dir.mkdir(parents=True, exist_ok=True)
-                            if cf_name not in existing_names:
-                                self.departments_list.append({"name": cf_name, "icon": "🏛️"})
-                                existing_names.add(cf_name)
-                                has_changes = True
+
+                    current_names = [d['name'] for d in self.departments_list]
+                    if set(cloud_names) != set(current_names) or len(cloud_names) != len(current_names):
+                        self.departments_list = [{"name": name, "icon": "📁"} for name in cloud_names]
+                        has_changes = True
             except Exception as e:
                 print(f"[Supabase dept sync error]: {e}")
+
+        # 2. في حالة عدم وجود اتصال سحابي، فحص المجلدات الفعلية الموجودة على القرص
+        if not self.departments_list:
+            try:
+                local_names = []
+                for item in self.sync_folder.iterdir():
+                    if item.is_dir() and not item.name.startswith(".") and item.name != ".trash":
+                        local_names.append(item.name)
+                if local_names:
+                    self.departments_list = [{"name": name, "icon": "📁"} for name in sorted(local_names)]
+                    has_changes = True
+            except Exception:
+                pass
 
         if has_changes:
             self.state_mgr.set_departments(self.departments_list)
             if hasattr(self, 'dept_list'):
-                self._refresh_departments_sidebar()
+                self._refresh_departments_sidebar(force_rebuild=True)
 
         return has_changes
 
@@ -1112,7 +1101,7 @@ class FileExchangeMainWindow(QMainWindow):
 
         return True
 
-    def _refresh_departments_sidebar(self):
+    def _refresh_departments_sidebar(self, force_rebuild=False):
         """تحديث القائمة الجانبية للأقسام مع عدد المستندات في كل قسم وإبراز قسم كافة الملفات والمجلدات"""
         if not hasattr(self, 'dept_list'):
             return
@@ -1126,17 +1115,23 @@ class FileExchangeMainWindow(QMainWindow):
         except Exception:
             pass
 
-        # تحديث النصوص في مكانها إذا لم يتغير عدد الأقسام (1 للأرشيف الشامل + الأقسام)
         expected_count = len(self.departments_list) + 1
+        names_match = True
         if self.dept_list.count() == expected_count:
-            # 1. تحديث خيار كافة الملفات
+            for idx, dept in enumerate(self.departments_list):
+                it = self.dept_list.item(idx + 1)
+                if not it or it.data(Qt.ItemDataRole.UserRole) != dept['name']:
+                    names_match = False
+                    break
+
+        # تحديث النصوص في مكانها إذا لم يتغير عدد ولا أسماء الأقسام
+        if not force_rebuild and self.dept_list.count() == expected_count and names_match:
             item_all = self.dept_list.item(0)
             if item_all:
                 new_all_txt = f"🗂️  كافة الملفات والمجلدات  ({total_all_files})"
                 if item_all.text() != new_all_txt:
                     item_all.setText(new_all_txt)
 
-            # 2. تحديث باقي الأقسام
             for idx, dept in enumerate(self.departments_list):
                 name = dept['name']
                 icon = dept.get('icon', '📁')

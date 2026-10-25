@@ -18,7 +18,6 @@ import {
   Plus, 
   Search, 
   FileText, 
-  Sparkles, 
   Save, 
   Key, 
   AlertTriangle, 
@@ -76,16 +75,6 @@ interface FileRecord {
   storagePath: string;
   isDeleted: boolean;
 }
-
-const OFFICIAL_DEPTS = [
-  'أمانة السر والإدارة العامة',
-  'شعبة الكفالات والعقود القانونية',
-  'شعبة التسجيل والشركات التجارية',
-  'القسم المالي والحسابات',
-  'قسم تكنولوجيا المعلومات والتحول الرقمي',
-  'العلاقات العامة والإعلام',
-  'المخازن والتجهيزات'
-];
 
 export default function AdminControlPage() {
   const [activeTab, setActiveTab] = useState<'DEPTS' | 'PERMS' | 'FILES' | 'DEVICES'>('DEPTS');
@@ -181,7 +170,7 @@ export default function AdminControlPage() {
       // حساب إحصائيات الأقسام
       const folderMap = new Map<string, DepartmentItem>();
 
-      // إضافة المجلدات المخزنة في السحابة
+      // إضافة المجلدات المخزنة في السحابة فقط
       if (dbFolders && dbFolders.length > 0) {
         dbFolders.forEach(f => {
           if (f.name) {
@@ -189,8 +178,7 @@ export default function AdminControlPage() {
               id: f.id,
               name: f.name,
               fileCount: 0,
-              totalSize: 0,
-              isDefault: OFFICIAL_DEPTS.includes(f.name)
+              totalSize: 0
             });
           }
         });
@@ -204,8 +192,7 @@ export default function AdminControlPage() {
               id: f.folder,
               name: f.folder,
               fileCount: 0,
-              totalSize: 0,
-              isDefault: OFFICIAL_DEPTS.includes(f.folder)
+              totalSize: 0
             });
           }
           const item = folderMap.get(f.folder)!;
@@ -385,22 +372,6 @@ export default function AdminControlPage() {
       });
     } catch (err: any) {
       alert(`تعذر حذف القسم: ${err.message || err}`);
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  // تثبيت الأقسام الرسمية الافتراضية للغرفة السبعة في السحابة بضغطة زر
-  const handleSeedOfficialDepts = async () => {
-    try {
-      setActionLoading(true);
-      for (const d of OFFICIAL_DEPTS) {
-        await supabase.from('shared_folders').upsert({ name: d }, { onConflict: 'name' });
-      }
-      await loadAllData();
-      alert('🏛️ تم تأكيد وتثبيت كافة أقسام غرفة تجارة كربلاء المقدسة الرسمية السبعة في السحابة بنجاح!');
-    } catch (err: any) {
-      alert(`تعذر تثبيت الأقسام: ${err.message || err}`);
     } finally {
       setActionLoading(false);
     }
@@ -615,16 +586,6 @@ export default function AdminControlPage() {
               >
                 <Plus className="w-4 h-4" />
                 <span>إضافة قسم جديد</span>
-              </button>
-
-              <button
-                onClick={handleSeedOfficialDepts}
-                disabled={actionLoading}
-                className="flex items-center gap-1.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 text-xs font-bold px-3 py-2.5 rounded-xl transition active:scale-95"
-                title="تثبيت الأقسام الرسمية السبعة في السحابة"
-              >
-                <Sparkles className="w-4 h-4 text-amber-600" />
-                <span className="hidden sm:inline">تثبيت الأقسام الرسمية السبعة</span>
               </button>
             </div>
           </div>

@@ -49,16 +49,6 @@ interface FileItem {
   isDeleted: boolean;
 }
 
-const DEFAULT_DEPARTMENTS = [
-  'أمانة السر والإدارة العامة',
-  'شعبة الكفالات والعقود القانونية',
-  'شعبة التسجيل والشركات التجارية',
-  'القسم المالي والحسابات',
-  'قسم تكنولوجيا المعلومات والتحول الرقمي',
-  'العلاقات العامة والإعلام',
-  'المخازن والتجهيزات'
-];
-
 const MIME_MAP: Record<string, string> = {
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   doc: 'application/msword',
@@ -102,7 +92,7 @@ export default function FilesPage() {
 
   const [files, setFiles] = useState<FileItem[]>([]);
   const [folders, setFolders] = useState<string[]>([]);
-  const [departments, setDepartments] = useState<string[]>(DEFAULT_DEPARTMENTS);
+  const [departments, setDepartments] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [permissionsMap, setPermissionsMap] = useState<Record<string, { canWrite: boolean; canDelete: boolean }>>({});
@@ -191,9 +181,9 @@ export default function FilesPage() {
       }
       setFolders(loadedFolders);
 
-      // دمج الأقسام الافتراضية مع أي مجلدات جديدة
-      const allDepts = Array.from(new Set([...DEFAULT_DEPARTMENTS, ...loadedFolders]));
-      setDepartments(allDepts);
+      // الأقسام المعتمدة هي فقط المنشأة في السحابة
+      setDepartments(loadedFolders);
+      setSelectedDept(prev => (prev === '__ALL__' || loadedFolders.includes(prev)) ? prev : '__ALL__');
 
       // 2. جلب كافة الملفات من السحابة (النشطة والمحذوفة)
       const { data: dbFiles } = await supabase
