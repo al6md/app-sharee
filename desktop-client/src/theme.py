@@ -169,6 +169,93 @@ def get_gov_stylesheet():
         color: {GOV_GREEN};
     }}
 
+    /* محدد أسلوب العرض (جدول تفصيلي / بطاقات / قائمة مدمجة) */
+    QFrame#viewSwitcherFrame {{
+        background-color: #eaefed;
+        border: 1px solid #d0ded8;
+        border-radius: 8px;
+        padding: 2px;
+    }}
+    QPushButton#btnViewMode {{
+        background-color: transparent;
+        color: {TEXT_MUTED};
+        border: none;
+        border-radius: 6px;
+        padding: 6px 14px;
+        font-size: 12px;
+        font-weight: 600;
+    }}
+    QPushButton#btnViewMode:hover {{
+        background-color: #dce7e3;
+        color: {GOV_GREEN};
+    }}
+    QPushButton#btnViewMode:checked {{
+        background-color: {GOV_GREEN};
+        color: #ffffff;
+        font-weight: 700;
+    }}
+
+    /* حاويات منطقة العرض المخصصة للبطاقات والقوائم */
+    QScrollArea#govScrollArea {{
+        background-color: transparent;
+        border: 1.5px solid {BORDER_SUBTLE};
+        border-radius: 10px;
+        outline: none;
+    }}
+    QWidget#govScrollContent {{
+        background-color: transparent;
+    }}
+
+    /* بطاقة المستند الحكومية (Grid Card) */
+    QFrame#govCard {{
+        background-color: {BG_SURFACE};
+        border: 1.5px solid {BORDER_SUBTLE};
+        border-radius: 12px;
+    }}
+    QFrame#govCard:hover {{
+        border: 1.5px solid {GOV_GREEN};
+        background-color: #fbfdfc;
+    }}
+    QPushButton#btnCardOpen {{
+        background-color: #f0f6f4;
+        color: {GOV_GREEN};
+        border: 1px solid #c8d9d2;
+        border-radius: 6px;
+        padding: 5px 14px;
+        font-size: 11.5px;
+        font-weight: 700;
+    }}
+    QPushButton#btnCardOpen:hover {{
+        background-color: {GOV_GREEN};
+        color: #ffffff;
+        border-color: {GOV_GREEN};
+    }}
+
+    /* البلاطة المدمجة (Compact Tile) */
+    QFrame#govCompactTile {{
+        background-color: {BG_SURFACE};
+        border: 1px solid {BORDER_SUBTLE};
+        border-radius: 8px;
+    }}
+    QFrame#govCompactTile:hover {{
+        background-color: #f4f8f6;
+        border: 1px solid {GOV_GREEN};
+    }}
+    QPushButton#btnTileOpen {{
+        background-color: #f0f6f4;
+        color: {GOV_GREEN};
+        border: 1px solid #cbdcd5;
+        border-radius: 6px;
+        padding: 4px 12px;
+        font-size: 11px;
+        font-weight: 700;
+    }}
+    QPushButton#btnTileOpen:hover {{
+        background-color: {GOV_GREEN};
+        color: #ffffff;
+        border-color: {GOV_GREEN};
+    }}
+
     /* شريط التمرير */
     QScrollBar:vertical {{
         border: none;

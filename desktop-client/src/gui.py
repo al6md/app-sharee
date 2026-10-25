@@ -13,7 +13,8 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QLabel, QPushButton, QTableWidget, QTableWidgetItem, 
     QHeaderView, QLineEdit, QSystemTrayIcon, QMenu, QMessageBox, QFileDialog, 
-    QFrame, QButtonGroup, QDialog, QApplication
+    QFrame, QButtonGroup, QDialog, QApplication,
+    QStackedWidget, QScrollArea, QGridLayout
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
 from PyQt6.QtGui import QIcon, QFont, QColor, QPixmap, QCursor
@@ -24,12 +25,236 @@ from theme import (
     STATUS_SYNCED, STATUS_SYNCED_BG, STATUS_SYNCED_BORDER,
     STATUS_SYNCING, STATUS_LOCKED, STATUS_LOCKED_BG, STATUS_LOCKED_BORDER
 )
-from icon_provider import get_file_office_icon
+from icon_provider import get_file_office_icon, get_file_office_pixmap
 from office_handler import OfficeHandler
 from autostart import is_windows_autostart_enabled, set_windows_autostart
 
 class StatusBridge(QObject):
     sync_updated = pyqtSignal(dict)
+
+
+class GovFileCard(QFrame):
+    """بطاقة المستند الرسمية لنمط شبكة البطاقات (Grid View)"""
+    def __init__(self, file_data, main_window):
+        super().__init__()
+        self.file_data = file_data
+        self.main_window = main_window
+        self.file_name = file_data.get('file_name', '')
+        self.setObjectName("govCard")
+        self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        apply_gov_shadow(self, blur=10, offset_y=2, alpha=12)
+        self._init_ui()
+
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(10)
+
+        # 1. الصف العلوي: أيقونة Office + الشارات الرسمية
+        top_row = QHBoxLayout()
+        top_row.setSpacing(10)
+
+        # أيقونة Office فائقة الوضوح
+        icon_lbl = QLabel()
+        pix = get_file_office_pixmap(self.file_name, size=46)
+        icon_lbl.setPixmap(pix)
+        top_row.addWidget(icon_lbl)
+
+        # عمود الشارات
+        badge_col = QVBoxLayout()
+        badge_col.setSpacing(4)
+
+        ext = Path(self.file_name).suffix.lower()
+        if ext in ['.docx', '.doc']:
+            app_text = "Word • مستند رسمي"
+            badge_style = "background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe;"
+        elif ext in ['.xlsx', '.xls', '.csv']:
+            app_text = "Excel • جدول مالي"
+            badge_style = "background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0;"
+        elif ext in ['.accdb', '.mdb']:
+            app_text = "Access • قاعدة بيانات"
+            badge_style = "background: #fef2f2; color: #991b1b; border: 1px solid #fecaca;"
+        elif ext == '.pdf':
+            app_text = "PDF • وثيقة رسمية"
+            badge_style = "background: #fff1f2; color: #9f1239; border: 1px solid #fecdd3;"
+        else:
+            app_text = "مستند عام"
+            badge_style = "background: #f8fafc; color: #334155; border: 1px solid #e2e8f0;"
+
+        type_lbl = QLabel(app_text)
+        type_lbl.setFont(QFont("Cairo", 9, QFont.Weight.Bold))
+        type_lbl.setStyleSheet(f"{badge_style} border-radius: 4px; padding: 2px 6px;")
+        badge_col.addWidget(type_lbl)
+
+        status = self.file_data.get('sync_status', 'synced')
+        status_map = {
+            'synced': ('● محفوظ ومؤمّن', 'background: #eaf7f0; color: #0d8a55; border: 1px solid #a8dfc4;'),
+            'syncing': ('● جارٍ الرفع...', 'background: #fffbeb; color: #b45309; border: 1px solid #fde68a;'),
+            'pending_upload': ('● بانتظار الاتصال', 'background: #f8fafc; color: #64748b; border: 1px solid #cbd5e1;'),
+            'conflict': ('● تم احتواء تعارض', 'background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa;'),
+            'failed': ('● فشل التحقق', 'background: #fef2f2; color: #dc2626; border: 1px solid #fecaca;'),
+            'locked': ('🔒 محجوزة للتعديل', 'background: #fdf2ef; color: #a33820; border: 1px solid #f8c9bd;')
+        }
+        status_text, status_style = status_map.get(status, ('● محفوظ', 'background: #eaf7f0; color: #0d8a55; border: 1px solid #a8dfc4;'))
+
+        status_lbl = QLabel(status_text)
+        status_lbl.setFont(QFont("Cairo", 9, QFont.Weight.DemiBold))
+        status_lbl.setStyleSheet(f"{status_style} border-radius: 4px; padding: 1px 6px;")
+        badge_col.addWidget(status_lbl)
+
+        top_row.addLayout(badge_col)
+        top_row.addStretch()
+        layout.addLayout(top_row)
+
+        # 2. اسم المستند بخط عريض وواضح
+        name_lbl = QLabel(self.file_name)
+        name_lbl.setFont(QFont("Cairo", 11, QFont.Weight.Bold))
+        name_lbl.setStyleSheet("color: #162420;")
+        name_lbl.setWordWrap(True)
+        name_lbl.setMaximumHeight(48)
+        layout.addWidget(name_lbl)
+
+        # 3. الصف السفلي: الحجم والتاريخ وزر الفتح السريع
+        meta_row = QHBoxLayout()
+        meta_row.setSpacing(6)
+
+        size_bytes = self.file_data.get('file_size', 0)
+        if size_bytes < 1024:
+            size_str = f"{size_bytes} B"
+        elif size_bytes < 1048576:
+            size_str = f"{round(size_bytes / 1024, 1)} KB"
+        else:
+            size_str = f"{round(size_bytes / 1048576, 2)} MB"
+
+        date_raw = self.file_data.get('last_modified_local', '')
+        date_str = date_raw[:10] if date_raw else "محفوظ"
+
+        info_lbl = QLabel(f"💾 {size_str}  •  📅 {date_str}")
+        info_lbl.setFont(QFont("Segoe UI", 10))
+        info_lbl.setStyleSheet("color: #566c65;")
+        meta_row.addWidget(info_lbl)
+
+        meta_row.addStretch()
+
+        btn_open = QPushButton("⚡ فتح")
+        btn_open.setObjectName("btnCardOpen")
+        btn_open.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn_open.clicked.connect(lambda: self.main_window._open_file_by_name(self.file_name))
+        meta_row.addWidget(btn_open)
+
+        layout.addLayout(meta_row)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.main_window._open_file_by_name(self.file_name)
+
+    def contextMenuEvent(self, event):
+        self.main_window._show_context_menu_for_file(self.file_name, event.globalPos())
+
+
+class GovCompactTile(QFrame):
+    """البلاطة الأفقية المدمجة لنمط القائمة المدمجة (Compact View)"""
+    def __init__(self, file_data, main_window):
+        super().__init__()
+        self.file_data = file_data
+        self.main_window = main_window
+        self.file_name = file_data.get('file_name', '')
+        self.setObjectName("govCompactTile")
+        self.setFixedHeight(54)
+        self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._init_ui()
+
+    def _init_ui(self):
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 6, 12, 6)
+        layout.setSpacing(12)
+
+        # أيقونة البرنامج
+        icon_lbl = QLabel()
+        pix = get_file_office_pixmap(self.file_name, size=34)
+        icon_lbl.setPixmap(pix)
+        layout.addWidget(icon_lbl)
+
+        # اسم المستند
+        name_lbl = QLabel(self.file_name)
+        name_lbl.setFont(QFont("Cairo", 11, QFont.Weight.Bold))
+        name_lbl.setStyleSheet("color: #162420;")
+        layout.addWidget(name_lbl, stretch=2)
+
+        # شارة البرنامج
+        ext = Path(self.file_name).suffix.lower()
+        if ext in ['.docx', '.doc']:
+            app_text = "Word"
+            badge_style = "background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe;"
+        elif ext in ['.xlsx', '.xls', '.csv']:
+            app_text = "Excel"
+            badge_style = "background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0;"
+        elif ext in ['.accdb', '.mdb']:
+            app_text = "Access"
+            badge_style = "background: #fef2f2; color: #991b1b; border: 1px solid #fecaca;"
+        elif ext == '.pdf':
+            app_text = "PDF"
+            badge_style = "background: #fff1f2; color: #9f1239; border: 1px solid #fecdd3;"
+        else:
+            app_text = "عام"
+            badge_style = "background: #f8fafc; color: #334155; border: 1px solid #e2e8f0;"
+
+        type_lbl = QLabel(app_text)
+        type_lbl.setFont(QFont("Cairo", 9, QFont.Weight.Bold))
+        type_lbl.setStyleSheet(f"{badge_style} border-radius: 4px; padding: 2px 8px;")
+        layout.addWidget(type_lbl)
+
+        # تاريخ التعديل
+        date_raw = self.file_data.get('last_modified_local', '')
+        date_str = date_raw[:19].replace('T', ' ') if date_raw else "محفوظ"
+        date_lbl = QLabel(date_str)
+        date_lbl.setFont(QFont("Segoe UI", 10))
+        date_lbl.setStyleSheet("color: #566c65;")
+        layout.addWidget(date_lbl)
+
+        # الحجم
+        size_bytes = self.file_data.get('file_size', 0)
+        if size_bytes < 1024:
+            size_str = f"{size_bytes} B"
+        elif size_bytes < 1048576:
+            size_str = f"{round(size_bytes / 1024, 1)} KB"
+        else:
+            size_str = f"{round(size_bytes / 1048576, 2)} MB"
+        size_lbl = QLabel(size_str)
+        size_lbl.setFont(QFont("Segoe UI", 10))
+        size_lbl.setStyleSheet("color: #566c65;")
+        layout.addWidget(size_lbl)
+
+        # شارة الحالة
+        status = self.file_data.get('sync_status', 'synced')
+        status_map = {
+            'synced': ('● محفوظ ومؤمّن', 'background: #eaf7f0; color: #0d8a55; border: 1px solid #a8dfc4;'),
+            'syncing': ('● جارٍ الرفع...', 'background: #fffbeb; color: #b45309; border: 1px solid #fde68a;'),
+            'pending_upload': ('● بانتظار الاتصال', 'background: #f8fafc; color: #64748b; border: 1px solid #cbd5e1;'),
+            'conflict': ('● تم احتواء تعارض', 'background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa;'),
+            'failed': ('● فشل التحقق', 'background: #fef2f2; color: #dc2626; border: 1px solid #fecaca;'),
+            'locked': ('🔒 محجوزة للتعديل', 'background: #fdf2ef; color: #a33820; border: 1px solid #f8c9bd;')
+        }
+        status_text, status_style = status_map.get(status, ('● محفوظ', 'background: #eaf7f0; color: #0d8a55; border: 1px solid #a8dfc4;'))
+
+        status_lbl = QLabel(status_text)
+        status_lbl.setFont(QFont("Cairo", 9, QFont.Weight.DemiBold))
+        status_lbl.setStyleSheet(f"{status_style} border-radius: 4px; padding: 2px 8px;")
+        layout.addWidget(status_lbl)
+
+        # زر الفتح المباشر
+        btn_open = QPushButton("⚡ فتح")
+        btn_open.setObjectName("btnTileOpen")
+        btn_open.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn_open.clicked.connect(lambda: self.main_window._open_file_by_name(self.file_name))
+        layout.addWidget(btn_open)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.main_window._open_file_by_name(self.file_name)
+
+    def contextMenuEvent(self, event):
+        self.main_window._show_context_menu_for_file(self.file_name, event.globalPos())
 
 class FileExchangeMainWindow(QMainWindow):
     """النافذة الرسمية لمنظومة تبادل وأرشفة مستندات غرفة تجارة كربلاء المقدسة"""
@@ -42,6 +267,7 @@ class FileExchangeMainWindow(QMainWindow):
 
         self.active_filter = "ALL"
         self.all_files_cache = []
+        self.current_view_mode = self.state_mgr.get_setting("file_view_mode", "TABLE")
 
         # مسار شعار الغرفة الرسمي المتوافق مع ملف التثبيت المستقل
         if getattr(sys, 'frozen', False):
@@ -212,11 +438,54 @@ class FileExchangeMainWindow(QMainWindow):
         tabs_layout.addWidget(self.tab_pdf)
         tabs_layout.addStretch()
 
+        # محدد طرق العرض (جدول تفصيلي / شبكة بطاقات / قائمة مدمجة)
+        view_switch_frame = QFrame()
+        view_switch_frame.setObjectName("viewSwitcherFrame")
+        view_switch_layout = QHBoxLayout(view_switch_frame)
+        view_switch_layout.setContentsMargins(4, 2, 4, 2)
+        view_switch_layout.setSpacing(4)
+
+        view_group = QButtonGroup(self)
+        view_group.setExclusive(True)
+
+        self.btn_view_table = QPushButton("☰ جدول تفصيلي")
+        self.btn_view_table.setObjectName("btnViewMode")
+        self.btn_view_table.setCheckable(True)
+        self.btn_view_table.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_view_table.setToolTip("عرض المستندات في جدول تفصيلي حكومي شامل")
+        view_group.addButton(self.btn_view_table)
+        view_switch_layout.addWidget(self.btn_view_table)
+
+        self.btn_view_grid = QPushButton("⊞ شبكة بطاقات")
+        self.btn_view_grid.setObjectName("btnViewMode")
+        self.btn_view_grid.setCheckable(True)
+        self.btn_view_grid.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_view_grid.setToolTip("عرض المستندات على شكل بطاقات أنيقة بأيقونات Office البارزة")
+        view_group.addButton(self.btn_view_grid)
+        view_switch_layout.addWidget(self.btn_view_grid)
+
+        self.btn_view_compact = QPushButton("☷ قائمة مدمجة")
+        self.btn_view_compact.setObjectName("btnViewMode")
+        self.btn_view_compact.setCheckable(True)
+        self.btn_view_compact.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_view_compact.setToolTip("عرض المستندات في قائمة صفوف مدمجة وسريعة الاستعراض")
+        view_group.addButton(self.btn_view_compact)
+        view_switch_layout.addWidget(self.btn_view_compact)
+
+        self.btn_view_table.clicked.connect(lambda: self._set_view_mode("TABLE"))
+        self.btn_view_grid.clicked.connect(lambda: self._set_view_mode("GRID"))
+        self.btn_view_compact.clicked.connect(lambda: self._set_view_mode("COMPACT"))
+
+        tabs_layout.addWidget(view_switch_frame)
         main_layout.addLayout(tabs_layout)
 
         # ========================================================
-        # 4. جدول المستندات الحكومي الرصين
+        # 4. مساحة عرض المستندات (متعددة الأنماط: جدول / بطاقات / مدمجة)
         # ========================================================
+        self.stack = QStackedWidget()
+        apply_gov_shadow(self.stack, blur=12, offset_y=2, alpha=10)
+
+        # 4.1 نمط الجدول التفصيلي (TABLE)
         self.table = QTableWidget()
         self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels([
@@ -231,11 +500,38 @@ class FileExchangeMainWindow(QMainWindow):
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.table.customContextMenuRequested.connect(self._show_context_menu)
+        self.table.customContextMenuRequested.connect(self._show_table_context_menu)
         self.table.cellDoubleClicked.connect(self._open_selected_from_table)
-        apply_gov_shadow(self.table, blur=12, offset_y=2, alpha=10)
+        self.stack.addWidget(self.table)
 
-        main_layout.addWidget(self.table, stretch=1)
+        # 4.2 نمط شبكة البطاقات (GRID)
+        self.grid_scroll = QScrollArea()
+        self.grid_scroll.setObjectName("govScrollArea")
+        self.grid_scroll.setWidgetResizable(True)
+        self.grid_container = QWidget()
+        self.grid_container.setObjectName("govScrollContent")
+        self.grid_layout = QGridLayout(self.grid_container)
+        self.grid_layout.setContentsMargins(12, 12, 12, 12)
+        self.grid_layout.setSpacing(14)
+        self.grid_scroll.setWidget(self.grid_container)
+        self.stack.addWidget(self.grid_scroll)
+
+        # 4.3 نمط القائمة المدمجة (COMPACT)
+        self.compact_scroll = QScrollArea()
+        self.compact_scroll.setObjectName("govScrollArea")
+        self.compact_scroll.setWidgetResizable(True)
+        self.compact_container = QWidget()
+        self.compact_container.setObjectName("govScrollContent")
+        self.compact_layout = QVBoxLayout(self.compact_container)
+        self.compact_layout.setContentsMargins(12, 12, 12, 12)
+        self.compact_layout.setSpacing(8)
+        self.compact_scroll.setWidget(self.compact_container)
+        self.stack.addWidget(self.compact_scroll)
+
+        main_layout.addWidget(self.stack, stretch=1)
+
+        # تطبيق نمط العرض المحفوظ للمستخدم
+        self._set_view_mode(self.current_view_mode, persist=False)
 
         # ========================================================
         # 5. شريط الحالة السفلي الرصين
@@ -302,6 +598,27 @@ class FileExchangeMainWindow(QMainWindow):
         self.active_filter = tag
         self._filter_content()
 
+    def _set_view_mode(self, mode, persist=True):
+        self.current_view_mode = mode
+        if persist:
+            try:
+                self.state_mgr.set_setting("file_view_mode", mode)
+            except Exception as e:
+                print(f"[Save view mode error]: {e}")
+
+        if mode == "GRID":
+            self.btn_view_grid.setChecked(True)
+            self.stack.setCurrentIndex(1)
+        elif mode == "COMPACT":
+            self.btn_view_compact.setChecked(True)
+            self.stack.setCurrentIndex(2)
+        else:
+            self.btn_view_table.setChecked(True)
+            self.stack.setCurrentIndex(0)
+
+        # تحديث العرض بالملفات المفلترة
+        self._filter_content()
+
     def _filter_content(self):
         query = self.search_box.text().strip().lower()
         filtered = []
@@ -323,7 +640,12 @@ class FileExchangeMainWindow(QMainWindow):
 
             filtered.append(f)
 
-        self._render_table(filtered)
+        if self.current_view_mode == "GRID":
+            self._render_grid(filtered)
+        elif self.current_view_mode == "COMPACT":
+            self._render_compact(filtered)
+        else:
+            self._render_table(filtered)
 
     def _refresh_file_list(self):
         try:
@@ -333,6 +655,53 @@ class FileExchangeMainWindow(QMainWindow):
             self._filter_content()
         except Exception as e:
             print(f"[Refresh Error]: {e}")
+
+    def _render_grid(self, files):
+        # تفريغ عناصر الشبكة السابقة بأمان
+        while self.grid_layout.count():
+            item = self.grid_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
+        if not files:
+            empty_lbl = QLabel("📂 لا توجد مستندات تطابق هذا التصنيف أو معايير البحث.")
+            empty_lbl.setFont(QFont("Cairo", 12, QFont.Weight.DemiBold))
+            empty_lbl.setStyleSheet("color: #64748b; padding: 50px; background: transparent;")
+            empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.grid_layout.addWidget(empty_lbl, 0, 0, 1, 3)
+            return
+
+        cols = 3
+        for idx, f in enumerate(files):
+            card = GovFileCard(f, self)
+            row = idx // cols
+            col = idx % cols
+            self.grid_layout.addWidget(card, row, col)
+
+        self.grid_layout.setRowStretch((len(files) - 1) // cols + 1, 1)
+
+    def _render_compact(self, files):
+        # تفريغ عناصر القائمة السابقة بأمان
+        while self.compact_layout.count():
+            item = self.compact_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
+        if not files:
+            empty_lbl = QLabel("📂 لا توجد مستندات تطابق هذا التصنيف أو معايير البحث.")
+            empty_lbl.setFont(QFont("Cairo", 12, QFont.Weight.DemiBold))
+            empty_lbl.setStyleSheet("color: #64748b; padding: 50px; background: transparent;")
+            empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.compact_layout.addWidget(empty_lbl)
+            return
+
+        for f in files:
+            tile = GovCompactTile(f, self)
+            self.compact_layout.addWidget(tile)
+
+        self.compact_layout.addStretch()
 
     def _render_table(self, files):
         self.table.setRowCount(0)
@@ -462,12 +831,15 @@ class FileExchangeMainWindow(QMainWindow):
                 f"تعذر تشغيل البرنامج المقترن بالملف:\n{str(e)}"
             )
 
-    def _show_context_menu(self, pos):
+    def _show_table_context_menu(self, pos):
         selected = self.table.selectedItems()
         if not selected:
             return
         raw_text = self.table.item(selected[0].row(), 0).text()
         file_name = raw_text.split('\n')[0]
+        self._show_context_menu_for_file(file_name, self.table.viewport().mapToGlobal(pos))
+
+    def _show_context_menu_for_file(self, file_name, global_pos):
         file_path = (self.sync_folder / file_name).resolve()
 
         menu = QMenu(self)
@@ -496,7 +868,7 @@ class FileExchangeMainWindow(QMainWindow):
         menu.addSeparator()
         delete_action = menu.addAction("🗑️ حذف المستند نهائياً")
 
-        action = menu.exec(self.table.viewport().mapToGlobal(pos))
+        action = menu.exec(global_pos)
         if action == open_action:
             self._open_file_by_name(file_name)
         elif action == open_folder_action:
