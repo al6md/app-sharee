@@ -267,7 +267,24 @@ def main():
                 )
                 sys.exit(1)
 
+    # التأكد من تشغيل نسخة واحدة فقط من البرنامج لمنع التعارض وتكرار العمليات
+    import ctypes
+    ERROR_ALREADY_EXISTS = 183
+    kernel32 = ctypes.windll.kernel32
+    _single_instance_mutex = kernel32.CreateMutexW(None, False, "Global\\KarbalaChamberShareCOCSingleInstanceMutex")
+    if kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
+        try:
+            user32 = ctypes.windll.user32
+            hwnd = user32.FindWindowW(None, "نظام تبادل الملفات الموحد – غرفة تجارة كربلاء المقدسة")
+            if hwnd:
+                user32.ShowWindow(hwnd, 9)
+                user32.SetForegroundWindow(hwnd)
+        except Exception:
+            pass
+        sys.exit(0)
+
     app = QApplication(sys.argv)
+    app._single_instance_mutex = _single_instance_mutex
     app.setApplicationName("share coc")
     app.setApplicationDisplayName("Share COC")
     app.setOrganizationName("KarbalaChamberOfCommerce")

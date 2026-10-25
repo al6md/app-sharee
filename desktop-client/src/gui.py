@@ -17,9 +17,9 @@ from PyQt6.QtWidgets import (
     QHeaderView, QLineEdit, QSystemTrayIcon, QMenu, QMessageBox, QFileDialog, 
     QFrame, QButtonGroup, QDialog, QApplication,
     QStackedWidget, QScrollArea, QGridLayout,
-    QListWidget, QListWidgetItem
+    QListWidget, QListWidgetItem, QAbstractItemView
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QMetaObject
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QMetaObject, QItemSelectionModel
 from PyQt6.QtGui import QIcon, QFont, QColor, QPixmap, QCursor
 
 from theme import (
@@ -400,7 +400,7 @@ class FileExchangeMainWindow(QMainWindow):
         # فحص دوري هادئ للتحديثات
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._refresh_file_list)
-        self.timer.start(2500)
+        self.timer.start(5000)
 
     def _setup_ui(self):
         central = QWidget()
@@ -745,6 +745,10 @@ class FileExchangeMainWindow(QMainWindow):
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setAutoScroll(False)
+        self.table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.table.verticalScrollBar().setSingleStep(25)
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._show_table_context_menu)
         self.table.cellDoubleClicked.connect(self._open_selected_from_table)
@@ -781,6 +785,7 @@ class FileExchangeMainWindow(QMainWindow):
         self.grid_scroll = QScrollArea()
         self.grid_scroll.setObjectName("govScrollArea")
         self.grid_scroll.setWidgetResizable(True)
+        self.grid_scroll.verticalScrollBar().setSingleStep(25)
         self.grid_container = QWidget()
         self.grid_container.setObjectName("govScrollContent")
         self.grid_layout = QGridLayout(self.grid_container)
@@ -793,6 +798,7 @@ class FileExchangeMainWindow(QMainWindow):
         self.compact_scroll = QScrollArea()
         self.compact_scroll.setObjectName("govScrollArea")
         self.compact_scroll.setWidgetResizable(True)
+        self.compact_scroll.verticalScrollBar().setSingleStep(25)
         self.compact_container = QWidget()
         self.compact_container.setObjectName("govScrollContent")
         self.compact_layout = QVBoxLayout(self.compact_container)
@@ -2402,6 +2408,12 @@ class FileExchangeMainWindow(QMainWindow):
 
     def _refresh_file_list(self):
         try:
+            if hasattr(self, 'table') and self.table.verticalScrollBar().isSliderDown():
+                return
+            if hasattr(self, 'grid_scroll') and self.grid_scroll.verticalScrollBar().isSliderDown():
+                return
+            if hasattr(self, 'compact_scroll') and self.compact_scroll.verticalScrollBar().isSliderDown():
+                return
             import re
             def clean_bidi(s):
                 return re.sub(r'[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]', '', str(s)).strip()
@@ -2550,6 +2562,8 @@ class FileExchangeMainWindow(QMainWindow):
 
     def _render_grid(self, files):
         v_bar = self.grid_scroll.verticalScrollBar()
+        if v_bar.isSliderDown():
+            return
         prev_scroll = v_bar.value()
 
         self.grid_scroll.setUpdatesEnabled(False)
@@ -2588,6 +2602,8 @@ class FileExchangeMainWindow(QMainWindow):
 
     def _render_compact(self, files):
         v_bar = self.compact_scroll.verticalScrollBar()
+        if v_bar.isSliderDown():
+            return
         prev_scroll = v_bar.value()
 
         self.compact_scroll.setUpdatesEnabled(False)
@@ -2625,6 +2641,10 @@ class FileExchangeMainWindow(QMainWindow):
         v_bar = self.table.verticalScrollBar()
         prev_scroll = v_bar.value()
 
+        # إذا كان المستخدم يسحب شريط التمرير حالياً، نتجنب إعادة البناء لضمان السلاسة
+        if v_bar.isSliderDown():
+            return
+
         selected_file = None
         selected_items = self.table.selectedItems()
         if selected_items:
@@ -2635,12 +2655,14 @@ class FileExchangeMainWindow(QMainWindow):
 
         self.table.setUpdatesEnabled(False)
         try:
-            self.table.setRowCount(0)
-            for f in files:
-                name = f['file_name']
-                row = self.table.rowCount()
-                self.table.insertRow(row)
+            target_count = len(files)
+            if self.table.rowCount() != target_count:
+                self.table.setRowCount(target_count)
 
+            matched_selected_row = None
+
+            for row, f in enumerate(files):
+                name = f['file_name']
                 is_folder = f.get('is_folder', False)
                 office_icon = get_file_office_icon(name, size=38, is_folder=is_folder)
 
@@ -2695,102 +2717,139 @@ class FileExchangeMainWindow(QMainWindow):
                         "#ef4444" if f.get('sync_status') == 'failed' else STATUS_SYNCING
                     ))
 
+                if selected_file and name == selected_file:
+                    matched_selected_row = row
+
                 # الخلية 0: المستند أو المجلد
-                name_item = QTableWidgetItem(f"{name}\n({type_tag})")
-                name_item.setIcon(office_icon)
-                name_item.setFont(QFont("Cairo", 11, QFont.Weight.Bold))
-                self.table.setItem(row, 0, name_item)
+                disp_text = f"{name}\n({type_tag})"
+                item0 = self.table.item(row, 0)
+                if item0 is None:
+                    item0 = QTableWidgetItem(disp_text)
+                    item0.setIcon(office_icon)
+                    item0.setFont(QFont("Cairo", 11, QFont.Weight.Bold))
+                    self.table.setItem(row, 0, item0)
+                else:
+                    if item0.text() != disp_text:
+                        item0.setText(disp_text)
+                    item0.setIcon(office_icon)
 
                 # الخلية 1: البرنامج المقترن / نوع العنصر
-                app_item = QTableWidgetItem(app_name)
-                app_item.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
-                app_item.setForeground(QColor("#2d3d38"))
-                self.table.setItem(row, 1, app_item)
+                item1 = self.table.item(row, 1)
+                if item1 is None:
+                    item1 = QTableWidgetItem(app_name)
+                    item1.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
+                    item1.setForeground(QColor("#2d3d38"))
+                    self.table.setItem(row, 1, item1)
+                else:
+                    if item1.text() != app_name:
+                        item1.setText(app_name)
 
                 # الخلية 2: تاريخ الاعتماد
-                date_item = QTableWidgetItem(date_str)
-                date_item.setFont(QFont("Segoe UI", 10))
-                date_item.setForeground(QColor(TEXT_MUTED))
-                self.table.setItem(row, 2, date_item)
+                item2 = self.table.item(row, 2)
+                if item2 is None:
+                    item2 = QTableWidgetItem(date_str)
+                    item2.setFont(QFont("Segoe UI", 10))
+                    item2.setForeground(QColor(TEXT_MUTED))
+                    self.table.setItem(row, 2, item2)
+                else:
+                    if item2.text() != date_str:
+                        item2.setText(date_str)
 
                 # الخلية 3: الحجم
-                size_item = QTableWidgetItem(size_str)
-                size_item.setFont(QFont("Segoe UI", 10))
-                size_item.setForeground(QColor(TEXT_MUTED))
-                self.table.setItem(row, 3, size_item)
+                item3 = self.table.item(row, 3)
+                if item3 is None:
+                    item3 = QTableWidgetItem(size_str)
+                    item3.setFont(QFont("Segoe UI", 10))
+                    item3.setForeground(QColor(TEXT_MUTED))
+                    self.table.setItem(row, 3, item3)
+                else:
+                    if item3.text() != size_str:
+                        item3.setText(size_str)
 
                 # الخلية 4: الحالة السحابية
-                status_item = QTableWidgetItem(status_text)
-                status_item.setFont(QFont("Cairo", 10, QFont.Weight.Bold))
-                status_item.setForeground(QColor(status_color))
-                self.table.setItem(row, 4, status_item)
+                item4 = self.table.item(row, 4)
+                if item4 is None:
+                    item4 = QTableWidgetItem(status_text)
+                    item4.setFont(QFont("Cairo", 10, QFont.Weight.Bold))
+                    item4.setForeground(QColor(status_color))
+                    self.table.setItem(row, 4, item4)
+                else:
+                    if item4.text() != status_text:
+                        item4.setText(status_text)
+                    item4.setForeground(QColor(status_color))
 
                 # الخلية 5: الإجراءات المباشرة (استعراض/فتح وحذف)
-                act_widget = QWidget()
-                act_layout = QHBoxLayout(act_widget)
-                act_layout.setContentsMargins(4, 2, 4, 2)
-                act_layout.setSpacing(6)
+                existing_widget = self.table.cellWidget(row, 5)
+                if (existing_widget is None or 
+                    getattr(existing_widget, '_bound_file_name', None) != name or 
+                    getattr(existing_widget, '_is_folder', None) != is_folder):
+                    act_widget = QWidget()
+                    act_widget._bound_file_name = name
+                    act_widget._is_folder = is_folder
+                    act_layout = QHBoxLayout(act_widget)
+                    act_layout.setContentsMargins(4, 2, 4, 2)
+                    act_layout.setSpacing(6)
 
-                if is_folder:
-                    btn_open = QPushButton("📂 استعراض")
-                    btn_open.setObjectName("btnTileOpen")
-                    btn_open.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-                    btn_open.clicked.connect(lambda _, n=name: self._navigate_into_folder(n))
-                    act_layout.addWidget(btn_open)
+                    if is_folder:
+                        btn_open = QPushButton("📂 استعراض")
+                        btn_open.setObjectName("btnTileOpen")
+                        btn_open.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+                        btn_open.clicked.connect(lambda _, n=name: self._navigate_into_folder(n))
+                        act_layout.addWidget(btn_open)
 
-                    btn_rename = QPushButton("✏️")
-                    btn_rename.setObjectName("btnTableRename")
-                    btn_rename.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-                    btn_rename.setToolTip("تعديل اسم المجلد (F2)")
-                    btn_rename.clicked.connect(lambda _, n=name: self._rename_folder(n))
-                    act_layout.addWidget(btn_rename)
+                        btn_rename = QPushButton("✏️")
+                        btn_rename.setObjectName("btnTableRename")
+                        btn_rename.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+                        btn_rename.setToolTip("تعديل اسم المجلد (F2)")
+                        btn_rename.clicked.connect(lambda _, n=name: self._rename_folder(n))
+                        act_layout.addWidget(btn_rename)
 
-                    btn_del = QPushButton("🗑️")
-                    btn_del.setObjectName("btnTableDelete")
-                    btn_del.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-                    btn_del.setToolTip("نقل المجلد إلى سلة المحذوفات")
-                    btn_del.clicked.connect(lambda _, n=name: self._move_folder_to_trash(n))
-                    act_layout.addWidget(btn_del)
-                else:
-                    btn_open = QPushButton("⚡ فتح")
-                    btn_open.setObjectName("btnTileOpen")
-                    btn_open.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-                    btn_open.clicked.connect(lambda _, n=name: self._open_file_by_name(n))
-                    act_layout.addWidget(btn_open)
+                        btn_del = QPushButton("🗑️")
+                        btn_del.setObjectName("btnTableDelete")
+                        btn_del.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+                        btn_del.setToolTip("نقل المجلد إلى سلة المحذوفات")
+                        btn_del.clicked.connect(lambda _, n=name: self._move_folder_to_trash(n))
+                        act_layout.addWidget(btn_del)
+                    else:
+                        btn_open = QPushButton("⚡ فتح")
+                        btn_open.setObjectName("btnTileOpen")
+                        btn_open.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+                        btn_open.clicked.connect(lambda _, n=name: self._open_file_by_name(n))
+                        act_layout.addWidget(btn_open)
 
-                    btn_rename = QPushButton("✏️")
-                    btn_rename.setObjectName("btnTableRename")
-                    btn_rename.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-                    btn_rename.setToolTip("تعديل اسم المستند (F2)")
-                    btn_rename.clicked.connect(lambda _, n=name: self._rename_file(n))
-                    act_layout.addWidget(btn_rename)
+                        btn_rename = QPushButton("✏️")
+                        btn_rename.setObjectName("btnTableRename")
+                        btn_rename.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+                        btn_rename.setToolTip("تعديل اسم المستند (F2)")
+                        btn_rename.clicked.connect(lambda _, n=name: self._rename_file(n))
+                        act_layout.addWidget(btn_rename)
 
-                    btn_del = QPushButton("🗑️")
-                    btn_del.setObjectName("btnTableDelete")
-                    btn_del.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-                    btn_del.setToolTip("نقل المستند إلى سلة المحذوفات")
-                    btn_del.clicked.connect(lambda _, n=name: self._move_file_to_trash(n))
-                    act_layout.addWidget(btn_del)
+                        btn_del = QPushButton("🗑️")
+                        btn_del.setObjectName("btnTableDelete")
+                        btn_del.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+                        btn_del.setToolTip("نقل المستند إلى سلة المحذوفات")
+                        btn_del.clicked.connect(lambda _, n=name: self._move_file_to_trash(n))
+                        act_layout.addWidget(btn_del)
 
-                self.table.setCellWidget(row, 5, act_widget)
+                    self.table.setCellWidget(row, 5, act_widget)
         finally:
             self.table.setUpdatesEnabled(True)
 
-        # استعادة موضع شريط التمرير بدقة متناهية لمنع قفزه للأعلى
+        # استعادة موضع شريط التمرير بدقة تامة
         if not getattr(self, '_reset_scroll_on_render', False):
             v_bar.setValue(prev_scroll)
-            QTimer.singleShot(0, lambda: v_bar.setValue(prev_scroll))
         else:
             self._reset_scroll_on_render = False
             v_bar.setValue(0)
 
-        # استعادة تحديد الملف السابق إن وجد
-        if selected_file:
-            for r in range(self.table.rowCount()):
-                it = self.table.item(r, 0)
-                if it and it.text().split('\n')[0] == selected_file:
-                    self.table.selectRow(r)
-                    break
+        # استعادة تحديد الملف السابق دون التسبب في قفز التمرير إطلاقاً
+        if matched_selected_row is not None:
+            self.table.selectionModel().clearSelection()
+            idx = self.table.model().index(matched_selected_row, 0)
+            self.table.selectionModel().select(idx, QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows)
+            self.table.selectionModel().setCurrentIndex(idx, QItemSelectionModel.SelectionFlag.NoUpdate)
+            if not getattr(self, '_reset_scroll_on_render', False):
+                v_bar.setValue(prev_scroll)
 
     def _open_selected_from_table(self, row, col):
         if col == 5:
