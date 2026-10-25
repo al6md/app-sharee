@@ -10,7 +10,8 @@ import {
   History,
   CheckCircle2,
   HardDrive,
-  Menu
+  Menu,
+  Shield
 } from 'lucide-react';
 import PwaRegistrar from './PwaRegistrar';
 
@@ -73,6 +74,13 @@ export default function RootLayout({
           </div>
 
           <div className="flex items-center gap-2">
+            <Link 
+              href="/admin"
+              className="inline-flex items-center gap-1 text-[10px] bg-[#c59b27] text-[#0e2720] font-black px-2 py-1 rounded-lg border border-[#c59b27] shadow-xs active:scale-95"
+            >
+              <Shield className="w-3 h-3 text-[#0e2720]" />
+              <span>الأدمن</span>
+            </Link>
             <span className="inline-flex items-center gap-1 text-[10px] bg-emerald-950/80 text-emerald-400 font-bold px-2 py-0.5 rounded-full border border-emerald-600/40">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
               سحابة متصلة
@@ -132,6 +140,14 @@ export default function RootLayout({
               >
                 <Users className="w-4 h-4 text-indigo-600" />
                 <span>المستخدمين والصلاحيات</span>
+              </Link>
+
+              <Link 
+                href="/admin" 
+                className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-amber-950 bg-amber-50 hover:bg-amber-100 font-black border border-amber-300 transition shadow-xs mt-2"
+              >
+                <Shield className="w-4 h-4 text-amber-700" />
+                <span>لوحة تحكم الأدمن 🛡️</span>
               </Link>
             </nav>
           </div>

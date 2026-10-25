@@ -105,6 +105,17 @@ export default function FilesPage() {
   const [departments, setDepartments] = useState<string[]>(DEFAULT_DEPARTMENTS);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
+  const [permissionsMap, setPermissionsMap] = useState<Record<string, { canWrite: boolean; canDelete: boolean }>>({});
+
+  const canDeleteFolder = (folderName?: string) => {
+    if (!folderName || folderName === '__ALL__' || folderName === 'كافة الملفات') return true;
+    return permissionsMap[folderName]?.canDelete !== false;
+  };
+
+  const canWriteFolder = (folderName?: string) => {
+    if (!folderName || folderName === '__ALL__' || folderName === 'كافة الملفات') return true;
+    return permissionsMap[folderName]?.canWrite !== false;
+  };
 
   // نوافذ الحوار (Modals)
   const [showNewFolderModal, setShowNewFolderModal] = useState(false);
@@ -221,6 +232,23 @@ export default function FilesPage() {
         });
         setFiles(mapped);
       }
+
+      // 3. جلب مصفوفة الصلاحيات المعتمدة من الأدمن
+      const { data: dbPerms } = await supabase.from('folder_permissions').select('*');
+      const { data: dbFoldersWithId } = await supabase.from('shared_folders').select('id, name');
+      const idToName: Record<string, string> = {};
+      (dbFoldersWithId || []).forEach(f => {
+        if (f.id && f.name) idToName[f.id] = f.name;
+      });
+      const pMap: Record<string, { canWrite: boolean; canDelete: boolean }> = {};
+      (dbPerms || []).forEach(p => {
+        const folderName = idToName[p.folder_id] || p.folder_id;
+        pMap[folderName] = {
+          canWrite: p.can_write !== false,
+          canDelete: p.can_delete !== false,
+        };
+      });
+      setPermissionsMap(pMap);
     } catch (err) {
       console.error('Error fetching files:', err);
     } finally {
@@ -240,6 +268,9 @@ export default function FilesPage() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'shared_folders' }, () => {
         loadData();
       })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'folder_permissions' }, () => {
+        loadData();
+      })
       .subscribe();
 
     return () => {
@@ -253,6 +284,11 @@ export default function FilesPage() {
     if (!selectedFile || !fileToUpdate) return;
 
     const targetFile = fileToUpdate;
+    if (!canWriteFolder(targetFile.folder)) {
+      alert(`⚠️ عذراً، قسم "${targetFile.folder}" مخصص للقراءة فقط (Read-Only) بواسطة مسؤول النظام، لا يمكن حفظ تعديلات.`);
+      if (event.target) event.target.value = '';
+      return;
+    }
 
     try {
       setActionLoading(true);
@@ -344,6 +380,13 @@ export default function FilesPage() {
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>, isCameraCapture = false) => {
     const file = event.target.files?.[0];
     if (!file) return;
+
+    const activeUploadDept = selectedDept !== '__ALL__' ? selectedDept : currentFolder;
+    if (activeUploadDept && !canWriteFolder(activeUploadDept)) {
+      alert(`⚠️ عذراً، قسم "${activeUploadDept}" مخصص للقراءة فقط (Read-Only) بواسطة مسؤول النظام، لا يمكن رفع مستندات جديدة.`);
+      if (event.target) event.target.value = '';
+      return;
+    }
 
     try {
       setActionLoading(true);
@@ -441,6 +484,10 @@ export default function FilesPage() {
 
   // نقل الملف لسلة المحذوفات
   const handleMoveToTrash = async (file: FileItem) => {
+    if (!canDeleteFolder(file.folder)) {
+      alert(`⚠️ عذراً، تم تقييد صلاحية الحذف في قسم "${file.folder}" بواسطة مسؤول النظام (الأدمن).`);
+      return;
+    }
     if (!confirm(`هل أنت متأكد من نقل المستند "${file.name}" إلى سلة المحذوفات؟`)) return;
     try {
       setActionLoading(true);
@@ -500,6 +547,10 @@ export default function FilesPage() {
 
   // حذف نهائي للمستند
   const handlePermanentDelete = async (file: FileItem) => {
+    if (!canDeleteFolder(file.folder)) {
+      alert(`⚠️ عذراً، تم تقييد صلاحية الحذف في قسم "${file.folder}" بواسطة مسؤول النظام (الأدمن).`);
+      return;
+    }
     if (!confirm(`⚠️ تحذير: سيتم حذف المستند "${file.name}" نهائياً من السحابة ولا يمكن استرجاعه. هل تود المتابعة؟`)) return;
     try {
       setActionLoading(true);

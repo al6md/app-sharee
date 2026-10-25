@@ -261,6 +261,18 @@ class SyncEngine:
             return re.sub(r'[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]', '', str(s)).strip()
 
         try:
+            # 0. مزامنة الأقسام والمجلدات السحابية الرسمية (shared_folders) المنشأة من لوحة الأدمن
+            if hasattr(self.client, 'list_folders'):
+                try:
+                    cloud_folders = self.client.list_folders() or []
+                    for cf in cloud_folders:
+                        c_name = clean_bidi(cf.get('name', ''))
+                        if c_name and not c_name.startswith('.'):
+                            dept_dir = (self.sync_folder / c_name).resolve()
+                            dept_dir.mkdir(parents=True, exist_ok=True)
+                except Exception as cfe:
+                    print(f"[Cloud folder sync error]: {cfe}")
+
             # 1. مزامنة الملفات المحذوفة أو المنقولة لسلة المهملات بالسحابة
             if hasattr(self.client, 'list_deleted_files'):
                 try:

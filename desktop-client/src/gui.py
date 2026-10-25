@@ -1014,7 +1014,7 @@ class FileExchangeMainWindow(QMainWindow):
         return (self.sync_folder / self.current_subpath).resolve()
 
     def _load_departments(self):
-        """تحميل قائمة أقسام الدائرة المعتمدة مع تهيئة الأقسام الافتراضية للغرفة"""
+        """تحميل قائمة أقسام الدائرة المعتمدة مع تهيئة الأقسام الافتراضية للغرفة ومزامنتها سحابياً"""
         DEFAULT_DEPTS = [
             {"name": "أمانة السر والإدارة العامة", "icon": "📜"},
             {"name": "شعبة الكفالات والعقود القانونية", "icon": "⚖️"},
@@ -1026,22 +1026,91 @@ class FileExchangeMainWindow(QMainWindow):
         ]
         stored = self.state_mgr.get_departments()
         if stored:
-            self.departments_list = stored
+            self.departments_list = list(stored)
         else:
-            self.departments_list = DEFAULT_DEPTS
+            self.departments_list = list(DEFAULT_DEPTS)
             self.state_mgr.set_departments(self.departments_list)
 
-        # فحص المجلد المشترك وإضافة أي مجلد قسم فعلي غير مدرج
+        self._sync_departments_from_remote_and_disk(force=True)
+
+    def _sync_departments_from_remote_and_disk(self, force=False):
+        """مزامنة الأقسام والمجلدات الرسمية من لوحة تحكم الأدمن بالسحابة ومن القرص المحلي فورياً"""
+        import time
+        now = time.time()
+        should_check_cloud = force or (now - getattr(self, '_last_dept_cloud_check', 0) > 10)
+        has_changes = False
         existing_names = {d['name'] for d in self.departments_list}
+
+        # 1. فحص المجلد المشترك على القرص المحلي
         try:
             for item in self.sync_folder.iterdir():
                 if item.is_dir() and not item.name.startswith(".") and item.name != ".trash":
                     if item.name not in existing_names:
                         self.departments_list.append({"name": item.name, "icon": "🏛️"})
                         existing_names.add(item.name)
-            self.state_mgr.set_departments(self.departments_list)
+                        has_changes = True
         except Exception:
             pass
+
+        # 2. فحص الأقسام المنشأة عبر لوحة الأدمن من السحابة (shared_folders)
+        if should_check_cloud and hasattr(self, 'client') and self.client and self.client.is_configured():
+            self._last_dept_cloud_check = now
+            try:
+                if hasattr(self.client, 'list_folders'):
+                    cloud_folders = self.client.list_folders() or []
+                    for cf in cloud_folders:
+                        cf_name = str(cf.get('name', '')).strip()
+                        if cf_name and not cf_name.startswith('.'):
+                            dept_dir = (self.sync_folder / cf_name).resolve()
+                            dept_dir.mkdir(parents=True, exist_ok=True)
+                            if cf_name not in existing_names:
+                                self.departments_list.append({"name": cf_name, "icon": "🏛️"})
+                                existing_names.add(cf_name)
+                                has_changes = True
+            except Exception as e:
+                print(f"[Supabase dept sync error]: {e}")
+
+        if has_changes:
+            self.state_mgr.set_departments(self.departments_list)
+            if hasattr(self, 'dept_list'):
+                self._refresh_departments_sidebar()
+
+        return has_changes
+
+    def _check_department_permission(self, dept_name=None, action='write'):
+        """فحص الصلاحيات الإدارية المحددة من قبل الأدمن (كتابة / حذف) قبل تنفيذ أي إجراء"""
+        target_dept = dept_name or self.active_dept_name
+        if not target_dept or target_dept == "__ALL__":
+            return True
+
+        if not hasattr(self, 'client') or not self.client or not self.client.is_configured():
+            return True
+
+        try:
+            if hasattr(self.client, 'get_folder_permissions'):
+                perms_map = self.client.get_folder_permissions()
+                rule = perms_map.get(target_dept)
+                if rule:
+                    if action == 'delete' and not rule.get('can_delete', True):
+                        QMessageBox.warning(
+                            self, 
+                            "صلاحية مقيدة من الأدمن 🛡️", 
+                            f"عذراً، قام مسؤول النظام بتقييد صلاحية الحذف في قسم:\n'{target_dept}'\n\n"
+                            f"المستندات والمجلدات في هذا القسم محمية من الحذف بأمر الإدارة."
+                        )
+                        return False
+                    if action == 'write' and not rule.get('can_write', True):
+                        QMessageBox.warning(
+                            self, 
+                            "قسم للقراءة فقط 🛡️", 
+                            f"عذراً، هذا القسم '{target_dept}' مخصص للقراءة فقط (Read-Only) بواسطة مسؤول النظام.\n\n"
+                            f"لا يمكنك إضافة مستندات جديدة أو إعادة تسميتها."
+                        )
+                        return False
+        except Exception as e:
+            print(f"[Check Permission Error]: {e}")
+
+        return True
 
     def _refresh_departments_sidebar(self):
         """تحديث القائمة الجانبية للأقسام مع عدد المستندات في كل قسم وإبراز قسم كافة الملفات والمجلدات"""
@@ -1336,6 +1405,8 @@ class FileExchangeMainWindow(QMainWindow):
 
     def _rename_department(self, old_dept_name):
         """تعديل اسم قسم إداري وتحديث مجلده التخزيني على الجهاز ومزامنته مع السحابة"""
+        if not self._check_department_permission(old_dept_name, action='write'):
+            return
         dialog = QDialog(self)
         dialog.setWindowTitle("✏️ تعديل اسم القسم الإداري")
         dialog.resize(480, 230)
@@ -1468,6 +1539,8 @@ class FileExchangeMainWindow(QMainWindow):
 
     def _delete_department(self, dept_name):
         """حذف قسم إداري بالكامل ونقل كافة مستنداته ومجلداته إلى سلة المحذوفات بأمان"""
+        if not self._check_department_permission(dept_name, action='delete'):
+            return
         reply = QMessageBox.question(
             self, "تأكيد حذف القسم الإداري",
             f"هل أنت متأكد من حذف قسم '{dept_name}' وكافة مجلداته ومستنداته؟\n\n"
@@ -1567,6 +1640,8 @@ class FileExchangeMainWindow(QMainWindow):
 
     def _show_new_folder_dialog(self):
         """نافذة إنشاء مجلد إداري جديد مع اقتراحات سريعة لأقسام الغرفة (قسم إنشاء مجلدات)"""
+        if not self._check_department_permission(self.active_dept_name, action='write'):
+            return
         dialog = QDialog(self)
         dialog.setWindowTitle("إنشاء مجلد إداري جديد")
         dialog.resize(480, 250)
@@ -1664,6 +1739,8 @@ class FileExchangeMainWindow(QMainWindow):
 
     def _rename_folder(self, old_folder_name):
         """تعديل اسم مجلد إداري وتحديث موقعه التخزيني على الجهاز ومزامنته في السحابة"""
+        if not self._check_department_permission(self.active_dept_name, action='write'):
+            return
         dialog = QDialog(self)
         dialog.setWindowTitle("✏️ تعديل اسم المجلد الإداري")
         dialog.resize(480, 220)
@@ -1811,6 +1888,8 @@ class FileExchangeMainWindow(QMainWindow):
 
     def _move_folder_to_trash(self, folder_name):
         """نقل مجلد كامل إلى سلة المحذوفات بأمان"""
+        if not self._check_department_permission(self.active_dept_name, action='delete'):
+            return
         reply = QMessageBox.question(
             self, "تأكيد حذف المجلد",
             f"هل أنت متأكد من نقل المجلد '{folder_name}' ومحتوياته إلى سلة المحذوفات؟",
@@ -1842,6 +1921,11 @@ class FileExchangeMainWindow(QMainWindow):
 
     def _move_file_to_trash(self, file_name, rel_path=None):
         """نقل مستند رسمي إلى سلة المحذوفات الخاصة بالقسم"""
+        target_dept = self.active_dept_name
+        if not target_dept and rel_path and "/" in rel_path:
+            target_dept = rel_path.split("/")[0]
+        if not self._check_department_permission(target_dept, action='delete'):
+            return
         reply = QMessageBox.question(
             self, "تأكيد النقل إلى سلة المحذوفات", 
             f"هل أنت متأكد من نقل المستند التالي إلى سلة محذوفات القسم؟\n{file_name}\n\n(يمكنك استعادته في أي وقت من قسم سلة المحذوفات الخاص بالقسم)",
@@ -1879,6 +1963,8 @@ class FileExchangeMainWindow(QMainWindow):
 
     def _rename_file(self, old_file_name):
         """تعديل اسم مستند رسمي وتحديث موقعه التخزيني على الجهاز ومزامنته في السحابة"""
+        if not self._check_department_permission(self.active_dept_name, action='write'):
+            return
         dialog = QDialog(self)
         dialog.setWindowTitle("✏️ تعديل اسم المستند الرسمي")
         dialog.resize(480, 240)
@@ -2438,6 +2524,9 @@ class FileExchangeMainWindow(QMainWindow):
             def clean_bidi(s):
                 return re.sub(r'[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]', '', str(s)).strip()
 
+            # مزامنة سريعة للأقسام مع لوحة الأدمن بالسحابة والمجلدات المحلية
+            self._sync_departments_from_remote_and_disk(force=False)
+
             current_abs = self._get_current_abs_folder()
             if not current_abs.exists():
                 current_abs.mkdir(parents=True, exist_ok=True)
@@ -2993,6 +3082,8 @@ class FileExchangeMainWindow(QMainWindow):
             self._move_file_to_trash(file_name)
 
     def _upload_custom_file(self):
+        if not self._check_department_permission(self.active_dept_name, action='write'):
+            return
         path, _ = QFileDialog.getOpenFileName(
             self, "اختر مستنداً لإضافته إلى مجلد المشاركة الرسمي", "",
             "ملفات Office والوثائق (*.docx *.xlsx *.accdb *.pdf *.doc *.xls);;كافة الملفات (*.*)"

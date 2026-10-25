@@ -350,11 +350,75 @@ class SupabaseClient:
         try:
             url = f"{self.supabase_url}/rest/v1/shared_folders?select=*&order=name.asc"
             res = requests.get(url, headers=self.headers, timeout=6)
-            if res.status_code == 200:
+            if res.status_code == 200 and isinstance(res.json(), list):
                 return res.json()
         except Exception as e:
             print(f"[Supabase list_folders]: {e}")
         return []
+
+    def rename_folder(self, old_name, new_name):
+        """تعديل اسم مجلد أو قسم في جدول shared_folders وتحديث مسار ملفاته التابعة"""
+        if not self.is_configured():
+            return False
+        try:
+            quoted_old = urllib.parse.quote(old_name)
+            url = f"{self.supabase_url}/rest/v1/shared_folders?name=eq.{quoted_old}"
+            res = requests.patch(url, json={"name": new_name}, headers=self.headers, timeout=6)
+            
+            # تحديث مسارات ملفات القسم في جدول files
+            files = self.list_files()
+            for f in files:
+                fp = f.get('file_path', '')
+                if fp.startswith(f"{old_name}/"):
+                    new_fp = fp.replace(f"{old_name}/", f"{new_name}/", 1)
+                    f_id = f.get('id')
+                    requests.patch(
+                        f"{self.supabase_url}/rest/v1/files?id=eq.{f_id}",
+                        json={"file_path": new_fp},
+                        headers=self.headers,
+                        timeout=5
+                    )
+            return True
+        except Exception as e:
+            print(f"[Supabase rename_folder error]: {e}")
+            return False
+
+    def get_folder_permissions(self):
+        """جلب مصفوفة صلاحيات الأقسام والمجلدات المحددة من قِبل الأدمن"""
+        if not self.is_configured():
+            return {}
+        now = time.time()
+        if hasattr(self, '_perms_cache') and (now - getattr(self, '_perms_cache_time', 0) < 10):
+            return self._perms_cache
+
+        try:
+            # 1. جلب قائمة الأقسام لربط معرف القسم (UUID) باسم القسم
+            folders = self.list_folders()
+            id_to_name = {f.get('id'): f.get('name') for f in folders if f.get('id') and f.get('name')}
+
+            url = f"{self.supabase_url}/rest/v1/folder_permissions?select=*"
+            res = requests.get(url, headers=self.headers, timeout=6)
+            if res.status_code == 200 and isinstance(res.json(), list):
+                result = {}
+                for p in res.json():
+                    f_id = p.get('folder_id')
+                    f_name = id_to_name.get(f_id)
+                    rule = {
+                        'can_view': p.get('can_view', True),
+                        'can_download': p.get('can_download', True),
+                        'can_write': p.get('can_write', True),
+                        'can_delete': p.get('can_delete', True),
+                    }
+                    if f_id:
+                        result[f_id] = rule
+                    if f_name:
+                        result[f_name] = rule
+                self._perms_cache = result
+                self._perms_cache_time = now
+                return result
+        except Exception as e:
+            print(f"[Supabase get_folder_permissions]: {e}")
+        return getattr(self, '_perms_cache', {})
 
     def delete_file(self, file_name_or_rel_path, permanent=False):
         """نقل الملف إلى سلة المحذوفات السحابية أو حذفه نهائياً من قاعدة بيانات Supabase والتخزين"""
