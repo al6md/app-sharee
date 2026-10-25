@@ -338,19 +338,27 @@ export default function FilesPage() {
     }
   };
 
-  // استخراج الرابط المباشر النظيف للمستند لضمان التوافق مع برامج Office في الجوال والكمبيوتر
-  const getFileDirectUrl = (file: FileItem): string => {
+  // استخراج الرابط الموقع الآمن للمستند (Signed URL) لضمان إمكانية تنزيله وفتحه بنجاح
+  const getFileDirectUrl = async (file: FileItem): Promise<string> => {
+    try {
+      const cleanPath = file.storagePath.startsWith('/') ? file.storagePath.slice(1) : file.storagePath;
+      const { data, error } = await supabase.storage
+        .from('file-exchange-storage')
+        .createSignedUrl(cleanPath, 3600);
+      if (data?.signedUrl) {
+        return data.signedUrl;
+      }
+    } catch (e) {
+      console.error('Signed URL generation failed:', e);
+    }
     const baseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://bjcillpivgcntzbwmpsm.supabase.co';
-    const cleanStoragePath = file.storagePath.startsWith('/') ? file.storagePath.slice(1) : file.storagePath;
-    const encodedPath = cleanStoragePath.split('/').map(segment => encodeURIComponent(segment)).join('/');
-    return `${baseUrl}/storage/v1/object/public/file-exchange-storage/${encodedPath}`;
+    return `${baseUrl}/storage/v1/object/public/file-exchange-storage/${encodeURIComponent(file.storagePath)}`;
   };
 
   // 1. فتح المستند مباشرة في برنامج Office الأصلي (سواء على الهاتف أو الحاسوب)
   const handleOpenFile = async (file: FileItem) => {
     const isOffice = ['word', 'excel', 'access'].includes(file.type);
     const officeName = file.type === 'word' ? 'Word' : file.type === 'excel' ? 'Excel' : file.type === 'access' ? 'Access' : 'البرنامج الأصلي';
-    const directUrl = getFileDirectUrl(file);
 
     // فحص ما إذا كان المستخدم يتصفح من هاتف محمول (Android أو iOS)
     const isMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
@@ -365,6 +373,7 @@ export default function FilesPage() {
         return;
       } else {
         // PDF أو صورة أو ملف عام: فتح مباشر في المتصفح أو تطبيق العرض الافتراضي
+        const directUrl = await getFileDirectUrl(file);
         window.open(directUrl, '_blank');
         return;
       }
@@ -429,7 +438,7 @@ export default function FilesPage() {
         type: 'info'
       });
 
-      const directUrl = getFileDirectUrl(file);
+      const directUrl = await getFileDirectUrl(file);
       const res = await fetch(directUrl);
       if (!res.ok) throw new Error('فشل جلب الملف من السحابة');
       const blob = await res.blob();
@@ -496,7 +505,7 @@ export default function FilesPage() {
         text: `⏳ جاري تجهيز "${file.name}" للهاتف...`,
         type: 'info'
       });
-      const directUrl = getFileDirectUrl(file);
+      const directUrl = await getFileDirectUrl(file);
       const response = await fetch(directUrl);
       const blob = await response.blob();
       const fileObj = new File([blob], file.name, {
@@ -521,7 +530,7 @@ export default function FilesPage() {
       }
     } catch (err: any) {
       if (err.name !== 'AbortError') {
-        const directUrl = getFileDirectUrl(file);
+        const directUrl = await getFileDirectUrl(file);
         window.open(directUrl, '_blank');
       }
     }
