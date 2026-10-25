@@ -46,6 +46,10 @@ def create_stitch_office_pixmap(app_type, size=64):
         c_top = QColor("#d9381e")
         c_bottom = QColor("#b3260f")
         letter = "P"
+    elif app_type == 'folder':
+        c_top = QColor("#d4af37")
+        c_bottom = QColor("#b8860b")
+        letter = "📁"
     else:
         c_top = QColor("#475569")
         c_bottom = QColor("#334155")
@@ -99,7 +103,9 @@ def create_office_icon(app_type, size=64):
     _icon_cache[key] = icon
     return icon
 
-def get_file_office_icon(filename, size=64):
+def get_file_office_icon(filename, size=64, is_folder=False):
+    if is_folder or filename == '__folder__':
+        return create_office_icon('folder', size)
     ext = filename.lower().split('.')[-1] if '.' in filename else ''
     if ext in ['docx', 'doc', 'dotx']:
         return create_office_icon('word', size)
@@ -111,7 +117,9 @@ def get_file_office_icon(filename, size=64):
         return create_office_icon('pdf', size)
     return create_office_icon('other', size)
 
-def get_file_office_pixmap(filename, size=64):
+def get_file_office_pixmap(filename, size=64, is_folder=False):
+    if is_folder or filename == '__folder__':
+        return create_stitch_office_pixmap('folder', size)
     ext = filename.lower().split('.')[-1] if '.' in filename else ''
     if ext in ['docx', 'doc', 'dotx']:
         return create_stitch_office_pixmap('word', size)

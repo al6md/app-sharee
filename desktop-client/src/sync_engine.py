@@ -82,10 +82,12 @@ class SyncEngine:
                 pass
 
     def scan_initial_local_files(self):
-        """فحص المجلد المشترك وإدراج كافة الملفات الحقيقية الموجودة فيه تلقائياً"""
+        """فحص المجلد المشترك وإدراج كافة الملفات الحقيقية الموجودة فيه وفي مجلداته الفرعية تلقائياً"""
         try:
-            for item in self.sync_folder.glob("*.*"):
+            for item in self.sync_folder.rglob("*"):
                 if item.is_file():
+                    if ".trash" in item.parts or item.name.startswith("."):
+                        continue
                     filename = item.name
                     if filename.startswith("~$") or filename.endswith(".tmp") or filename.endswith(".laccdb") or filename.endswith(".ldb"):
                         continue
@@ -126,9 +128,12 @@ class SyncEngine:
 
     def on_local_file_deleted(self, filepath):
         path = Path(filepath)
-        rel_path = str(path.name)
+        try:
+            rel_path = str(path.relative_to(self.sync_folder)).replace("\\", "/")
+        except Exception:
+            rel_path = str(path.name)
         with self.state_mgr._get_connection() as conn:
-            conn.execute("DELETE FROM local_files WHERE relative_path = ?", (rel_path,))
+            conn.execute("DELETE FROM local_files WHERE relative_path = ? OR file_name = ?", (rel_path, path.name))
             conn.execute("DELETE FROM upload_queue WHERE relative_path = ?", (rel_path,))
         self.notify_status({"event": "deleted", "file": rel_path, "status": "تم حذف الملف محلياً"})
 

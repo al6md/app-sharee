@@ -52,6 +52,16 @@ class LocalStateManager:
                     value TEXT NOT NULL
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS deleted_files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_name TEXT NOT NULL,
+                    original_rel_path TEXT NOT NULL,
+                    trash_path TEXT NOT NULL,
+                    file_size INTEGER NOT NULL,
+                    deleted_at TEXT NOT NULL
+                )
+            """)
 
     def set_file_state(self, relative_path, file_name, sha256_hash, file_size, sync_status, server_file_id=None):
         now = datetime.now().isoformat()
@@ -126,3 +136,45 @@ class LocalStateManager:
                 INSERT INTO settings (key, value) VALUES (?, ?)
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value
             """, (key, str(value)))
+
+    def add_to_trash(self, file_name, original_rel_path, trash_path, file_size):
+        """نقل ملف إلى سجل سلة المحذوفات وحذفه من الملفات النشطة"""
+        now = datetime.now().isoformat()
+        with self._get_connection() as conn:
+            conn.execute("""
+                INSERT INTO deleted_files (file_name, original_rel_path, trash_path, file_size, deleted_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, (file_name, original_rel_path, str(trash_path), file_size, now))
+            conn.execute("DELETE FROM local_files WHERE relative_path = ? OR file_name = ?", (original_rel_path, file_name))
+            conn.execute("DELETE FROM upload_queue WHERE relative_path = ?", (original_rel_path,))
+
+    def get_trash_files(self):
+        """جلب جميع الملفات المحذوفة مؤقتاً في سلة المحذوفات"""
+        with self._get_connection() as conn:
+            cur = conn.execute("SELECT * FROM deleted_files ORDER BY id DESC")
+            return [dict(r) for r in cur.fetchall()]
+
+    def get_trash_count(self):
+        """حساب عدد الملفات الموجودة في سلة المحذوفات"""
+        with self._get_connection() as conn:
+            cur = conn.execute("SELECT COUNT(*) as count FROM deleted_files")
+            row = cur.fetchone()
+            return row['count'] if row else 0
+
+    def remove_from_trash(self, trash_id):
+        """إزالة مستند من سلة المحذوفات (عند الاستعادة أو الحذف النهائي)"""
+        with self._get_connection() as conn:
+            cur = conn.execute("SELECT * FROM deleted_files WHERE id = ?", (trash_id,))
+            row = cur.fetchone()
+            if row:
+                conn.execute("DELETE FROM deleted_files WHERE id = ?", (trash_id,))
+                return dict(row)
+        return None
+
+    def clear_all_trash(self):
+        """إفراغ سلة المحذوفات بالكامل"""
+        with self._get_connection() as conn:
+            cur = conn.execute("SELECT * FROM deleted_files")
+            rows = [dict(r) for r in cur.fetchall()]
+            conn.execute("DELETE FROM deleted_files")
+            return rows

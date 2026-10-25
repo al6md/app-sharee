@@ -256,6 +256,97 @@ def get_gov_stylesheet():
         border-color: {GOV_GREEN};
     }}
 
+    /* شريط المسار والتنقل بين المجلدات (Breadcrumb Bar) */
+    QFrame#breadcrumbFrame {{
+        background-color: #ffffff;
+        border: 1px solid {BORDER_SUBTLE};
+        border-radius: 8px;
+        padding: 4px 12px;
+    }}
+    QPushButton#btnBreadcrumbUp {{
+        background-color: #f0f6f4;
+        color: {GOV_GREEN};
+        border: 1px solid #c2d3cc;
+        border-radius: 6px;
+        padding: 5px 12px;
+        font-size: 11.5px;
+        font-weight: 700;
+    }}
+    QPushButton#btnBreadcrumbUp:hover {{
+        background-color: {GOV_GREEN};
+        color: #ffffff;
+        border-color: {GOV_GREEN};
+    }}
+    QPushButton#btnBreadcrumbUp:disabled {{
+        background-color: #f8fafc;
+        color: #94a3b8;
+        border-color: #e2e8f0;
+    }}
+
+    /* قسم إدارة وحذف الملفات (سلة المحذوفات) */
+    QFrame#trashHeaderFrame {{
+        background-color: #ffffff;
+        border: 1.5px solid #fecaca;
+        border-right: 4px solid #dc2626;
+        border-radius: 8px;
+        padding: 12px 18px;
+    }}
+    QPushButton#btnTrashRestore {{
+        background-color: #eaf7f0;
+        color: #0d8a55;
+        border: 1px solid #a8dfc4;
+        border-radius: 6px;
+        padding: 5px 12px;
+        font-size: 11.5px;
+        font-weight: 700;
+    }}
+    QPushButton#btnTrashRestore:hover {{
+        background-color: #0d8a55;
+        color: #ffffff;
+    }}
+    QPushButton#btnTrashPurge {{
+        background-color: #fef2f2;
+        color: #dc2626;
+        border: 1px solid #fecaca;
+        border-radius: 6px;
+        padding: 5px 12px;
+        font-size: 11.5px;
+        font-weight: 700;
+    }}
+    QPushButton#btnTrashPurge:hover {{
+        background-color: #dc2626;
+        color: #ffffff;
+    }}
+    QPushButton#btnEmptyTrash {{
+        background-color: #fee2e2;
+        color: #991b1b;
+        border: 1px solid #fca5a5;
+        border-radius: 6px;
+        padding: 6px 14px;
+        font-size: 12px;
+        font-weight: 700;
+    }}
+    QPushButton#btnEmptyTrash:hover {{
+        background-color: #dc2626;
+        color: #ffffff;
+    }}
+
+    /* شرائح اقتراح أسماء المجلدات الحكومية */
+    QPushButton#btnSuggestionChip {{
+        background-color: #f0f6f4;
+        color: {GOV_GREEN};
+        border: 1px solid #cbdcd5;
+        border-radius: 14px;
+        padding: 4px 12px;
+        font-size: 11px;
+        font-weight: 600;
+    }}
+    QPushButton#btnSuggestionChip:hover {{
+        background-color: {GOV_GREEN};
+        color: #ffffff;
+        border-color: {GOV_GREEN};
+    }}
+
     /* شريط التمرير */
     QScrollBar:vertical {{
         border: none;

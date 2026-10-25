@@ -253,6 +253,24 @@ class SupabaseClient:
         except Exception:
             return False
 
+    def delete_file(self, file_name_or_rel_path):
+        """حذف ملف من قاعدة بيانات Supabase ووعاء التخزين"""
+        if not self.is_configured():
+            return True
+        try:
+            name = os.path.basename(file_name_or_rel_path)
+            quoted_name = urllib.parse.quote(name)
+            url_db = f"{self.supabase_url}/rest/v1/files?file_name=eq.{quoted_name}"
+            requests.delete(url_db, headers=self.headers, timeout=6)
+
+            safe_dest = self.get_safe_storage_path(name)
+            del_url = f"{self.supabase_url}/storage/v1/object/file-exchange-storage"
+            requests.delete(del_url, json={"prefixes": [safe_dest, f"shared/{name}", f"shared/{file_name_or_rel_path}"]}, headers=self.headers, timeout=6)
+            return True
+        except Exception as e:
+            print(f"[Supabase delete]: {e}")
+            return False
+
     def log_audit(self, action, entity_type, entity_id, entity_name, details=None, device_id=None):
         """تسجيل العملية في سجل التدقيق"""
         if not self.is_configured():
