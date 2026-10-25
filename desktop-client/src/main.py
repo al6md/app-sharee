@@ -146,7 +146,7 @@ def main():
         cloud_client = r2_client
     else:
         saved_url = state_mgr.get_setting("supabase_url", "https://bjcillpivgcntzbwmpsm.supabase.co")
-        saved_key = state_mgr.get_setting("supabase_key", "")
+        saved_key = state_mgr.get_setting("supabase_key", "sb_publishable_Bfk1klLDNsLWKHvdRhWqNg_XoDqqJ6X")
         supabase_cli = SupabaseClient(saved_url, saved_key)
         cloud_client = supabase_cli if supabase_cli.is_configured() else r2_client
     

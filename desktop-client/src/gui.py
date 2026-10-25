@@ -923,7 +923,7 @@ class FileExchangeMainWindow(QMainWindow):
         layout.addWidget(desc_lbl)
 
         cur_url = self.state_mgr.get_setting("supabase_url", "https://bjcillpivgcntzbwmpsm.supabase.co")
-        cur_key = self.state_mgr.get_setting("supabase_key", "")
+        cur_key = self.state_mgr.get_setting("supabase_key", "sb_publishable_Bfk1klLDNsLWKHvdRhWqNg_XoDqqJ6X")
 
         layout.addWidget(QLabel("عنوان الخادم السحابي (Supabase URL):"))
         txt_url = QLineEdit(cur_url)
