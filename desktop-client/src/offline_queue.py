@@ -1,0 +1,128 @@
+"""
+تبادل الملفات – File Exchange System
+قاعدة البيانات المحلية وإدارة قائمة الانتظار في وضع عدم الاتصال (Offline Queue)
+"""
+import sqlite3
+import os
+from pathlib import Path
+from datetime import datetime
+
+class LocalStateManager:
+    def __init__(self, db_dir=None):
+        if db_dir is None:
+            db_dir = Path(os.environ.get('APPDATA', '.')) / 'FileExchange'
+        self.db_dir = Path(db_dir)
+        self.db_dir.mkdir(parents=True, exist_ok=True)
+        self.db_path = self.db_dir / 'local_state.db'
+        self._init_db()
+
+    def _get_connection(self):
+        conn = sqlite3.connect(str(self.db_path), timeout=15)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _init_db(self):
+        with self._get_connection() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS local_files (
+                    relative_path TEXT PRIMARY KEY,
+                    file_name TEXT NOT NULL,
+                    sha256_hash TEXT NOT NULL,
+                    file_size INTEGER NOT NULL,
+                    server_file_id TEXT,
+                    sync_status TEXT NOT NULL, -- 'synced', 'syncing', 'pending_upload', 'conflict', 'locked'
+                    last_synced_at TEXT,
+                    last_modified_local TEXT NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS upload_queue (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    relative_path TEXT NOT NULL UNIQUE,
+                    local_abs_path TEXT NOT NULL,
+                    sha256_hash TEXT NOT NULL,
+                    attempts INTEGER DEFAULT 0,
+                    last_error TEXT,
+                    queued_at TEXT NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+            """)
+
+    def set_file_state(self, relative_path, file_name, sha256_hash, file_size, sync_status, server_file_id=None):
+        now = datetime.now().isoformat()
+        with self._get_connection() as conn:
+            conn.execute("""
+                INSERT INTO local_files (relative_path, file_name, sha256_hash, file_size, server_file_id, sync_status, last_synced_at, last_modified_local)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(relative_path) DO UPDATE SET
+                    sha256_hash = excluded.sha256_hash,
+                    file_size = excluded.file_size,
+                    server_file_id = COALESCE(excluded.server_file_id, local_files.server_file_id),
+                    sync_status = excluded.sync_status,
+                    last_synced_at = CASE WHEN excluded.sync_status = 'synced' THEN excluded.last_synced_at ELSE local_files.last_synced_at END,
+                    last_modified_local = excluded.last_modified_local
+            """, (relative_path, file_name, sha256_hash, file_size, server_file_id, sync_status, now, now))
+
+    def get_file_state(self, relative_path):
+        with self._get_connection() as conn:
+            cur = conn.execute("SELECT * FROM local_files WHERE relative_path = ?", (relative_path,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def get_all_files(self):
+        with self._get_connection() as conn:
+            cur = conn.execute("SELECT * FROM local_files ORDER BY file_name ASC")
+            return [dict(r) for r in cur.fetchall()]
+
+    def enqueue_upload(self, relative_path, local_abs_path, sha256_hash):
+        now = datetime.now().isoformat()
+        with self._get_connection() as conn:
+            conn.execute("""
+                INSERT INTO upload_queue (relative_path, local_abs_path, sha256_hash, attempts, queued_at)
+                VALUES (?, ?, ?, 0, ?)
+                ON CONFLICT(relative_path) DO UPDATE SET
+                    sha256_hash = excluded.sha256_hash,
+                    queued_at = excluded.queued_at,
+                    attempts = 0,
+                    last_error = NULL
+            """, (relative_path, local_abs_path, sha256_hash, now))
+
+    def get_pending_uploads(self):
+        with self._get_connection() as conn:
+            cur = conn.execute("SELECT * FROM upload_queue ORDER BY id ASC")
+            return [dict(r) for r in cur.fetchall()]
+
+    def dequeue_upload(self, relative_path):
+        with self._get_connection() as conn:
+            conn.execute("DELETE FROM upload_queue WHERE relative_path = ?", (relative_path,))
+
+    def mark_upload_failed(self, relative_path, error_msg):
+        with self._get_connection() as conn:
+            conn.execute("""
+                UPDATE upload_queue 
+                SET attempts = attempts + 1, last_error = ?
+                WHERE relative_path = ?
+            """, (str(error_msg), relative_path))
+            conn.execute("""
+                UPDATE local_files
+                SET sync_status = 'failed'
+                WHERE relative_path = ?
+            """, (relative_path,))
+
+    def get_setting(self, key, default=None):
+        with self._get_connection() as conn:
+            cur = conn.execute("SELECT value FROM settings WHERE key = ?", (key,))
+            row = cur.fetchone()
+            return row['value'] if row else default
+
+    def set_setting(self, key, value):
+        with self._get_connection() as conn:
+            conn.execute("""
+                INSERT INTO settings (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """, (key, str(value)))
