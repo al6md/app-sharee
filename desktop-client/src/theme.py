@@ -347,6 +347,88 @@ def get_gov_stylesheet():
         border-color: {GOV_GREEN};
     }}
 
+    /* القائمة الجانبية لأقسام الدائرة */
+    QFrame#sidebarFrame {{
+        background-color: #ffffff;
+        border: 1.5px solid {BORDER_SUBTLE};
+        border-radius: 12px;
+        padding: 6px;
+    }}
+    QFrame#sidebarHeaderFrame {{
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #14372e, stop:1 #1c4d40);
+        border-radius: 8px;
+        padding: 8px 12px;
+    }}
+    QPushButton#btnAddDept {{
+        background-color: #fdfaf3;
+        color: #855f0b;
+        border: 1px solid #e9d59f;
+        border-radius: 6px;
+        padding: 4px 10px;
+        font-size: 11px;
+        font-weight: 700;
+    }}
+    QPushButton#btnAddDept:hover {{
+        background-color: #c59b27;
+        color: #ffffff;
+        border-color: #c59b27;
+    }}
+    QListWidget#deptList {{
+        background: transparent;
+        border: none;
+        outline: none;
+    }}
+    QListWidget#deptList::item {{
+        background-color: #f8faf9;
+        color: #162420;
+        border: 1px solid #e2ece8;
+        border-radius: 8px;
+        padding: 9px 10px;
+        margin-bottom: 5px;
+        font-size: 12px;
+        font-weight: 700;
+    }}
+    QListWidget#deptList::item:hover {{
+        background-color: #eaf3f0;
+        border-color: #14372e;
+        color: #14372e;
+    }}
+    QListWidget#deptList::item:selected {{
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #14372e, stop:1 #1b473b);
+        color: #ffffff;
+        border: 1px solid #0e2720;
+        border-right: 4px solid #c59b27;
+    }}
+
+    /* أزرار الحذف السريع للمستندات والمجلدات */
+    QPushButton#btnCardDelete, QPushButton#btnTileDelete {{
+        background-color: #fef2f2;
+        color: #dc2626;
+        border: 1px solid #fecaca;
+        border-radius: 6px;
+        padding: 4px 10px;
+        font-size: 11px;
+        font-weight: 700;
+    }}
+    QPushButton#btnCardDelete:hover, QPushButton#btnTileDelete:hover {{
+        background-color: #dc2626;
+        color: #ffffff;
+        border-color: #dc2626;
+    }}
+    QPushButton#btnTableDelete {{
+        background-color: #fef2f2;
+        color: #dc2626;
+        border: 1px solid #fecaca;
+        border-radius: 5px;
+        padding: 3px 8px;
+        font-size: 11px;
+        font-weight: 700;
+    }}
+    QPushButton#btnTableDelete:hover {{
+        background-color: #dc2626;
+        color: #ffffff;
+    }}
+
     /* شريط التمرير */
     QScrollBar:vertical {{
         border: none;

@@ -59,9 +59,14 @@ class LocalStateManager:
                     original_rel_path TEXT NOT NULL,
                     trash_path TEXT NOT NULL,
                     file_size INTEGER NOT NULL,
-                    deleted_at TEXT NOT NULL
+                    deleted_at TEXT NOT NULL,
+                    item_type TEXT DEFAULT 'file'
                 )
             """)
+            try:
+                conn.execute("ALTER TABLE deleted_files ADD COLUMN item_type TEXT DEFAULT 'file'")
+            except Exception:
+                pass
 
     def set_file_state(self, relative_path, file_name, sha256_hash, file_size, sync_status, server_file_id=None):
         now = datetime.now().isoformat()
@@ -137,16 +142,34 @@ class LocalStateManager:
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value
             """, (key, str(value)))
 
-    def add_to_trash(self, file_name, original_rel_path, trash_path, file_size):
-        """نقل ملف إلى سجل سلة المحذوفات وحذفه من الملفات النشطة"""
+    def get_departments(self):
+        """جلب قائمة الأقسام الإدارية المعتمدة المخزنة محلياً"""
+        val = self.get_setting("active_departments_json")
+        if val:
+            try:
+                import json
+                return json.loads(val)
+            except Exception:
+                pass
+        return None
+
+    def set_departments(self, depts_list):
+        """حفظ قائمة الأقسام الإدارية المعتمدة محلياً"""
+        import json
+        self.set_setting("active_departments_json", json.dumps(depts_list, ensure_ascii=False))
+
+    def add_to_trash(self, file_name, original_rel_path, trash_path, file_size, item_type='file'):
+        """نقل ملف أو مجلد أو قسم إلى سجل سلة المحذوفات وحذفه من الملفات النشطة"""
         now = datetime.now().isoformat()
         with self._get_connection() as conn:
             conn.execute("""
-                INSERT INTO deleted_files (file_name, original_rel_path, trash_path, file_size, deleted_at)
-                VALUES (?, ?, ?, ?, ?)
-            """, (file_name, original_rel_path, str(trash_path), file_size, now))
-            conn.execute("DELETE FROM local_files WHERE relative_path = ? OR file_name = ?", (original_rel_path, file_name))
-            conn.execute("DELETE FROM upload_queue WHERE relative_path = ?", (original_rel_path,))
+                INSERT INTO deleted_files (file_name, original_rel_path, trash_path, file_size, deleted_at, item_type)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (file_name, original_rel_path, str(trash_path), file_size, now, item_type))
+            conn.execute("DELETE FROM local_files WHERE relative_path = ? OR file_name = ? OR relative_path LIKE ?", 
+                         (original_rel_path, file_name, f"{original_rel_path}/%"))
+            conn.execute("DELETE FROM upload_queue WHERE relative_path = ? OR relative_path LIKE ?", 
+                         (original_rel_path, f"{original_rel_path}/%"))
 
     def get_trash_files(self):
         """جلب جميع الملفات المحذوفة مؤقتاً في سلة المحذوفات"""
