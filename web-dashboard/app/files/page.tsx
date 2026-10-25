@@ -26,7 +26,9 @@ import {
   ExternalLink,
   Eye,
   Monitor,
-  FolderOpen
+  FolderOpen,
+  Share2,
+  Smartphone
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 
@@ -332,22 +334,63 @@ export default function FilesPage() {
     }
   };
 
-  // استخراج الرابط المباشر للمستند من التخزين السحابي
-  const getFileDirectUrl = async (file: FileItem): Promise<string> => {
-    try {
-      const { data } = await supabase.storage
-        .from('file-exchange-storage')
-        .createSignedUrl(file.storagePath, 3600);
-      if (data?.signedUrl) return data.signedUrl;
-    } catch {}
-    return `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/file-exchange-storage/${encodeURIComponent(file.storagePath)}`;
+  // استخراج الرابط المباشر النظيف للمستند لضمان التوافق مع برامج Office في الجوال والكمبيوتر
+  const getFileDirectUrl = (file: FileItem): string => {
+    const baseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://bjcillpivgcntzbwmpsm.supabase.co';
+    const cleanStoragePath = file.storagePath.startsWith('/') ? file.storagePath.slice(1) : file.storagePath;
+    const encodedPath = cleanStoragePath.split('/').map(segment => encodeURIComponent(segment)).join('/');
+    return `${baseUrl}/storage/v1/object/public/file-exchange-storage/${encodedPath}`;
   };
 
-  // 1. فتح المستند مباشرة في برنامج Office الأصلي (Word / Excel / Access)
+  // 1. فتح المستند مباشرة في برنامج Office الأصلي (سواء على الهاتف أو الحاسوب)
   const handleOpenFile = async (file: FileItem) => {
     const isOffice = ['word', 'excel', 'access'].includes(file.type);
     const officeName = file.type === 'word' ? 'Word' : file.type === 'excel' ? 'Excel' : file.type === 'access' ? 'Access' : 'البرنامج الأصلي';
+    const directUrl = getFileDirectUrl(file);
 
+    // فحص ما إذا كان المستخدم يتصفح من هاتف محمول (Android أو iOS)
+    const isMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+    if (isMobile) {
+      if (['word', 'excel'].includes(file.type)) {
+        const scheme = file.type === 'word' ? 'ms-word' : 'ms-excel';
+        // بروتوكول مايكروسوفت أوفيس الرسمي لتشغيل تطبيقات Word و Excel و Microsoft 365 على الهاتف
+        const officeUri = `${scheme}:ofe|u|${directUrl}`;
+
+        setToastMessage({
+          text: `📱 جاري تشغيل تطبيق ${officeName} الأصلي في هاتفك...`,
+          type: 'success'
+        });
+
+        // تشغيل الرابط فوراً لنظام الهاتف ليفتح التطبيق دون اعتراض
+        const a = document.createElement('a');
+        a.href = officeUri;
+        a.target = '_self';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+          try { document.body.removeChild(a); } catch {}
+        }, 1200);
+
+        // إشعار مساعد إذا كان الهاتف بحاجة لخيارات أخرى
+        setTimeout(() => {
+          setToastMessage({
+            text: `💡 نصيحة: إذا رغبت بفتحه في Google Docs أو WPS، اضغط على زر المشاركة 📤.`,
+            type: 'info'
+          });
+        }, 3000);
+        return;
+      } else if (file.type === 'access') {
+        alert('ملفات Microsoft Access (.accdb) مخصصة لحواسيب الويندوز فقط.');
+        return;
+      } else {
+        // PDF أو صورة أو ملف عام: فتح مباشر في المتصفح أو تطبيق العرض الافتراضي
+        window.open(directUrl, '_blank');
+        return;
+      }
+    }
+
+    // --- في حال العمل على جهاز حاسوب (Desktop Windows) ---
     setToastMessage({
       text: `⏳ جاري فتح "${file.name}" في برنامج ${officeName}...`,
       type: 'info'
@@ -388,19 +431,6 @@ export default function FilesPage() {
       }, 2500);
     } catch {}
 
-    // ثالثاً: في حال استخدام الهاتف المحمول أو عدم وجود التطبيق المكتبي
-    const directUrl = await getFileDirectUrl(file);
-    const isMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-
-    if (isMobile) {
-      window.open(directUrl, '_blank');
-      setToastMessage({
-        text: `📱 تم توجيه المستند لتطبيق ${officeName} في الهاتف.`,
-        type: 'success'
-      });
-      return;
-    }
-
     // إذا على حاسوب شخصي والجسر غير نشط، نبلغ المستخدم
     setTimeout(() => {
       setToastMessage({
@@ -408,6 +438,44 @@ export default function FilesPage() {
         type: 'info'
       });
     }, 1800);
+  };
+
+  // 2. فتح المستند في تطبيقات الهاتف المختلفة أو مشاركته (Web Share API)
+  const handleShareFile = async (file: FileItem) => {
+    try {
+      setToastMessage({
+        text: `⏳ جاري تجهيز "${file.name}" للهاتف...`,
+        type: 'info'
+      });
+      const directUrl = getFileDirectUrl(file);
+      const response = await fetch(directUrl);
+      const blob = await response.blob();
+      const fileObj = new File([blob], file.name, {
+        type: blob.type || 'application/octet-stream',
+        lastModified: Date.now()
+      });
+
+      if (typeof navigator !== 'undefined' && navigator.canShare && navigator.canShare({ files: [fileObj] })) {
+        await navigator.share({
+          files: [fileObj],
+          title: file.name,
+          text: `مستند من غرفة تجارة كربلاء المقدسة: ${file.name}`
+        });
+        setToastMessage({
+          text: `✅ تم فتح قائمة تطبيقات الهاتف للمستند بنجاح.`,
+          type: 'success'
+        });
+        return;
+      } else {
+        // إذا لم يكن المتصفح يدعم مشاركة الملفات، فتحه في نافذة جديدة
+        window.open(directUrl, '_blank');
+      }
+    } catch (err: any) {
+      if (err.name !== 'AbortError') {
+        const directUrl = getFileDirectUrl(file);
+        window.open(directUrl, '_blank');
+      }
+    }
   };
 
   // 2. معاينة المستند عبر متصفح الويب باستخدام Microsoft Office Online
@@ -817,6 +885,15 @@ export default function FilesPage() {
                     </button>
                   )}
 
+                  {/* زر فتح عبر تطبيقات الهاتف (Word / Excel / WPS / Google Docs) */}
+                  <button
+                    onClick={() => handleShareFile(file)}
+                    className="p-2 text-emerald-800 bg-emerald-50 hover:bg-emerald-100 rounded-xl transition"
+                    title="فتح عبر تطبيقات الهاتف أو مشاركة المستند"
+                  >
+                    <Share2 className="w-4 h-4" />
+                  </button>
+
                   {/* زر تنزيل نسخة */}
                   <button
                     onClick={() => handleDownloadFile(file)}
@@ -951,6 +1028,15 @@ export default function FilesPage() {
                           title="إظهار المستند في مجلد الويندوز المحلي"
                         >
                           <FolderOpen className="w-4 h-4" />
+                        </button>
+
+                        {/* زر فتح عبر تطبيقات الهاتف أو مشاركة */}
+                        <button
+                          onClick={() => handleShareFile(file)}
+                          className="p-1.5 text-slate-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition"
+                          title="فتح عبر تطبيقات الهاتف أو مشاركة المستند"
+                        >
+                          <Share2 className="w-4 h-4" />
                         </button>
 
                         {activeTab === 'ACTIVE' ? (
