@@ -100,8 +100,8 @@ class SupabaseClient:
                 clean_files = []
                 for r in res.json():
                     fn = r.get("file_name", "")
-                    # حماية: استبعاد أي سجلات مشفرة بـ Base64 لكي لا تظهر أسماء إنجليزية غريبة للمستخدمين
-                    if fn.endswith(('.docx', '.xlsx', '.pdf', '.accdb')) and len(fn) > 35 and not any(ord(c) > 127 for c in fn):
+                    # حماية: استبعاد أي سجلات مشوهة بـ Base64 لكي لا تظهر أسماء إنجليزية مشفرة غريبة
+                    if fn.endswith(('.docx', '.xlsx', '.pdf', '.accdb')) and len(fn) > 35 and (' ' not in fn) and (fn.startswith('2Y') or fn.startswith('VGh') or fn.startswith('TG')):
                         continue
                     clean_files.append(r)
                 return clean_files
@@ -109,6 +109,19 @@ class SupabaseClient:
         except Exception as e:
             print(f"[Supabase list_accessible_files error]: {e}")
             return []
+
+    def list_deleted_files(self):
+        """جلب قائمة الملفات المحذوفة أو الموجودة في سلة المهملات بالسحابة لمزامنة الحذف محلياً"""
+        if not self.is_configured():
+            return []
+        try:
+            url = f"{self.supabase_url}/rest/v1/files?is_deleted=eq.true&select=*"
+            res = requests.get(url, headers=self.headers, timeout=6)
+            if res.status_code == 200 and isinstance(res.json(), list):
+                return res.json()
+        except Exception as e:
+            print(f"[Supabase list_deleted_files error]: {e}")
+        return []
 
     def check_file_lock(self, file_id_or_name):
         """فحص ما إذا كان الملف مقفولاً من جهاز آخر (خاصة ملفات Access)"""

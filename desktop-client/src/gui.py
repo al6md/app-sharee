@@ -2365,13 +2365,17 @@ class FileExchangeMainWindow(QMainWindow):
 
     def _refresh_file_list(self):
         try:
+            import re
+            def clean_bidi(s):
+                return re.sub(r'[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]', '', str(s)).strip()
+
             current_abs = self._get_current_abs_folder()
             if not current_abs.exists():
                 current_abs.mkdir(parents=True, exist_ok=True)
 
             folders_list = []
             files_list = []
-            seen_file_paths = set()
+            seen_file_names = set()
 
             for item in current_abs.iterdir():
                 if item.name.startswith(".") or item.name == ".trash":
@@ -2380,20 +2384,38 @@ class FileExchangeMainWindow(QMainWindow):
                     continue
 
                 if item.is_dir():
+                    clean_dir_name = clean_bidi(item.name)
+                    rel_dir = str(item.relative_to(self.sync_folder)).replace("\\", "/")
+                    if self.state_mgr.is_in_trash(item.name, rel_dir) or self.state_mgr.is_in_trash(clean_dir_name, rel_dir):
+                        continue
                     count = len([x for x in item.iterdir() if not x.name.startswith(".") and not x.name.startswith("~$")])
                     folders_list.append({
                         'file_name': item.name,
                         'is_folder': True,
                         'item_count': count,
-                        'relative_path': str(item.relative_to(self.sync_folder)).replace("\\", "/"),
+                        'relative_path': rel_dir,
                         'file_size': 0,
                         'sync_status': 'synced',
                         'last_modified_local': datetime.fromtimestamp(item.stat().st_mtime).isoformat()
                     })
                 elif item.is_file():
+                    clean_name = clean_bidi(item.name)
                     rel = str(item.relative_to(self.sync_folder)).replace("\\", "/")
-                    seen_file_paths.add(rel)
-                    st = self.state_mgr.get_file_state(rel)
+                    clean_rel = clean_bidi(rel)
+
+                    # منع ظهور أي ملف محذوف أو موجود في سلة المهملات نهائياً
+                    if (self.state_mgr.is_in_trash(item.name, rel) or 
+                        self.state_mgr.is_in_trash(clean_name, clean_rel) or 
+                        self.state_mgr.is_in_trash(clean_name, rel)):
+                        continue
+
+                    # منع تكرار نفس المستند إطلاقاً
+                    norm_name = clean_name.lower()
+                    if norm_name in seen_file_names:
+                        continue
+                    seen_file_names.add(norm_name)
+
+                    st = self.state_mgr.get_file_state(rel) or self.state_mgr.get_file_state(clean_rel) or self.state_mgr.get_file_state(clean_name)
                     if not st:
                         st = {
                             'file_name': item.name,
@@ -2409,7 +2431,7 @@ class FileExchangeMainWindow(QMainWindow):
                     files_list.append(st)
 
             # في وضع الأرشيف الشامل (كافة الملفات والمجلدات):
-            # نعرض أيضاً كافة المستندات في المجلدات الفرعية لكي تظهر فوراً أمام المستخدم كما في لوحة الويب
+            # نعرض أيضاً كافة المستندات في المجلدات الفرعية مع الحظر الصارم لأي تكرار
             if self.active_dept_name is None and self.current_subpath == Path("."):
                 for sub_item in self.sync_folder.rglob("*"):
                     if sub_item.is_file():
@@ -2417,23 +2439,35 @@ class FileExchangeMainWindow(QMainWindow):
                             continue
                         if sub_item.name.startswith("~$") or sub_item.name.endswith(".tmp") or sub_item.name.endswith(".laccdb") or sub_item.name.endswith(".ldb"):
                             continue
+
+                        clean_sub_name = clean_bidi(sub_item.name)
                         sub_rel = str(sub_item.relative_to(self.sync_folder)).replace("\\", "/")
-                        if sub_rel not in seen_file_paths:
-                            seen_file_paths.add(sub_rel)
-                            st = self.state_mgr.get_file_state(sub_rel)
-                            if not st:
-                                st = {
-                                    'file_name': sub_item.name,
-                                    'is_folder': False,
-                                    'relative_path': sub_rel,
-                                    'file_size': sub_item.stat().st_size,
-                                    'sync_status': 'synced',
-                                    'last_modified_local': datetime.fromtimestamp(sub_item.stat().st_mtime).isoformat()
-                                }
-                            else:
-                                st = dict(st)
-                                st['is_folder'] = False
-                            files_list.append(st)
+                        clean_sub_rel = clean_bidi(sub_rel)
+
+                        if (self.state_mgr.is_in_trash(sub_item.name, sub_rel) or 
+                            self.state_mgr.is_in_trash(clean_sub_name, clean_sub_rel) or 
+                            self.state_mgr.is_in_trash(clean_sub_name, sub_rel)):
+                            continue
+
+                        norm_sub_name = clean_sub_name.lower()
+                        if norm_sub_name in seen_file_names:
+                            continue
+                        seen_file_names.add(norm_sub_name)
+
+                        st = self.state_mgr.get_file_state(sub_rel) or self.state_mgr.get_file_state(clean_sub_rel) or self.state_mgr.get_file_state(clean_sub_name)
+                        if not st:
+                            st = {
+                                'file_name': sub_item.name,
+                                'is_folder': False,
+                                'relative_path': sub_rel,
+                                'file_size': sub_item.stat().st_size,
+                                'sync_status': 'synced',
+                                'last_modified_local': datetime.fromtimestamp(sub_item.stat().st_mtime).isoformat()
+                            }
+                        else:
+                            st = dict(st)
+                            st['is_folder'] = False
+                        files_list.append(st)
 
             folders_list.sort(key=lambda x: x['file_name'].lower())
             files_list.sort(key=lambda x: x['file_name'].lower())

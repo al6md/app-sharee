@@ -98,6 +98,8 @@ class SyncEngine:
                     if filename.startswith("~$") or filename.endswith(".tmp") or filename.endswith(".laccdb") or filename.endswith(".ldb"):
                         continue
                     rel_path = str(item.relative_to(self.sync_folder)).replace("\\", "/")
+                    if self.state_mgr.is_in_trash(filename, rel_path):
+                        continue
                     file_size = item.stat().st_size
                     existing = self.state_mgr.get_file_state(rel_path)
                     if not existing:
@@ -230,15 +232,48 @@ class SyncEngine:
                 self.state_mgr.mark_upload_failed(rel_path, str(e))
 
     def pull_remote_changes(self):
-        """فحص التحديثات الجديدة من السحابة وتنزيلها بأمان"""
+        """فحص التحديثات الجديدة من السحابة وتنزيلها بأمان، مع مزامنة سلة المحذوفات تلقائياً"""
         if not self.client or not self.client.is_configured():
             return
 
         import re
+        from datetime import datetime
         def clean_bidi(s):
             return re.sub(r'[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]', '', str(s)).strip()
 
         try:
+            # 1. مزامنة الملفات المحذوفة أو المنقولة لسلة المهملات بالسحابة
+            if hasattr(self.client, 'list_deleted_files'):
+                try:
+                    deleted_files = self.client.list_deleted_files() or []
+                    for d_file in deleted_files:
+                        d_name = d_file.get('file_name', '')
+                        d_rel = d_file.get('file_path') or d_name
+                        clean_d_name = clean_bidi(d_name)
+                        clean_d_rel = clean_bidi(d_rel)
+                        
+                        candidates = [
+                            (self.sync_folder / clean_d_rel).resolve(),
+                            (self.sync_folder / clean_d_name).resolve()
+                        ]
+                        for cand in candidates:
+                            if cand.exists() and cand.is_file():
+                                trash_dir = self.sync_folder / ".trash"
+                                trash_dir.mkdir(parents=True, exist_ok=True)
+                                trash_dest = trash_dir / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{cand.name}"
+                                try:
+                                    cand.rename(trash_dest)
+                                    self.state_mgr.add_to_trash(cand.name, str(cand.relative_to(self.sync_folder)).replace("\\", "/"), str(trash_dest), trash_dest.stat().st_size)
+                                    print(f"[Trash Sync]: Moved {cand.name} to local trash")
+                                except Exception as te:
+                                    print(f"[Trash Move Error]: {te}")
+                        
+                        if not self.state_mgr.is_in_trash(clean_d_name, clean_d_rel):
+                            self.state_mgr.add_to_trash(clean_d_name, clean_d_rel, "", d_file.get('file_size', 0))
+                except Exception as de:
+                    print(f"[Remote trash sync error]: {de}")
+
+            # 2. مزامنة وتنزيل الملفات النشطة الجديدة من السحابة
             if hasattr(self.client, 'list_files'):
                 remote_files = self.client.list_files()
             else:
@@ -253,10 +288,21 @@ class SyncEngine:
                 clean_rel_path = clean_bidi(rel_file_path)
 
                 # تجاهل أي ملف موجود في سلة المحذوفات لتجنب إعادة تنزيله تلقائياً
-                if self.state_mgr.is_in_trash(file_name, storage_path) or self.state_mgr.is_in_trash(clean_file_name, storage_path):
+                if (self.state_mgr.is_in_trash(file_name, storage_path) or 
+                    self.state_mgr.is_in_trash(clean_file_name, storage_path) or 
+                    self.state_mgr.is_in_trash(clean_file_name, clean_rel_path)):
                     continue
 
                 local_path = (self.sync_folder / clean_rel_path).resolve()
+
+                # إزالة أي نسخ مكررة شاردة في الجذر إذا كان الملف ينتمي لمجلد قسم فرعي
+                root_dup = (self.sync_folder / clean_file_name).resolve()
+                if root_dup != local_path and root_dup.exists() and root_dup.is_file():
+                    try:
+                        root_dup.unlink()
+                        print(f"[Deduplication]: Removed root duplicate {clean_file_name}")
+                    except Exception:
+                        pass
 
                 if local_path.exists() and OfficeHandler.is_file_locked_by_os(str(local_path)):
                     continue
