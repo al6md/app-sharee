@@ -166,45 +166,106 @@ def main():
         raw_target = sys.argv[2] if len(sys.argv) > 2 else ""
         target_file = ""
         target_folder = ""
+        target_storage_path = ""
 
         if raw_target.startswith("sharecoc://"):
             import urllib.parse
-            # فك تشفير sharecoc://open?file=...&folder=...
+            # فك تشفير sharecoc://open?file=...&folder=...&storage_path=...
             parsed = urllib.parse.urlparse(raw_target)
             qs = urllib.parse.parse_qs(parsed.query)
-            target_file = qs.get('file', [''])[0]
-            target_folder = qs.get('folder', [''])[0]
+            target_file = qs.get('file', [''])[0].strip()
+            target_folder = qs.get('folder', [''])[0].strip()
+            target_storage_path = qs.get('storage_path', [''])[0].strip()
         else:
-            target_file = raw_target
+            target_file = raw_target.strip()
 
         if target_file:
-            # محاولة تمرير الطلب للجسر المحلي المفتوح بالفعل
+            import re
+            def clean_bidi(s):
+                return re.sub(r'[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]', '', str(s)).strip()
+
+            clean_target_file = clean_bidi(target_file)
+
+            # 1. محاولة تمرير الطلب للجسر المحلي المفتوح بالفعل
             try:
                 import urllib.request
                 import urllib.parse
-                bridge_url = f"http://127.0.0.1:18290/open?file={urllib.parse.quote(target_file)}&folder={urllib.parse.quote(target_folder)}"
-                req = urllib.request.urlopen(bridge_url, timeout=1.5)
+                bridge_url = f"http://127.0.0.1:18290/open?file={urllib.parse.quote(target_file)}&folder={urllib.parse.quote(target_folder)}&storage_path={urllib.parse.quote(target_storage_path)}"
+                req = urllib.request.urlopen(bridge_url, timeout=3.0)
                 if req.status == 200:
                     sys.exit(0)
             except Exception:
                 pass
 
-            # إذا لم يكن الجسر شغالاً، فتحه مباشرة من المجلد المحلي
+            # 2. إذا لم يستجب الجسر، فحصه محلياً في مجلد FileExchangeShared
             sync_folder = Path(os.environ.get('USERPROFILE', 'C:')) / "FileExchangeShared"
             from office_handler import OfficeHandler
-            cand = sync_folder / target_folder / target_file if target_folder else sync_folder / target_file
-            if not cand.exists():
-                cand = sync_folder / target_file
-            if not cand.exists():
-                # بحث في المجلدات الفرعية
-                for sub in sync_folder.rglob(target_file):
-                    if sub.is_file():
-                        cand = sub
-                        break
+            
+            clean_sub = clean_bidi(target_folder)
+            candidates = []
+            if target_folder and target_folder != '__ALL__':
+                candidates.extend([
+                    sync_folder / target_folder / target_file,
+                    sync_folder / clean_sub / clean_target_file,
+                    sync_folder / target_folder / clean_target_file
+                ])
+            candidates.extend([
+                sync_folder / target_file,
+                sync_folder / clean_target_file
+            ])
 
-            if cand.exists():
-                OfficeHandler.open_native_file(str(cand))
+            target_cand = None
+            for c in candidates:
+                if c.exists():
+                    target_cand = c
+                    break
+
+            if not target_cand:
+                # بحث في المجلدات الفرعية بمطابقة الاسم المنظف
+                target_lower = clean_target_file.lower()
+                for sub in sync_folder.rglob("*"):
+                    if sub.is_file():
+                        if clean_bidi(sub.name).lower() == target_lower or sub.name == target_file:
+                            target_cand = sub
+                            break
+
+            # 3. إذا لم يكن موجوداً على القرص، تنزيله فوراً من السحابة
+            if not target_cand:
+                try:
+                    state_mgr = LocalStateManager()
+                    saved_url = state_mgr.get_setting("supabase_url", "https://bjcillpivgcntzbwmpsm.supabase.co")
+                    saved_key = state_mgr.get_setting("supabase_key", "sb_publishable_Bfk1klLDNsLWKHvdRhWqNg_XoDqqJ6X")
+                    client = SupabaseClient(saved_url, saved_key)
+                    
+                    target_sub_dir = sync_folder / clean_sub if (target_folder and target_folder != '__ALL__') else sync_folder
+                    target_sub_dir.mkdir(parents=True, exist_ok=True)
+                    dest_path = target_sub_dir / clean_target_file
+
+                    safe_sp = target_storage_path
+                    if not safe_sp:
+                        f_info = client.get_file_by_name(target_file)
+                        if f_info and f_info.get('storage_path'):
+                            safe_sp = f_info['storage_path']
+
+                    res = client.download_file(clean_target_file, str(dest_path), storage_path=safe_sp)
+                    success = res[0] if isinstance(res, tuple) else bool(res)
+                    if success and dest_path.exists():
+                        target_cand = dest_path
+                except Exception as dl_err:
+                    print(f"[CLI Download Error]: {dl_err}")
+
+            if target_cand and target_cand.exists():
+                OfficeHandler.open_native_file(str(target_cand))
                 sys.exit(0)
+            else:
+                # إظهار رسالة خطأ صريحة للمستخدم بدلاً من فتح واجهة التطبيق بشكل مربك
+                app_err = QApplication(sys.argv)
+                QMessageBox.warning(
+                    None, "مشاركة الملفات – تنبيه",
+                    f"تعذر العثور على المستند المطلوب:\n{clean_target_file}\n"
+                    "يرجى التأكد من رفع الملف بنجاح أو مراجعة الاتصال بالسحابة."
+                )
+                sys.exit(1)
 
     app = QApplication(sys.argv)
     app.setApplicationName("share coc")

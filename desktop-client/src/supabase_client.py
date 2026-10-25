@@ -36,9 +36,25 @@ class SupabaseClient:
     @staticmethod
     def get_safe_storage_path(filename):
         """توليد مسار تخزين آمن 100% متوافق مع S3 للأسماء العربية والمسافات"""
-        ext = Path(filename).suffix.lower()
-        b64 = base64.urlsafe_b64encode(filename.encode('utf-8')).decode('ascii').rstrip('=')
+        import re
+        clean = re.sub(r'[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]', '', str(filename)).strip()
+        ext = Path(clean).suffix.lower()
+        b64 = base64.urlsafe_b64encode(clean.encode('utf-8')).decode('ascii').rstrip('=')
         return f"shared/{b64}{ext}"
+
+    def get_file_by_name(self, file_name):
+        """البحث عن ملف في السحابة بالاسم المجرد بغض النظر عن محارف الاتجاه"""
+        import re
+        clean = re.sub(r'[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]', '', str(file_name)).strip().lower()
+        try:
+            files = self.list_accessible_files()
+            for f in files:
+                f_clean = re.sub(r'[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]', '', str(f.get('file_name', ''))).strip().lower()
+                if f_clean == clean:
+                    return f
+        except Exception:
+            pass
+        return None
 
     def register_or_verify_device(self, device_name, machine_guid, os_info="Windows"):
         """تسجيل الجهاز تلقائياً بدون طلب أي باسورد"""
@@ -110,6 +126,8 @@ class SupabaseClient:
                 pass
 
             for obj in storage_objects:
+                if not obj.get("id"):
+                    continue
                 raw_name = obj.get("name", "")
                 if not raw_name or raw_name == ".emptyFolderPlaceholder" or raw_name == ".keep":
                     continue
@@ -120,11 +138,12 @@ class SupabaseClient:
                 elif raw_name in db_by_name:
                     item = dict(db_by_name[raw_name])
                 else:
+                    meta = obj.get("metadata") or {}
                     item = {
                         "file_name": os.path.basename(raw_name),
                         "file_path": os.path.basename(raw_name),
                         "storage_path": storage_path,
-                        "file_size": obj.get("metadata", {}).get("size", 0),
+                        "file_size": meta.get("size", 0) if isinstance(meta, dict) else 0,
                         "updated_at": obj.get("updated_at", "")
                     }
                     # مزامنة الملف المكتشف في التخزين تلقائياً مع جدول files
@@ -151,8 +170,9 @@ class SupabaseClient:
                     merged.append(db_item)
 
             return merged
-        except Exception:
-            return []
+        except Exception as e:
+            print(f"[Supabase list_accessible_files error]: {e}")
+            return list(db_by_name.values()) if db_by_name else []
 
     def check_file_lock(self, file_id_or_name):
         """فحص ما إذا كان الملف مقفولاً من جهاز آخر (خاصة ملفات Access)"""
@@ -251,13 +271,21 @@ class SupabaseClient:
 
     def download_file(self, file_name, local_dest_path, storage_path=None):
         """تنزيل ملف من Supabase بتجربة عدة مسارات لضمان تنزيل أي ملف من لوحة التحكم أو الهاتف أو التطبيق"""
+        import re
+        clean_name = re.sub(r'[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]', '', str(file_name)).strip()
         candidates = []
         if storage_path:
-            candidates.append(storage_path)
-            if not storage_path.startswith("shared/"):
-                candidates.append(f"shared/{storage_path}")
-        candidates.append(f"shared/{file_name}")
+            clean_sp = re.sub(r'[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]', '', str(storage_path)).strip()
+            candidates.append(clean_sp)
+            if not clean_sp.startswith("shared/"):
+                candidates.append(f"shared/{clean_sp}")
+            candidates.append(str(storage_path))
+
+        candidates.append(self.get_safe_storage_path(clean_name))
         candidates.append(self.get_safe_storage_path(file_name))
+        candidates.append(f"shared/{clean_name}")
+        candidates.append(f"shared/{file_name}")
+        candidates.append(clean_name)
         candidates.append(file_name)
 
         Path(local_dest_path).parent.mkdir(parents=True, exist_ok=True)
@@ -270,11 +298,11 @@ class SupabaseClient:
         return False, "فشل التنزيل من السحابة"
 
     def download_file_from_storage(self, storage_path, local_dest_path):
-        """تنزيل الملف مباشرة من Supabase Storage بدون باسورد مع تشفير المسار للمسافات"""
+        """تنزيل الملف مباشرة من Supabase Storage بدون باسورد مع تشفير المسار للمسافات مع الحفاظ على الفواصل المائلة"""
         if not self.is_configured():
             return False
         try:
-            quoted_path = urllib.parse.quote(storage_path)
+            quoted_path = urllib.parse.quote(str(storage_path), safe='/')
             # 1. عبر الرابط العام للوعاء (Public Bucket)
             public_url = f"{self.supabase_url}/storage/v1/object/public/file-exchange-storage/{quoted_path}"
             res = requests.get(public_url, stream=True, timeout=60)
@@ -292,6 +320,7 @@ class SupabaseClient:
                 return True
         except Exception:
             return False
+        return False
 
     def create_folder(self, folder_name_or_rel_path):
         """إنشاء مجلد في قاعدة بيانات السحابة (shared_folders) وتأكيده في التخزين"""

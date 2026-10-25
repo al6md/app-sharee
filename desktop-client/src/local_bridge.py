@@ -50,6 +50,7 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
         if path == '/open':
             file_name = params.get('file', [''])[0].strip()
             folder_name = params.get('folder', [''])[0].strip()
+            storage_path = params.get('storage_path', [''])[0].strip()
 
             if not file_name:
                 self._set_headers(400)
@@ -57,12 +58,12 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
                 return
 
             try:
-                target_path = self._find_or_download_file(file_name, folder_name)
+                target_path = self._find_or_download_file(file_name, folder_name, storage_path)
                 if not target_path or not target_path.exists():
                     self._set_headers(404)
                     self.wfile.write(json.dumps({
                         "success": False, 
-                        "error": f"الملف '{file_name}' غير موجود ولم نتمكن من تنزيله."
+                        "error": f"الملف '{file_name}' غير موجود ولم نتمكن من تنزيله من السحابة."
                     }, ensure_ascii=False).encode('utf-8'))
                     return
 
@@ -83,7 +84,8 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
         if path == '/unlock':
             file_name = params.get('file', [''])[0].strip()
             folder_name = params.get('folder', [''])[0].strip()
-            target_path = self._find_or_download_file(file_name, folder_name)
+            storage_path = params.get('storage_path', [''])[0].strip()
+            target_path = self._find_or_download_file(file_name, folder_name, storage_path)
             if target_path and target_path.exists():
                 OfficeHandler.cleanup_orphaned_office_locks(str(target_path))
                 self._set_headers(200)
@@ -96,7 +98,8 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
         if path == '/reveal':
             file_name = params.get('file', [''])[0].strip()
             folder_name = params.get('folder', [''])[0].strip()
-            target_path = self._find_or_download_file(file_name, folder_name)
+            storage_path = params.get('storage_path', [''])[0].strip()
+            target_path = self._find_or_download_file(file_name, folder_name, storage_path)
             if target_path and target_path.exists():
                 os.system(f'explorer.exe /select,"{str(target_path)}"')
                 self._set_headers(200)
@@ -109,45 +112,67 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
         self._set_headers(404)
         self.wfile.write(json.dumps({"error": "endpoint not found"}).encode('utf-8'))
 
-    def _find_or_download_file(self, file_name, folder_name=""):
+    def _find_or_download_file(self, file_name, folder_name="", storage_path=""):
         if not self.sync_folder:
             return None
 
+        import re
+        def clean_bidi(s):
+            return re.sub(r'[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]', '', str(s)).strip()
+
+        clean_file = clean_bidi(file_name)
         base = Path(self.sync_folder)
 
         # 1. فحص المسار المباشر داخل المجلد المحدد
         if folder_name and folder_name != '__ALL__':
-            candidate = base / folder_name / file_name
-            if candidate.exists():
-                return candidate
+            clean_folder = clean_bidi(folder_name)
+            for cand in [base / folder_name / file_name, base / clean_folder / clean_file, base / folder_name / clean_file]:
+                if cand.exists():
+                    return cand
 
         # 2. فحص المسار المباشر في جذر مجلد المزامنة
-        candidate = base / file_name
-        if candidate.exists():
-            return candidate
+        for cand in [base / file_name, base / clean_file]:
+            if cand.exists():
+                return cand
 
         # 3. بحث متكرر عن الملف في المجلدات الفرعية
-        for sub in base.rglob(file_name):
+        target_lower = clean_file.lower()
+        for sub in base.rglob("*"):
             if sub.is_file():
-                return sub
+                if clean_bidi(sub.name).lower() == target_lower or sub.name == file_name:
+                    return sub
 
         # 4. إذا لم يكن موجوداً محلياً، جلبه من السحابة فوراً
         if self.cloud_client:
             try:
-                dest_dir = base / folder_name if (folder_name and folder_name != '__ALL__') else base
+                target_sub = folder_name if (folder_name and folder_name != '__ALL__') else ""
+                dest_dir = base / target_sub if target_sub else base
                 dest_dir.mkdir(parents=True, exist_ok=True)
-                local_file = dest_dir / file_name
+                local_file = dest_dir / clean_file
 
-                storage_path = f"shared/{folder_name}/{file_name}" if (folder_name and folder_name != '__ALL__') else f"shared/{file_name}"
-                downloaded = self.cloud_client.download_file(storage_path, str(local_file))
-                if downloaded and local_file.exists():
-                    return local_file
+                safe_sp = storage_path
+                # إذا لم يُرسل مسار التخزين، نبحث عنه في قاعدة البيانات
+                if not safe_sp and hasattr(self.cloud_client, 'get_file_by_name'):
+                    f_info = self.cloud_client.get_file_by_name(file_name)
+                    if f_info and f_info.get('storage_path'):
+                        safe_sp = f_info['storage_path']
 
-                # تجربة مسار بديل بدون مجلد
-                alt_storage_path = f"shared/{file_name}"
-                downloaded2 = self.cloud_client.download_file(alt_storage_path, str(local_file))
-                if downloaded2 and local_file.exists():
-                    return local_file
+                if hasattr(self.cloud_client, 'download_file'):
+                    res = self.cloud_client.download_file(clean_file, str(local_file), storage_path=safe_sp)
+                    success = res[0] if isinstance(res, tuple) else bool(res)
+                    if success and local_file.exists():
+                        return local_file
+
+                    # محاولة بديلة بالاسم الأصلي
+                    if clean_file != file_name:
+                        res2 = self.cloud_client.download_file(file_name, str(local_file), storage_path=safe_sp)
+                        success2 = res2[0] if isinstance(res2, tuple) else bool(res2)
+                        if success2 and local_file.exists():
+                            return local_file
+                elif hasattr(self.cloud_client, 'download_file_from_storage') and safe_sp:
+                    ok = self.cloud_client.download_file_from_storage(safe_sp, str(local_file))
+                    if ok and local_file.exists():
+                        return local_file
             except Exception as dl_err:
                 print(f"[LocalBridge] Cloud download on-demand failed: {dl_err}")
 

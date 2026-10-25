@@ -56,6 +56,24 @@ const DEFAULT_DEPARTMENTS = [
   'المخازن والتجهيزات'
 ];
 
+// دالة تنظيف اسم الملف من أي محارف مخفية أو محارف اتجاه غير مرئية (Bidi / Isolates)
+const cleanFileNameString = (rawName: string): string => {
+  return rawName.replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g, '').trim();
+};
+
+// دالة توليد مسار تخزين سحابي متوافق 100% مع معايير S3 لأسماء الملفات العربية والمسافات
+const getSafeStorageKey = (rawName: string): string => {
+  const clean = cleanFileNameString(rawName);
+  const ext = clean.includes('.') ? '.' + clean.split('.').pop()?.toLowerCase() : '';
+  const utf8Bytes = new TextEncoder().encode(clean);
+  let binary = '';
+  for (let i = 0; i < utf8Bytes.length; i++) {
+    binary += String.fromCharCode(utf8Bytes[i]);
+  }
+  const b64 = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return `shared/${b64}${ext}`;
+};
+
 export default function FilesPage() {
   const [activeTab, setActiveTab] = useState<'ACTIVE' | 'TRASH'>('ACTIVE');
   const [selectedDept, setSelectedDept] = useState<string>('__ALL__');
@@ -202,43 +220,44 @@ export default function FilesPage() {
     try {
       setActionLoading(true);
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      let fileName = file.name;
+      let fileName = cleanFileNameString(file.name);
 
       if (isCameraCapture) {
         fileName = `كتاب_رسمي_مصور_${timestamp}.jpg`;
       }
 
-      // تحديد مسار المجلد النشط
+      // تحديد مسار المجلد النشط وتوليد المسار الآمن للتخزين
       const targetDept = selectedDept !== '__ALL__' ? selectedDept : 'المجلد العام';
-      const storagePath = `shared/${targetDept}/${fileName}`;
+      const safeStoragePath = getSafeStorageKey(fileName);
 
-      // 1. الرفع إلى وعاء التخزين
+      // 1. الرفع الفعلي إلى وعاء التخزين السحابي بالمسار الآمن
       const { error: uploadErr } = await supabase.storage
         .from('file-exchange-storage')
-        .upload(storagePath, file, { upsert: true });
+        .upload(safeStoragePath, file, { upsert: true });
 
       if (uploadErr) {
-        // تجربة المسار البسيط إذا فشل المسار المركب
-        await supabase.storage
-          .from('file-exchange-storage')
-          .upload(`shared/${fileName}`, file, { upsert: true });
+        throw new Error(`فشل رفع محتوى الملف إلى التخزين السحابي: ${uploadErr.message}`);
       }
 
       // 2. التسجيل في جدول files
-      await supabase.from('files').upsert({
+      const { error: dbErr } = await supabase.from('files').upsert({
         file_name: fileName,
         file_path: `${targetDept}/${fileName}`,
-        storage_path: storagePath,
+        storage_path: safeStoragePath,
         file_size: file.size,
         last_modified_by_name: isCameraCapture ? 'كاميرا الجوال' : 'تطبيق الجوال',
         is_deleted: false,
         updated_at: new Date().toISOString()
       }, { onConflict: 'file_name' });
 
+      if (dbErr) {
+        throw new Error(`فشل حفظ بيانات الملف في قاعدة البيانات: ${dbErr.message}`);
+      }
+
       await loadData();
-      alert(`✅ تم رفع المستند "${fileName}" بنجاح إلى سحابة الغرفة.`);
+      alert(`✅ تم رفع المستند "${fileName}" بنجاح إلى سحابة الغرفة وسيبدأ المزامنة فوراً.`);
     } catch (e: any) {
-      alert(`فشل رفع المستند: ${e.message || e}`);
+      alert(`تعذر رفع المستند: ${e.message || e}`);
     } finally {
       setActionLoading(false);
       if (event.target) event.target.value = '';
@@ -388,11 +407,9 @@ export default function FilesPage() {
     // أولاً: استدعاء خادم الجسر المحلي لتطبيق الويندوز share coc على المنفذ 18290
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 900);
-      const res = await fetch(
-        `http://127.0.0.1:18290/open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder)}`,
-        { signal: controller.signal }
-      );
+      const timeoutId = setTimeout(() => controller.abort(), 4000);
+      const bridgeUrl = `http://127.0.0.1:18290/open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder)}&storage_path=${encodeURIComponent(file.storagePath)}`;
+      const res = await fetch(bridgeUrl, { signal: controller.signal });
       clearTimeout(timeoutId);
 
       if (res.ok) {
@@ -406,14 +423,14 @@ export default function FilesPage() {
         }
       }
     } catch {
-      // إذا لم يكن الجسر المحلي يعمل
+      // إذا لم يكن الجسر المحلي يعمل أو تأخر
     }
 
     // ثانياً: استدعاء بروتوكول الويندوز المسجل sharecoc:// لتشغيل التطبيق والملف
     try {
       const iframe = document.createElement('iframe');
       iframe.style.display = 'none';
-      iframe.src = `sharecoc://open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder)}`;
+      iframe.src = `sharecoc://open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder)}&storage_path=${encodeURIComponent(file.storagePath)}`;
       document.body.appendChild(iframe);
       setTimeout(() => {
         try { document.body.removeChild(iframe); } catch {}

@@ -2622,9 +2622,18 @@ class FileExchangeMainWindow(QMainWindow):
         if not file_path.exists():
             file_path = (self.sync_folder / file_name).resolve()
         if not file_path.exists():
+            import re
+            clean = re.sub(r'[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]', '', file_name).strip().lower()
+            for sub in self.sync_folder.rglob("*"):
+                if sub.is_file():
+                    sub_clean = re.sub(r'[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]', '', sub.name).strip().lower()
+                    if sub_clean == clean:
+                        file_path = sub
+                        break
+        if not file_path.exists():
             QMessageBox.warning(
                 self, "تنبيه", 
-                f"الملف التالي غير موجود فعلياً في مجلد المشاركة:\n{file_path}"
+                f"الملف التالي غير موجود فعلياً في مجلد المشاركة:\n{file_name}"
             )
             return
 

@@ -230,9 +230,13 @@ class SyncEngine:
                 self.state_mgr.mark_upload_failed(rel_path, str(e))
 
     def pull_remote_changes(self):
-        """فحص التحديثات الجديدة من سحابة Cloudflare R2 وتنزيلها بأمان"""
+        """فحص التحديثات الجديدة من السحابة وتنزيلها بأمان"""
         if not self.client or not self.client.is_configured():
             return
+
+        import re
+        def clean_bidi(s):
+            return re.sub(r'[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]', '', str(s)).strip()
 
         try:
             if hasattr(self.client, 'list_files'):
@@ -245,16 +249,19 @@ class SyncEngine:
                 storage_path = r_file.get('storage_path', file_name)
                 rel_file_path = r_file.get('file_path') or file_name
 
+                clean_file_name = clean_bidi(file_name)
+                clean_rel_path = clean_bidi(rel_file_path)
+
                 # تجاهل أي ملف موجود في سلة المحذوفات لتجنب إعادة تنزيله تلقائياً
-                if self.state_mgr.is_in_trash(file_name, storage_path):
+                if self.state_mgr.is_in_trash(file_name, storage_path) or self.state_mgr.is_in_trash(clean_file_name, storage_path):
                     continue
 
-                local_path = (self.sync_folder / rel_file_path).resolve()
+                local_path = (self.sync_folder / clean_rel_path).resolve()
 
                 if local_path.exists() and OfficeHandler.is_file_locked_by_os(str(local_path)):
                     continue
 
-                local_state = self.state_mgr.get_file_state(rel_file_path) or self.state_mgr.get_file_state(file_name)
+                local_state = self.state_mgr.get_file_state(clean_rel_path) or self.state_mgr.get_file_state(clean_file_name) or self.state_mgr.get_file_state(rel_file_path)
                 needs_download = False
 
                 if not local_path.exists():
@@ -265,18 +272,19 @@ class SyncEngine:
                 if needs_download:
                     self._is_syncing_remote = True
                     try:
-                        self.notify_status({"event": "syncing", "file": file_name, "status": "تنزيل من السحابة..."})
+                        self.notify_status({"event": "syncing", "file": clean_file_name, "status": "تنزيل من السحابة..."})
                         local_path.parent.mkdir(parents=True, exist_ok=True)
                         if hasattr(self.client, 'download_file'):
-                            success, msg = self.client.download_file(file_name, str(local_path), storage_path=storage_path)
+                            res = self.client.download_file(clean_file_name, str(local_path), storage_path=storage_path)
+                            success = res[0] if isinstance(res, tuple) else bool(res)
                         else:
                             success = self.client.download_file_from_storage(storage_path, str(local_path))
 
                         if success and local_path.exists():
                             file_size = os.path.getsize(str(local_path))
                             file_hash = self.calculate_hash(str(local_path))
-                            self.state_mgr.set_file_state(rel_file_path, file_name, file_hash, file_size, 'synced')
-                            self.notify_status({"event": "synced", "file": file_name, "status": "محدث من السحابة"})
+                            self.state_mgr.set_file_state(clean_rel_path, clean_file_name, file_hash, file_size, 'synced')
+                            self.notify_status({"event": "synced", "file": clean_file_name, "status": "محدث من السحابة"})
                     finally:
                         self._is_syncing_remote = False
         except Exception as e:
