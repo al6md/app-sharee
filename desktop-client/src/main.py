@@ -274,11 +274,20 @@ def main():
     _single_instance_mutex = kernel32.CreateMutexW(None, False, "Global\\KarbalaChamberShareCOCSingleInstanceMutex")
     if kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
         try:
+            from ctypes import wintypes
             user32 = ctypes.windll.user32
-            hwnd = user32.FindWindowW(None, "نظام تبادل الملفات الموحد – غرفة تجارة كربلاء المقدسة")
-            if hwnd:
-                user32.ShowWindow(hwnd, 9)
-                user32.SetForegroundWindow(hwnd)
+            def enum_proc(h, _):
+                length = user32.GetWindowTextLengthW(h)
+                if length > 0:
+                    buf = ctypes.create_unicode_buffer(length + 1)
+                    user32.GetWindowTextW(h, buf, length + 1)
+                    if "Share COC" in buf.value or "كربلاء" in buf.value:
+                        user32.ShowWindow(h, 9)
+                        user32.SetForegroundWindow(h)
+                        return False
+                return True
+            WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+            user32.EnumWindows(WNDENUMPROC(enum_proc), 0)
         except Exception:
             pass
         sys.exit(0)
