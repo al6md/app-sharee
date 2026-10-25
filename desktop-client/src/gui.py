@@ -2799,6 +2799,8 @@ class FileExchangeMainWindow(QMainWindow):
             dest = self._get_current_abs_folder() / Path(path).name
             import shutil
             shutil.copy2(path, dest)
+            if hasattr(self, 'sync_engine') and self.sync_engine:
+                self.sync_engine.on_local_file_saved(str(dest))
             self._refresh_file_list()
             QMessageBox.information(
                 self, "تمت الإضافة", 

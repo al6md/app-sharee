@@ -166,9 +166,10 @@ class SupabaseClient:
         except Exception:
             return True
 
-    def upload_file(self, local_path, file_name=None, user_name="المستخدم", device_name="جهاز"):
+    def upload_file(self, local_path, file_name=None, rel_path=None, user_name="المستخدم", device_name="جهاز"):
         """رفع ملف إلى Supabase Storage وتسجيل بياناته في الجدول بدعم كامل للغة العربية"""
         name = file_name or os.path.basename(local_path)
+        rel = rel_path or name
         dest = self.get_safe_storage_path(name)
         ok = self.upload_file_to_storage(local_path, dest)
         if ok:
@@ -180,14 +181,15 @@ class SupabaseClient:
                         sha.update(chunk)
                 file_hash = sha.hexdigest()
 
-                upsert_url = f"{self.supabase_url}/rest/v1/files"
+                upsert_url = f"{self.supabase_url}/rest/v1/files?on_conflict=file_name"
                 payload = {
                     "file_name": name,
-                    "file_path": name,
+                    "file_path": rel,
                     "file_size": size,
                     "sha256_hash": file_hash,
                     "storage_path": dest,
                     "last_modified_by_name": user_name,
+                    "is_deleted": False,
                     "updated_at": datetime.utcnow().isoformat()
                 }
                 res = requests.post(
@@ -354,8 +356,8 @@ class SupabaseClient:
             print(f"[Supabase list_folders]: {e}")
         return []
 
-    def delete_file(self, file_name_or_rel_path):
-        """حذف ملف من قاعدة بيانات Supabase ووعاء التخزين بشكل شامل"""
+    def delete_file(self, file_name_or_rel_path, permanent=False):
+        """نقل الملف إلى سلة المحذوفات السحابية أو حذفه نهائياً من قاعدة بيانات Supabase والتخزين"""
         if not self.is_configured():
             return True
         try:
@@ -364,7 +366,18 @@ class SupabaseClient:
             quoted_name = urllib.parse.quote(name)
             quoted_rel = urllib.parse.quote(rel_path)
 
-            # 1. حذف من قاعدة بيانات files بالاسم والمسار
+            if not permanent:
+                # 1. نقل لسلة المحذوفات السحابية (Soft delete) ليتزامن مع الويب والموبايل
+                patch_payload = {"is_deleted": True, "updated_at": datetime.utcnow().isoformat()}
+                url_db1 = f"{self.supabase_url}/rest/v1/files?file_name=eq.{quoted_name}"
+                requests.patch(url_db1, json=patch_payload, headers=self.headers, timeout=6)
+                if rel_path != name:
+                    url_db2 = f"{self.supabase_url}/rest/v1/files?file_path=eq.{quoted_rel}"
+                    requests.patch(url_db2, json=patch_payload, headers=self.headers, timeout=6)
+                self.log_audit("trash_file", "file", None, name, {"rel_path": rel_path})
+                return True
+
+            # 2. حذف نهائي من قاعدة البيانات
             url_db1 = f"{self.supabase_url}/rest/v1/files?file_name=eq.{quoted_name}"
             requests.delete(url_db1, headers=self.headers, timeout=6)
             
@@ -372,7 +385,7 @@ class SupabaseClient:
                 url_db2 = f"{self.supabase_url}/rest/v1/files?file_path=eq.{quoted_rel}"
                 requests.delete(url_db2, headers=self.headers, timeout=6)
 
-            # 2. حذف من وعاء التخزين
+            # 3. حذف من وعاء التخزين
             safe_dest_name = self.get_safe_storage_path(name)
             safe_dest_rel = self.get_safe_storage_path(rel_path)
             del_url = f"{self.supabase_url}/storage/v1/object/file-exchange-storage"
@@ -383,7 +396,7 @@ class SupabaseClient:
                 f"shared/{rel_path}"
             ]
             requests.delete(del_url, json={"prefixes": prefixes}, headers=self.headers, timeout=6)
-            self.log_audit("delete_file", "file", None, name, {"rel_path": rel_path})
+            self.log_audit("permanent_delete_file", "file", None, name, {"rel_path": rel_path})
             return True
         except Exception as e:
             print(f"[Supabase delete]: {e}")

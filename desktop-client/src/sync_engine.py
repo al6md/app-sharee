@@ -42,6 +42,11 @@ class LocalFolderWatcher(FileSystemEventHandler):
         self._handle_event(event.dest_path)
 
     def _handle_event(self, filepath):
+        # تجاهل مجلد سلة المحذوفات والملفات المخفية
+        parts = Path(filepath).parts
+        if ".trash" in parts or any(p.startswith(".") for p in parts):
+            return
+
         filename = os.path.basename(filepath)
 
         # تجاهل ملفات القفل والمؤقتة لـ Office
@@ -88,8 +93,9 @@ class SyncEngine:
                 pass
 
     def scan_initial_local_files(self):
-        """فحص المجلد المشترك وإدراج كافة الملفات الحقيقية الموجودة فيه وفي مجلداته الفرعية تلقائياً"""
+        """فحص المجلد المشترك وإدراج كافة الملفات الحقيقية الموجودة فيه وفي مجلداته الفرعية تلقائياً ورفع أي ملف جديد إلى السحابة فوراً"""
         try:
+            has_pending = False
             for item in self.sync_folder.rglob("*"):
                 if item.is_file():
                     if ".trash" in item.parts or item.name.startswith("."):
@@ -102,9 +108,17 @@ class SyncEngine:
                         continue
                     file_size = item.stat().st_size
                     existing = self.state_mgr.get_file_state(rel_path)
+                    file_hash = self.calculate_hash(str(item))
                     if not existing:
-                        file_hash = self.calculate_hash(str(item))
-                        self.state_mgr.set_file_state(rel_path, filename, file_hash, file_size, 'synced')
+                        self.state_mgr.enqueue_upload(rel_path, str(item), file_hash)
+                        self.state_mgr.set_file_state(rel_path, filename, file_hash, file_size, 'syncing')
+                        has_pending = True
+                    elif existing.get('sha256_hash') != file_hash:
+                        self.state_mgr.enqueue_upload(rel_path, str(item), file_hash)
+                        self.state_mgr.set_file_state(rel_path, filename, file_hash, file_size, 'syncing')
+                        has_pending = True
+            if has_pending:
+                self.process_upload_queue()
         except Exception:
             pass
 
@@ -162,6 +176,10 @@ class SyncEngine:
         if not path.exists():
             return
 
+        parts = path.parts
+        if ".trash" in parts or any(p.startswith(".") for p in parts):
+            return
+
         rel_path = str(path.relative_to(self.sync_folder)).replace("\\", "/")
 
         # التحقق من تحرر مقبض الملف من Office
@@ -208,11 +226,12 @@ class SyncEngine:
                 continue
 
             try:
-                # الرفع السحابي عبر Cloudflare R2
+                # الرفع السحابي عبر Supabase أو Cloudflare R2
                 if hasattr(self.client, 'upload_file'):
                     success, msg = self.client.upload_file(
                         local_path, 
                         file_name=os.path.basename(local_path),
+                        rel_path=rel_path,
                         user_name=self.username,
                         device_name=self.device_name
                     )
@@ -287,11 +306,14 @@ class SyncEngine:
                 clean_file_name = clean_bidi(file_name)
                 clean_rel_path = clean_bidi(rel_file_path)
 
-                # تجاهل أي ملف موجود في سلة المحذوفات لتجنب إعادة تنزيله تلقائياً
-                if (self.state_mgr.is_in_trash(file_name, storage_path) or 
-                    self.state_mgr.is_in_trash(clean_file_name, storage_path) or 
+                # إذا كان الملف نشطاً في السحابة وموجوداً سابقاً في سلة المحذوفات المحلية (تمت استعادته أو إعادة رفعه من الويب أو الجوال):
+                # نقوم بإلغاء حذفه من قاعدة البيانات المحلية وسلة المحذوفات فوراً
+                if (self.state_mgr.is_in_trash(file_name) or 
+                    self.state_mgr.is_in_trash(clean_file_name) or 
                     self.state_mgr.is_in_trash(clean_file_name, clean_rel_path)):
-                    continue
+                    with self.state_mgr._get_connection() as conn:
+                        conn.execute("DELETE FROM deleted_files WHERE file_name = ? OR file_name = ? OR original_rel_path = ? OR original_rel_path = ?", 
+                                     (file_name, clean_file_name, rel_file_path, clean_rel_path))
 
                 local_path = (self.sync_folder / clean_rel_path).resolve()
 
@@ -314,6 +336,8 @@ class SyncEngine:
                     needs_download = True
                 elif local_state is None:
                     needs_download = True
+                elif r_file.get('file_size') and local_path.stat().st_size != r_file.get('file_size'):
+                    needs_download = True
 
                 if needs_download:
                     self._is_syncing_remote = True
@@ -333,6 +357,32 @@ class SyncEngine:
                             self.notify_status({"event": "synced", "file": clean_file_name, "status": "محدث من السحابة"})
                     finally:
                         self._is_syncing_remote = False
+
+            # 3. إزالة الملفات المحلية التي حُذفت نهائياً من السحابة
+            active_remote_names = {clean_bidi(f.get('file_name', '')).lower() for f in remote_files}
+            active_remote_rels = {clean_bidi(f.get('file_path') or f.get('file_name', '')).lower() for f in remote_files}
+            
+            for tracked in self.state_mgr.get_all_files():
+                t_rel = tracked['relative_path']
+                t_name = tracked['file_name']
+                clean_t_name = clean_bidi(t_name).lower()
+                clean_t_rel = clean_bidi(t_rel).lower()
+                
+                # إذا كان الملف متزامناً سابقاً ولكنه لم يعد موجوداً في السحابة إطلاقاً
+                if (clean_t_name not in active_remote_names and 
+                    clean_t_rel not in active_remote_rels and 
+                    tracked.get('sync_status') == 'synced'):
+                    local_p = (self.sync_folder / t_rel).resolve()
+                    if local_p.exists() and local_p.is_file():
+                        trash_dir = self.sync_folder / ".trash"
+                        trash_dir.mkdir(parents=True, exist_ok=True)
+                        trash_dest = trash_dir / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{local_p.name}"
+                        try:
+                            local_p.rename(trash_dest)
+                            self.state_mgr.add_to_trash(local_p.name, t_rel, str(trash_dest), trash_dest.stat().st_size)
+                            print(f"[Cloud Deletion Sync]: Moved {local_p.name} to local trash")
+                        except Exception as ex:
+                            print(f"[Cloud Deletion Sync Error]: {ex}")
         except Exception as e:
             print(f"[خطأ في جلب التحديثات من السحابة]: {e}")
 
