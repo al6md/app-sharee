@@ -18,6 +18,7 @@ from r2_client import CloudflareR2Client
 from offline_queue import LocalStateManager
 from sync_engine import SyncEngine
 from gui import FileExchangeMainWindow
+from local_bridge import start_local_bridge, register_sharecoc_protocol
 
 def get_machine_guid():
     """الحصول على الرقم التعريفي الفريد لجهاز الويندوز (Machine GUID)"""
@@ -160,6 +161,51 @@ def ensure_desktop_shortcut():
         print(f"[Shortcut creation]: {e}")
 
 def main():
+    # 1. فحص وسائط سطر الأوامر لفتح الملف مباشرة بالبرنامج الأصلي (مثل Word أو Excel)
+    if len(sys.argv) > 1 and sys.argv[1] == '--open':
+        raw_target = sys.argv[2] if len(sys.argv) > 2 else ""
+        target_file = ""
+        target_folder = ""
+
+        if raw_target.startswith("sharecoc://"):
+            import urllib.parse
+            # فك تشفير sharecoc://open?file=...&folder=...
+            parsed = urllib.parse.urlparse(raw_target)
+            qs = urllib.parse.parse_qs(parsed.query)
+            target_file = qs.get('file', [''])[0]
+            target_folder = qs.get('folder', [''])[0]
+        else:
+            target_file = raw_target
+
+        if target_file:
+            # محاولة تمرير الطلب للجسر المحلي المفتوح بالفعل
+            try:
+                import urllib.request
+                import urllib.parse
+                bridge_url = f"http://127.0.0.1:18290/open?file={urllib.parse.quote(target_file)}&folder={urllib.parse.quote(target_folder)}"
+                req = urllib.request.urlopen(bridge_url, timeout=1.5)
+                if req.status == 200:
+                    sys.exit(0)
+            except Exception:
+                pass
+
+            # إذا لم يكن الجسر شغالاً، فتحه مباشرة من المجلد المحلي
+            sync_folder = Path(os.environ.get('USERPROFILE', 'C:')) / "FileExchangeShared"
+            from office_handler import OfficeHandler
+            cand = sync_folder / target_folder / target_file if target_folder else sync_folder / target_file
+            if not cand.exists():
+                cand = sync_folder / target_file
+            if not cand.exists():
+                # بحث في المجلدات الفرعية
+                for sub in sync_folder.rglob(target_file):
+                    if sub.is_file():
+                        cand = sub
+                        break
+
+            if cand.exists():
+                OfficeHandler.open_native_file(str(cand))
+                sys.exit(0)
+
     app = QApplication(sys.argv)
     app.setApplicationName("share coc")
     app.setApplicationDisplayName("Share COC")
@@ -213,6 +259,9 @@ def main():
         username=username
     )
     sync_engine.start()
+
+    # تشغيل خادم الجسر المحلي لربط متصفح الويب ولوحة الجوال ببرامج Office الأصلية
+    start_local_bridge(sync_folder, cloud_client)
 
     window = FileExchangeMainWindow(sync_engine, cloud_client, state_mgr, sync_folder)
     window.show()

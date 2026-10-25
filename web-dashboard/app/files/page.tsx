@@ -22,7 +22,11 @@ import {
   ChevronLeft,
   X,
   FileCode,
-  AlertCircle
+  AlertCircle,
+  ExternalLink,
+  Eye,
+  Monitor,
+  FolderOpen
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 
@@ -69,6 +73,16 @@ export default function FilesPage() {
   const [showRenameModal, setShowRenameModal] = useState(false);
   const [itemToRename, setItemToRename] = useState<{ id: string; name: string; isFolder?: boolean } | null>(null);
   const [newRenameValue, setNewRenameValue] = useState('');
+
+  // إشعار عائم للمستخدم عند فتح الملفات
+  const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'info' | 'error' } | null>(null);
+
+  useEffect(() => {
+    if (toastMessage) {
+      const timer = setTimeout(() => setToastMessage(null), 4500);
+      return () => clearTimeout(timer);
+    }
+  }, [toastMessage]);
 
   // مراجع رفع الملفات والكاميرا
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -318,24 +332,121 @@ export default function FilesPage() {
     }
   };
 
-  // فتح أو تنزيل الملف
-  const handleDownloadFile = async (file: FileItem) => {
+  // استخراج الرابط المباشر للمستند من التخزين السحابي
+  const getFileDirectUrl = async (file: FileItem): Promise<string> => {
     try {
-      // محاولة الحصول على رابط موقع مباشر
       const { data } = await supabase.storage
         .from('file-exchange-storage')
         .createSignedUrl(file.storagePath, 3600);
+      if (data?.signedUrl) return data.signedUrl;
+    } catch {}
+    return `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/file-exchange-storage/${encodeURIComponent(file.storagePath)}`;
+  };
 
-      if (data?.signedUrl) {
-        window.open(data.signedUrl, '_blank');
-      } else {
-        const publicUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/file-exchange-storage/${encodeURIComponent(file.storagePath)}`;
-        window.open(publicUrl, '_blank');
+  // 1. فتح المستند مباشرة في برنامج Office الأصلي (Word / Excel / Access)
+  const handleOpenFile = async (file: FileItem) => {
+    const isOffice = ['word', 'excel', 'access'].includes(file.type);
+    const officeName = file.type === 'word' ? 'Word' : file.type === 'excel' ? 'Excel' : file.type === 'access' ? 'Access' : 'البرنامج الأصلي';
+
+    setToastMessage({
+      text: `⏳ جاري فتح "${file.name}" في برنامج ${officeName}...`,
+      type: 'info'
+    });
+
+    // أولاً: استدعاء خادم الجسر المحلي لتطبيق الويندوز share coc على المنفذ 18290
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 900);
+      const res = await fetch(
+        `http://127.0.0.1:18290/open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder)}`,
+        { signal: controller.signal }
+      );
+      clearTimeout(timeoutId);
+
+      if (res.ok) {
+        const result = await res.json();
+        if (result.success) {
+          setToastMessage({
+            text: `🚀 تم تشغيل برنامج ${officeName} الأصلي وفتح المستند بنجاح!`,
+            type: 'success'
+          });
+          return;
+        }
       }
     } catch {
-      const fallbackUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/file-exchange-storage/${encodeURIComponent(file.storagePath)}`;
-      window.open(fallbackUrl, '_blank');
+      // إذا لم يكن الجسر المحلي يعمل
     }
+
+    // ثانياً: استدعاء بروتوكول الويندوز المسجل sharecoc:// لتشغيل التطبيق والملف
+    try {
+      const iframe = document.createElement('iframe');
+      iframe.style.display = 'none';
+      iframe.src = `sharecoc://open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder)}`;
+      document.body.appendChild(iframe);
+      setTimeout(() => {
+        try { document.body.removeChild(iframe); } catch {}
+      }, 2500);
+    } catch {}
+
+    // ثالثاً: في حال استخدام الهاتف المحمول أو عدم وجود التطبيق المكتبي
+    const directUrl = await getFileDirectUrl(file);
+    const isMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+    if (isMobile) {
+      window.open(directUrl, '_blank');
+      setToastMessage({
+        text: `📱 تم توجيه المستند لتطبيق ${officeName} في الهاتف.`,
+        type: 'success'
+      });
+      return;
+    }
+
+    // إذا على حاسوب شخصي والجسر غير نشط، نبلغ المستخدم
+    setTimeout(() => {
+      setToastMessage({
+        text: `💡 نصيحة: تطبيق share coc يقوم بفتح ملفات Office على الكمبيوتر فوراً وبدون تحميل.`,
+        type: 'info'
+      });
+    }, 1800);
+  };
+
+  // 2. معاينة المستند عبر متصفح الويب باستخدام Microsoft Office Online
+  const handleOpenOfficeOnline = async (file: FileItem) => {
+    try {
+      const directUrl = await getFileDirectUrl(file);
+      const viewerUrl = `https://view.officeapps.live.com/op/view.aspx?src=${encodeURIComponent(directUrl)}`;
+      window.open(viewerUrl, '_blank');
+    } catch (e: any) {
+      alert(`تعذر فتح المعاينة: ${e.message || e}`);
+    }
+  };
+
+  // 3. تنزيل نسخة عادية من الملف
+  const handleDownloadFile = async (file: FileItem) => {
+    try {
+      const directUrl = await getFileDirectUrl(file);
+      window.open(directUrl, '_blank');
+    } catch (e: any) {
+      alert(`فشل التحميل: ${e.message || e}`);
+    }
+  };
+
+  // 4. إظهار الملف داخل مجلد الويندوز (Reveal in Explorer)
+  const handleRevealInExplorer = async (file: FileItem) => {
+    try {
+      const res = await fetch(`http://127.0.0.1:18290/reveal?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder)}`);
+      if (res.ok) {
+        setToastMessage({
+          text: `📂 تم إظهار المستند في مجلد الويندوز FileExchangeShared.`,
+          type: 'success'
+        });
+        return;
+      }
+    } catch {}
+    setToastMessage({
+      text: `المستند مخزن محلياً في مجلد: C:\\Users\\...\\FileExchangeShared`,
+      type: 'info'
+    });
   };
 
   // إنشاء مجلد جديد
@@ -677,13 +788,42 @@ export default function FilesPage() {
                 </div>
 
                 {/* أزرار العمليات على بطاقة الجوال */}
-                <div className="flex items-center justify-between border-t border-slate-100 pt-2.5 gap-2">
+                <div className="flex items-center justify-between border-t border-slate-100 pt-2.5 gap-1.5 flex-wrap">
+                  {/* زر الفتح بالبرنامج الأصلي */}
+                  <button
+                    onClick={() => handleOpenFile(file)}
+                    className="flex-1 min-w-[120px] flex items-center justify-center gap-1.5 bg-[#14372e] text-white text-xs font-bold py-2 px-3 rounded-xl hover:bg-[#1a473b] transition active:scale-95 shadow-sm"
+                    title="فتح في برنامج Office الأصلي"
+                  >
+                    {file.type === 'word' && <FileText className="w-3.5 h-3.5 text-blue-300" />}
+                    {file.type === 'excel' && <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-300" />}
+                    {file.type === 'access' && <Database className="w-3.5 h-3.5 text-rose-300" />}
+                    {!['word', 'excel', 'access'].includes(file.type) && <ExternalLink className="w-3.5 h-3.5 text-amber-300" />}
+                    <span>
+                      {file.type === 'word' ? 'فتح Word' :
+                       file.type === 'excel' ? 'فتح Excel' :
+                       file.type === 'access' ? 'فتح Access' : 'فتح المستند'}
+                    </span>
+                  </button>
+
+                  {/* زر معاينة Office Online */}
+                  {['word', 'excel'].includes(file.type) && (
+                    <button
+                      onClick={() => handleOpenOfficeOnline(file)}
+                      className="p-2 text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-xl transition"
+                      title="معاينة في المتصفح عبر Office Online"
+                    >
+                      <Eye className="w-4 h-4" />
+                    </button>
+                  )}
+
+                  {/* زر تنزيل نسخة */}
                   <button
                     onClick={() => handleDownloadFile(file)}
-                    className="flex-1 flex items-center justify-center gap-1.5 bg-[#14372e] text-white text-xs font-bold py-2 px-3 rounded-xl hover:bg-[#1a473b] transition active:scale-95 shadow-sm"
+                    className="p-2 text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition"
+                    title="تنزيل نسخة للملف"
                   >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>فتح / تنزيل</span>
+                    <Download className="w-4 h-4" />
                   </button>
 
                   {activeTab === 'ACTIVE' ? (
@@ -767,12 +907,50 @@ export default function FilesPage() {
                     </td>
                     <td className="p-4 text-center">
                       <div className="inline-flex items-center gap-1.5">
+                        {/* زر الفتح بالبرنامج الأصلي (Word / Excel / Access) */}
+                        <button
+                          onClick={() => handleOpenFile(file)}
+                          className="flex items-center gap-1.5 bg-[#14372e] hover:bg-[#1a473b] text-white text-xs font-bold py-1.5 px-3 rounded-lg transition active:scale-95 shadow-xs"
+                          title="فتح في برنامج Office الأصلي على الحاسوب"
+                        >
+                          {file.type === 'word' && <FileText className="w-3.5 h-3.5 text-blue-300" />}
+                          {file.type === 'excel' && <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-300" />}
+                          {file.type === 'access' && <Database className="w-3.5 h-3.5 text-rose-300" />}
+                          {!['word', 'excel', 'access'].includes(file.type) && <ExternalLink className="w-3.5 h-3.5 text-amber-300" />}
+                          <span>
+                            {file.type === 'word' ? 'فتح Word' :
+                             file.type === 'excel' ? 'فتح Excel' :
+                             file.type === 'access' ? 'فتح Access' : 'فتح'}
+                          </span>
+                        </button>
+
+                        {/* زر معاينة Office Online */}
+                        {['word', 'excel'].includes(file.type) && (
+                          <button
+                            onClick={() => handleOpenOfficeOnline(file)}
+                            className="p-1.5 text-slate-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition"
+                            title="معاينة في المتصفح عبر Office Online"
+                          >
+                            <Eye className="w-4 h-4" />
+                          </button>
+                        )}
+
+                        {/* زر تنزيل نسخة من الملف */}
                         <button
                           onClick={() => handleDownloadFile(file)}
-                          className="flex items-center gap-1 bg-[#14372e] text-white text-xs font-bold py-1.5 px-3 rounded-lg hover:bg-[#1a473b] transition"
+                          className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition"
+                          title="تنزيل نسخة للملف"
                         >
-                          <Download className="w-3.5 h-3.5" />
-                          <span>فتح</span>
+                          <Download className="w-4 h-4" />
+                        </button>
+
+                        {/* زر إظهار في مجلد الويندوز */}
+                        <button
+                          onClick={() => handleRevealInExplorer(file)}
+                          className="p-1.5 text-slate-500 hover:text-amber-700 hover:bg-amber-50 rounded-lg transition"
+                          title="إظهار المستند في مجلد الويندوز المحلي"
+                        >
+                          <FolderOpen className="w-4 h-4" />
                         </button>
 
                         {activeTab === 'ACTIVE' ? (
@@ -930,6 +1108,21 @@ export default function FilesPage() {
                 حفظ التعديل
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* 8. إشعار عائم بتشغيل برامج Microsoft Office الأصلية */}
+      {toastMessage && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 animate-bounce shadow-2xl pointer-events-none">
+          <div className={`flex items-center gap-2.5 px-5 py-3 rounded-2xl text-xs font-bold border backdrop-blur-md ${
+            toastMessage.type === 'success' 
+              ? 'bg-[#14372e]/95 text-white border-emerald-400' 
+              : toastMessage.type === 'error'
+              ? 'bg-rose-900/95 text-white border-rose-400'
+              : 'bg-slate-900/95 text-white border-slate-700'
+          }`}>
+            <span>{toastMessage.text}</span>
           </div>
         </div>
       )}

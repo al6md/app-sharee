@@ -24,7 +24,8 @@ a = Analysis(
         'theme',
         'r2_client',
         'boto3',
-        'botocore'
+        'botocore',
+        'local_bridge'
     ],
     hookspath=[],
     hooksconfig={},
