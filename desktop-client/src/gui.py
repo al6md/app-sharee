@@ -779,6 +779,13 @@ class FileExchangeMainWindow(QMainWindow):
             orig_key_press(event)
         self.table.keyPressEvent = table_key_press
 
+        self._last_wheel_time = 0
+        orig_table_wheel = self.table.wheelEvent
+        def table_wheel(event):
+            self._last_wheel_time = time.time()
+            orig_table_wheel(event)
+        self.table.wheelEvent = table_wheel
+
         self.stack.addWidget(self.table)
 
         # 4.2 نمط شبكة البطاقات (GRID)
@@ -792,6 +799,11 @@ class FileExchangeMainWindow(QMainWindow):
         self.grid_layout.setContentsMargins(12, 12, 12, 12)
         self.grid_layout.setSpacing(14)
         self.grid_scroll.setWidget(self.grid_container)
+        orig_grid_wheel = self.grid_scroll.wheelEvent
+        def grid_wheel(event):
+            self._last_wheel_time = time.time()
+            orig_grid_wheel(event)
+        self.grid_scroll.wheelEvent = grid_wheel
         self.stack.addWidget(self.grid_scroll)
 
         # 4.3 نمط القائمة المدمجة (COMPACT)
@@ -805,6 +817,11 @@ class FileExchangeMainWindow(QMainWindow):
         self.compact_layout.setContentsMargins(12, 12, 12, 12)
         self.compact_layout.setSpacing(8)
         self.compact_scroll.setWidget(self.compact_container)
+        orig_compact_wheel = self.compact_scroll.wheelEvent
+        def compact_wheel(event):
+            self._last_wheel_time = time.time()
+            orig_compact_wheel(event)
+        self.compact_scroll.wheelEvent = compact_wheel
         self.stack.addWidget(self.compact_scroll)
 
         # 4.4 قسم سلة المحذوفات وإدارة الحذف (TRASH)
@@ -2408,6 +2425,9 @@ class FileExchangeMainWindow(QMainWindow):
 
     def _refresh_file_list(self):
         try:
+            # تجنب أي تحديث إذا كان المستخدم يتصفح القائمة بالماوس أو عجلة التمرير
+            if hasattr(self, '_last_wheel_time') and (time.time() - self._last_wheel_time < 1.5):
+                return
             if hasattr(self, 'table') and self.table.verticalScrollBar().isSliderDown():
                 return
             if hasattr(self, 'grid_scroll') and self.grid_scroll.verticalScrollBar().isSliderDown():
@@ -2838,18 +2858,19 @@ class FileExchangeMainWindow(QMainWindow):
         # استعادة موضع شريط التمرير بدقة تامة
         if not getattr(self, '_reset_scroll_on_render', False):
             v_bar.setValue(prev_scroll)
+            QTimer.singleShot(0, lambda: v_bar.setValue(prev_scroll))
         else:
             self._reset_scroll_on_render = False
             v_bar.setValue(0)
 
-        # استعادة تحديد الملف السابق دون التسبب في قفز التمرير إطلاقاً
+        # استعادة تحديد الملف السابق دون استدعاء scrollTo إطلاقاً
         if matched_selected_row is not None:
             self.table.selectionModel().clearSelection()
             idx = self.table.model().index(matched_selected_row, 0)
             self.table.selectionModel().select(idx, QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows)
-            self.table.selectionModel().setCurrentIndex(idx, QItemSelectionModel.SelectionFlag.NoUpdate)
             if not getattr(self, '_reset_scroll_on_render', False):
                 v_bar.setValue(prev_scroll)
+                QTimer.singleShot(0, lambda: v_bar.setValue(prev_scroll))
 
     def _open_selected_from_table(self, row, col):
         if col == 5:
