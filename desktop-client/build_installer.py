@@ -7,6 +7,11 @@ import sys
 import subprocess
 from pathlib import Path
 
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8')
+
 def build_exe():
     print("=" * 60)
     print("بدء بناء وتجميع تطبيق FileExchangeSetup.exe لنظام Windows")

@@ -27,12 +27,12 @@ export default function OverviewPage() {
 
         <div className="flex items-center gap-3">
           <a
-            href="/FileExchangeSetup.exe"
-            download
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition shadow-sm"
+            href="/share%20coc.exe"
+            download="share coc.exe"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#14372e] hover:bg-[#1a473b] text-white text-xs font-bold transition shadow-sm"
           >
-            <Download className="w-4 h-4 text-emerald-400" />
-            <span>تحميل برنامج Windows (EXE)</span>
+            <Download className="w-4 h-4 text-[#ecd58a]" />
+            <span>تحميل تطبيق الويندوز (share coc)</span>
           </a>
           <span className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-50 text-emerald-800 text-xs font-bold border border-emerald-200">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>

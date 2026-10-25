@@ -60,11 +60,16 @@ class LocalStateManager:
                     trash_path TEXT NOT NULL,
                     file_size INTEGER NOT NULL,
                     deleted_at TEXT NOT NULL,
-                    item_type TEXT DEFAULT 'file'
+                    item_type TEXT DEFAULT 'file',
+                    dept_name TEXT DEFAULT ''
                 )
             """)
             try:
                 conn.execute("ALTER TABLE deleted_files ADD COLUMN item_type TEXT DEFAULT 'file'")
+            except Exception:
+                pass
+            try:
+                conn.execute("ALTER TABLE deleted_files ADD COLUMN dept_name TEXT DEFAULT ''")
             except Exception:
                 pass
 
@@ -158,31 +163,115 @@ class LocalStateManager:
         import json
         self.set_setting("active_departments_json", json.dumps(depts_list, ensure_ascii=False))
 
-    def add_to_trash(self, file_name, original_rel_path, trash_path, file_size, item_type='file'):
-        """نقل ملف أو مجلد أو قسم إلى سجل سلة المحذوفات وحذفه من الملفات النشطة"""
+    def rename_file_record(self, old_rel_path, new_rel_path, new_file_name):
+        """تحديث مسار واسم ملف في قاعدة البيانات المحلية وقائمة الرفع"""
+        old_rel_path = old_rel_path.replace("\\", "/")
+        new_rel_path = new_rel_path.replace("\\", "/")
         now = datetime.now().isoformat()
         with self._get_connection() as conn:
             conn.execute("""
-                INSERT INTO deleted_files (file_name, original_rel_path, trash_path, file_size, deleted_at, item_type)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (file_name, original_rel_path, str(trash_path), file_size, now, item_type))
+                UPDATE local_files 
+                SET relative_path = ?, file_name = ?, last_modified_local = ?
+                WHERE relative_path = ?
+            """, (new_rel_path, new_file_name, now, old_rel_path))
+            conn.execute("""
+                UPDATE upload_queue
+                SET relative_path = ?
+                WHERE relative_path = ?
+            """, (new_rel_path, old_rel_path))
+
+    def rename_folder_prefix(self, old_rel_folder, new_rel_folder):
+        """تحديث بادئة مسار المجلد لكافة الملفات المنظمة داخله محلياً"""
+        old_clean = old_rel_folder.replace("\\", "/").strip("/")
+        new_clean = new_rel_folder.replace("\\", "/").strip("/")
+        old_prefix = old_clean + "/"
+        new_prefix = new_clean + "/"
+        with self._get_connection() as conn:
+            cur = conn.execute("SELECT relative_path, file_name FROM local_files WHERE relative_path LIKE ? OR relative_path = ?", (old_prefix + "%", old_clean))
+            rows = [dict(r) for r in cur.fetchall()]
+            for r in rows:
+                p = r['relative_path']
+                if p == old_clean:
+                    new_p = new_clean
+                else:
+                    new_p = new_prefix + p[len(old_prefix):]
+                conn.execute("UPDATE local_files SET relative_path = ? WHERE relative_path = ?", (new_p, p))
+            
+            cur_up = conn.execute("SELECT relative_path FROM upload_queue WHERE relative_path LIKE ? OR relative_path = ?", (old_prefix + "%", old_clean))
+            for r in cur_up.fetchall():
+                p = r['relative_path']
+                if p == old_clean:
+                    new_p = new_clean
+                else:
+                    new_p = new_prefix + p[len(old_prefix):]
+                conn.execute("UPDATE upload_queue SET relative_path = ? WHERE relative_path = ?", (new_p, p))
+
+    def rename_department(self, old_dept_name, new_dept_name):
+        """تحديث اسم القسم في قائمة الأقسام وسلة المحذوفات وبادئة الملفات"""
+        depts = self.get_departments() or []
+        for d in depts:
+            if d.get('name') == old_dept_name:
+                d['name'] = new_dept_name
+        self.set_departments(depts)
+        with self._get_connection() as conn:
+            conn.execute("UPDATE deleted_files SET dept_name = ? WHERE dept_name = ?", (new_dept_name, old_dept_name))
+        self.rename_folder_prefix(old_dept_name, new_dept_name)
+
+    def add_to_trash(self, file_name, original_rel_path, trash_path, file_size, item_type='file', dept_name=''):
+        """نقل ملف أو مجلد أو قسم إلى سجل سلة المحذوفات وحذفه من الملفات النشطة مع عزل القسم"""
+        now = datetime.now().isoformat()
+        if not dept_name:
+            if "/" in original_rel_path:
+                dept_name = original_rel_path.split("/")[0]
+            elif "\\" in original_rel_path:
+                dept_name = original_rel_path.split("\\")[0]
+            elif item_type == 'department':
+                dept_name = file_name
+
+        with self._get_connection() as conn:
+            conn.execute("""
+                INSERT INTO deleted_files (file_name, original_rel_path, trash_path, file_size, deleted_at, item_type, dept_name)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (file_name, original_rel_path, str(trash_path), file_size, now, item_type, dept_name or ''))
             conn.execute("DELETE FROM local_files WHERE relative_path = ? OR file_name = ? OR relative_path LIKE ?", 
                          (original_rel_path, file_name, f"{original_rel_path}/%"))
             conn.execute("DELETE FROM upload_queue WHERE relative_path = ? OR relative_path LIKE ?", 
                          (original_rel_path, f"{original_rel_path}/%"))
 
-    def get_trash_files(self):
-        """جلب جميع الملفات المحذوفة مؤقتاً في سلة المحذوفات"""
+    def get_trash_files(self, dept_name=None):
+        """جلب الملفات المحذوفة مؤقتاً في سلة محذوفات القسم المحدد لضمان العزل التام"""
         with self._get_connection() as conn:
-            cur = conn.execute("SELECT * FROM deleted_files ORDER BY id DESC")
+            if dept_name:
+                cur = conn.execute("""
+                    SELECT * FROM deleted_files 
+                    WHERE dept_name = ? OR original_rel_path = ? OR original_rel_path LIKE ?
+                    ORDER BY id DESC
+                """, (dept_name, dept_name, f"{dept_name}/%"))
+            else:
+                cur = conn.execute("SELECT * FROM deleted_files ORDER BY id DESC")
             return [dict(r) for r in cur.fetchall()]
 
-    def get_trash_count(self):
-        """حساب عدد الملفات الموجودة في سلة المحذوفات"""
+    def get_trash_count(self, dept_name=None):
+        """حساب عدد الملفات الموجودة في سلة محذوفات القسم المحدد"""
         with self._get_connection() as conn:
-            cur = conn.execute("SELECT COUNT(*) as count FROM deleted_files")
+            if dept_name:
+                cur = conn.execute("""
+                    SELECT COUNT(*) as count FROM deleted_files 
+                    WHERE dept_name = ? OR original_rel_path = ? OR original_rel_path LIKE ?
+                """, (dept_name, dept_name, f"{dept_name}/%"))
+            else:
+                cur = conn.execute("SELECT COUNT(*) as count FROM deleted_files")
             row = cur.fetchone()
             return row['count'] if row else 0
+
+    def is_in_trash(self, file_name, rel_path=None):
+        """فحص ما إذا كان الملف أو المجلد موجوداً في سلة المحذوفات لتفادي إعادة تنزيله"""
+        with self._get_connection() as conn:
+            if rel_path:
+                cur = conn.execute("SELECT 1 FROM deleted_files WHERE original_rel_path = ? OR file_name = ? LIMIT 1", (rel_path, file_name))
+            else:
+                cur = conn.execute("SELECT 1 FROM deleted_files WHERE file_name = ? LIMIT 1", (file_name,))
+            return cur.fetchone() is not None
 
     def remove_from_trash(self, trash_id):
         """إزالة مستند من سلة المحذوفات (عند الاستعادة أو الحذف النهائي)"""
@@ -194,10 +283,22 @@ class LocalStateManager:
                 return dict(row)
         return None
 
-    def clear_all_trash(self):
-        """إفراغ سلة المحذوفات بالكامل"""
+    def clear_all_trash(self, dept_name=None):
+        """إفراغ سلة محذوفات القسم المحدد فقط أو بالكامل"""
         with self._get_connection() as conn:
-            cur = conn.execute("SELECT * FROM deleted_files")
-            rows = [dict(r) for r in cur.fetchall()]
-            conn.execute("DELETE FROM deleted_files")
-            return rows
+            if dept_name:
+                cur = conn.execute("""
+                    SELECT * FROM deleted_files 
+                    WHERE dept_name = ? OR original_rel_path = ? OR original_rel_path LIKE ?
+                """, (dept_name, dept_name, f"{dept_name}/%"))
+                rows = [dict(r) for r in cur.fetchall()]
+                conn.execute("""
+                    DELETE FROM deleted_files 
+                    WHERE dept_name = ? OR original_rel_path = ? OR original_rel_path LIKE ?
+                """, (dept_name, dept_name, f"{dept_name}/%"))
+                return rows
+            else:
+                cur = conn.execute("SELECT * FROM deleted_files")
+                rows = [dict(r) for r in cur.fetchall()]
+                conn.execute("DELETE FROM deleted_files")
+                return rows

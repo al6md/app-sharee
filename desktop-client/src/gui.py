@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
     QStackedWidget, QScrollArea, QGridLayout,
     QListWidget, QListWidgetItem
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QMetaObject
 from PyQt6.QtGui import QIcon, QFont, QColor, QPixmap, QCursor
 
 from theme import (
@@ -156,6 +156,16 @@ class GovFileCard(QFrame):
             btn_action.clicked.connect(lambda: self.main_window._open_file_by_name(self.file_name))
         meta_row.addWidget(btn_action)
 
+        btn_rename = QPushButton("✏️")
+        btn_rename.setObjectName("btnCardRename")
+        btn_rename.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn_rename.setToolTip("تعديل الاسم (إعادة تسمية)")
+        if self.is_folder:
+            btn_rename.clicked.connect(lambda: self.main_window._rename_folder(self.file_name))
+        else:
+            btn_rename.clicked.connect(lambda: self.main_window._rename_file(self.file_name))
+        meta_row.addWidget(btn_rename)
+
         btn_delete = QPushButton("🗑️")
         btn_delete.setObjectName("btnCardDelete")
         btn_delete.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -232,6 +242,13 @@ class GovCompactTile(QFrame):
             btn_action.clicked.connect(lambda: self.main_window._navigate_into_folder(self.file_name))
             layout.addWidget(btn_action)
 
+            btn_rename = QPushButton("✏️")
+            btn_rename.setObjectName("btnTileRename")
+            btn_rename.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            btn_rename.setToolTip("تعديل اسم المجلد")
+            btn_rename.clicked.connect(lambda: self.main_window._rename_folder(self.file_name))
+            layout.addWidget(btn_rename)
+
             btn_del = QPushButton("🗑️")
             btn_del.setObjectName("btnTileDelete")
             btn_del.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -302,6 +319,13 @@ class GovCompactTile(QFrame):
             btn_action.clicked.connect(lambda: self.main_window._open_file_by_name(self.file_name))
             layout.addWidget(btn_action)
 
+            btn_rename = QPushButton("✏️")
+            btn_rename.setObjectName("btnTileRename")
+            btn_rename.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            btn_rename.setToolTip("تعديل اسم المستند")
+            btn_rename.clicked.connect(lambda: self.main_window._rename_file(self.file_name))
+            layout.addWidget(btn_rename)
+
             btn_del = QPushButton("🗑️")
             btn_del.setObjectName("btnTileDelete")
             btn_del.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -333,11 +357,11 @@ class FileExchangeMainWindow(QMainWindow):
 
         self.active_filter = "ALL"
         self.all_files_cache = []
-        self.current_subpath = Path(".")
         self.current_view_mode = self.state_mgr.get_setting("file_view_mode", "TABLE")
-        self.active_dept_name = None
         self.departments_list = []
         self._load_departments()
+        self.active_dept_name = None
+        self.current_subpath = Path(".")
 
         # مسار شعار الغرفة الرسمي المتوافق مع ملف التثبيت المستقل
         if getattr(sys, 'frozen', False):
@@ -345,8 +369,10 @@ class FileExchangeMainWindow(QMainWindow):
         else:
             base_dir = Path(__file__).parent.parent
         self.logo_path = base_dir / "assets" / "logo.png"
+        if not self.logo_path.exists():
+            self.logo_path = base_dir / "assets" / "logo.ico"
 
-        self.setWindowTitle("غرفة تجارة كربلاء المقدسة – منظومة التبادل السحابي للمستندات")
+        self.setWindowTitle("Share COC – غرفة تجارة كربلاء المقدسة")
         self.resize(1260, 780)
         self.setMinimumSize(1040, 660)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
@@ -416,7 +442,7 @@ class FileExchangeMainWindow(QMainWindow):
         title_row = QHBoxLayout()
         title_row.setSpacing(8)
 
-        gov_title = QLabel("غرفة تجارة كربلاء المقدسة")
+        gov_title = QLabel("Share COC – غرفة تجارة كربلاء المقدسة")
         gov_title.setFont(QFont("Cairo", 15, QFont.Weight.Bold))
         gov_title.setStyleSheet("color: #ffffff; font-weight: 800; background: transparent; border: none;")
         title_row.addWidget(gov_title)
@@ -455,7 +481,17 @@ class FileExchangeMainWindow(QMainWindow):
         # 2. شريط الإجراءات النظيف والخالي من الحشو
         # ========================================================
         toolbar = QHBoxLayout()
-        toolbar.setSpacing(10)
+        toolbar.setSpacing(8)
+
+        # زر القائمة الجانبية للأقسام (Hamburger Button ☰)
+        self.btn_toggle_sidebar = QPushButton("☰ الأقسام")
+        self.btn_toggle_sidebar.setObjectName("btnToggleSidebar")
+        self.btn_toggle_sidebar.setCheckable(True)
+        self.btn_toggle_sidebar.setChecked(False)
+        self.btn_toggle_sidebar.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_toggle_sidebar.setToolTip("إظهار / إخفاء القائمة الجانبية لأقسام الدائرة ومجلداتها المعزولة")
+        self.btn_toggle_sidebar.clicked.connect(self._toggle_sidebar)
+        toolbar.addWidget(self.btn_toggle_sidebar)
 
         # زر فتح المجلد المشترك الرئيسي
         self.btn_open_folder = QPushButton("📁 استعراض المجلد")
@@ -479,19 +515,11 @@ class FileExchangeMainWindow(QMainWindow):
         self.btn_new_folder.clicked.connect(self._show_new_folder_dialog)
         toolbar.addWidget(self.btn_new_folder)
 
-        # زر سلة المحذوفات (قسم حذف الملفات)
-        self.btn_trash_toolbar = QPushButton("🗑️ سلة المحذوفات")
-        self.btn_trash_toolbar.setObjectName("btnGovSecondary")
-        self.btn_trash_toolbar.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.btn_trash_toolbar.setToolTip("الانتقال إلى قسم سلة المحذوفات واستعادة أو حذف الملفات")
-        self.btn_trash_toolbar.clicked.connect(lambda: self._set_active_filter("TRASH"))
-        toolbar.addWidget(self.btn_trash_toolbar)
-
         # زر التحديث اليدوي
         self.btn_refresh = QPushButton("🔄 تحديث")
         self.btn_refresh.setObjectName("btnGovSecondary")
         self.btn_refresh.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.btn_refresh.clicked.connect(self._refresh_file_list)
+        self.btn_refresh.clicked.connect(self._on_refresh_clicked)
         toolbar.addWidget(self.btn_refresh)
 
         # حقل البحث الفوري
@@ -513,7 +541,7 @@ class FileExchangeMainWindow(QMainWindow):
         # --------------------------------------------------------
         self.sidebar_frame = QFrame()
         self.sidebar_frame.setObjectName("sidebarFrame")
-        self.sidebar_frame.setFixedWidth(260)
+        self.sidebar_frame.setFixedWidth(285)
         apply_gov_shadow(self.sidebar_frame, blur=12, offset_y=2, alpha=10)
         sb_layout = QVBoxLayout(self.sidebar_frame)
         sb_layout.setContentsMargins(10, 10, 10, 10)
@@ -523,20 +551,29 @@ class FileExchangeMainWindow(QMainWindow):
         sb_header = QFrame()
         sb_header.setObjectName("sidebarHeaderFrame")
         sbh_layout = QHBoxLayout(sb_header)
-        sbh_layout.setContentsMargins(6, 4, 6, 4)
+        sbh_layout.setContentsMargins(8, 6, 8, 6)
+        sbh_layout.setSpacing(6)
 
         sb_title = QLabel("🏛️ أقسام الدائرة")
         sb_title.setFont(QFont("Cairo", 11, QFont.Weight.Bold))
-        sb_title.setStyleSheet("color: #ffffff;")
+        sb_title.setStyleSheet("color: #ffffff; background: transparent; border: none;")
         sbh_layout.addWidget(sb_title)
         sbh_layout.addStretch()
 
-        btn_add_dept = QPushButton("➕ قسم جديد")
+        btn_add_dept = QPushButton("➕ قسم")
         btn_add_dept.setObjectName("btnAddDept")
         btn_add_dept.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         btn_add_dept.setToolTip("إضافة قسم إداري جديد للغرفة مع مجلداته المعزولة")
         btn_add_dept.clicked.connect(self._show_add_department_dialog)
         sbh_layout.addWidget(btn_add_dept)
+
+        btn_close_sidebar = QPushButton("✕")
+        btn_close_sidebar.setObjectName("btnCloseSidebar")
+        btn_close_sidebar.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn_close_sidebar.setToolTip("إخفاء قائمة الأقسام")
+        btn_close_sidebar.clicked.connect(self._toggle_sidebar)
+        sbh_layout.addWidget(btn_close_sidebar)
+
         sb_layout.addWidget(sb_header)
 
         sb_desc = QLabel("مستندات ومجلدات مستقلة لكل قسم:")
@@ -547,6 +584,9 @@ class FileExchangeMainWindow(QMainWindow):
         # قائمة الأقسام
         self.dept_list = QListWidget()
         self.dept_list.setObjectName("deptList")
+        self.dept_list.setWordWrap(True)
+        self.dept_list.setTextElideMode(Qt.TextElideMode.ElideNone)
+        self.dept_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.dept_list.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.dept_list.itemClicked.connect(self._on_department_clicked)
         self.dept_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -560,6 +600,8 @@ class FileExchangeMainWindow(QMainWindow):
         sb_footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sb_layout.addWidget(sb_footer)
 
+        # القائمة مخفية افتراضياً وتظهر بالزر الثلاثي ☰
+        self.sidebar_frame.setVisible(False)
         body_layout.addWidget(self.sidebar_frame)
 
         # --------------------------------------------------------
@@ -603,7 +645,7 @@ class FileExchangeMainWindow(QMainWindow):
         content_layout.addWidget(self.breadcrumb_frame)
 
         # ========================================================
-        # 3. تبويبات التصنيف الرسمية الهادئة
+        # 3. تبويبات التصنيف الرسمية الهادئة (نصوص واضحة غير مقتطعة)
         # ========================================================
         tabs_layout = QHBoxLayout()
         tabs_layout.setSpacing(6)
@@ -612,12 +654,20 @@ class FileExchangeMainWindow(QMainWindow):
         tab_group.setExclusive(True)
 
         self.tab_all = self._create_gov_tab("كافة المستندات", "ALL", tab_group, checked=True)
-        self.tab_folders = self._create_gov_tab("المجلدات والأقسام 📁", "FOLDERS", tab_group)
-        self.tab_word = self._create_gov_tab("الكتب والمراسلات (Word)", "WORD", tab_group)
-        self.tab_excel = self._create_gov_tab("التقارير المالية (Excel)", "EXCEL", tab_group)
-        self.tab_access = self._create_gov_tab("قواعد البيانات (Access)", "ACCESS", tab_group)
-        self.tab_pdf = self._create_gov_tab("الوثائق والتعاميم (PDF)", "PDF", tab_group)
-        self.tab_trash = self._create_gov_tab("🗑️ سلة المحذوفات", "TRASH", tab_group)
+        self.tab_folders = self._create_gov_tab("المجلدات 📁", "FOLDERS", tab_group)
+        self.tab_word = self._create_gov_tab("Word 📝", "WORD", tab_group)
+        self.tab_excel = self._create_gov_tab("Excel 📊", "EXCEL", tab_group)
+        self.tab_access = self._create_gov_tab("Access 🗄️", "ACCESS", tab_group)
+        self.tab_pdf = self._create_gov_tab("PDF 📄", "PDF", tab_group)
+        self.tab_trash = self._create_gov_tab("المحذوفات 🗑️", "TRASH", tab_group)
+
+        self.tab_all.setToolTip("عرض كافة المستندات والملفات المتاحة")
+        self.tab_folders.setToolTip("عرض المجلدات الإدارية المنظمة")
+        self.tab_word.setToolTip("عرض الكتب والمراسلات الإدارية بصيغة Word (.docx, .doc)")
+        self.tab_excel.setToolTip("عرض التقارير والجداول المالية بصيغة Excel (.xlsx, .xls)")
+        self.tab_access.setToolTip("عرض قواعد البيانات وسجلات الأعضاء بصيغة Access (.accdb, .mdb)")
+        self.tab_pdf.setToolTip("عرض الوثائق الرسمية والتعاميم المعتمدة بصيغة PDF (.pdf)")
+        self.tab_trash.setToolTip("الانتقال إلى سلة المحذوفات الإدارية")
 
         tabs_layout.addWidget(self.tab_all)
         tabs_layout.addWidget(self.tab_folders)
@@ -638,7 +688,7 @@ class FileExchangeMainWindow(QMainWindow):
         view_group = QButtonGroup(self)
         view_group.setExclusive(True)
 
-        self.btn_view_table = QPushButton("☰ جدول تفصيلي")
+        self.btn_view_table = QPushButton("☰ جدول")
         self.btn_view_table.setObjectName("btnViewMode")
         self.btn_view_table.setCheckable(True)
         self.btn_view_table.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -646,7 +696,7 @@ class FileExchangeMainWindow(QMainWindow):
         view_group.addButton(self.btn_view_table)
         view_switch_layout.addWidget(self.btn_view_table)
 
-        self.btn_view_grid = QPushButton("⊞ شبكة بطاقات")
+        self.btn_view_grid = QPushButton("⊞ شبكة")
         self.btn_view_grid.setObjectName("btnViewMode")
         self.btn_view_grid.setCheckable(True)
         self.btn_view_grid.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -654,7 +704,7 @@ class FileExchangeMainWindow(QMainWindow):
         view_group.addButton(self.btn_view_grid)
         view_switch_layout.addWidget(self.btn_view_grid)
 
-        self.btn_view_compact = QPushButton("☷ قائمة مدمجة")
+        self.btn_view_compact = QPushButton("☷ مدمج")
         self.btn_view_compact.setObjectName("btnViewMode")
         self.btn_view_compact.setCheckable(True)
         self.btn_view_compact.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -707,6 +757,16 @@ class FileExchangeMainWindow(QMainWindow):
                     else:
                         self._move_file_to_trash(f_name)
                     return
+            elif event.key() == Qt.Key.Key_F2:
+                selected = self.table.selectedItems()
+                if selected:
+                    raw = self.table.item(selected[0].row(), 0).text()
+                    f_name = raw.split('\n')[0]
+                    if "(مجلد منظم)" in raw or "(مجلد" in raw:
+                        self._rename_folder(f_name)
+                    else:
+                        self._rename_file(f_name)
+                    return
             orig_key_press(event)
         self.table.keyPressEvent = table_key_press
 
@@ -750,24 +810,62 @@ class FileExchangeMainWindow(QMainWindow):
 
         info_box = QVBoxLayout()
         info_box.setSpacing(2)
-        th_title = QLabel("🗑️ قسم إدارة المستندات المحذوفة (سلة المحذوفات الرسمية)")
-        th_title.setFont(QFont("Cairo", 12, QFont.Weight.Bold))
-        th_title.setStyleSheet("color: #991b1b;")
-        info_box.addWidget(th_title)
+        self.th_title = QLabel("🗑️ سلة محذوفات القسم")
+        self.th_title.setFont(QFont("Cairo", 12, QFont.Weight.Bold))
+        self.th_title.setStyleSheet("color: #991b1b;")
+        info_box.addWidget(self.th_title)
 
-        th_desc = QLabel("المستندات المنقولة للمحذوفات محفوظة بأمان هنا. يمكنك استعادتها فوراً لموقعها الأصلي أو حذفها نهائياً لتفريغ المساحة.")
-        th_desc.setFont(QFont("Segoe UI", 10))
-        th_desc.setStyleSheet("color: #566c65;")
-        info_box.addWidget(th_desc)
+        self.th_desc = QLabel("المستندات والمجلدات المحذوفة الخاصة بهذا القسم محفوظة بأمان هنا.")
+        self.th_desc.setFont(QFont("Segoe UI", 10))
+        self.th_desc.setStyleSheet("color: #566c65;")
+        info_box.addWidget(self.th_desc)
         th_layout.addLayout(info_box)
 
         th_layout.addStretch()
 
-        btn_empty_trash = QPushButton("🧹 إفراغ سلة المحذوفات بالكامل")
-        btn_empty_trash.setObjectName("btnEmptyTrash")
-        btn_empty_trash.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        btn_empty_trash.clicked.connect(self._empty_all_trash)
-        th_layout.addWidget(btn_empty_trash)
+        self.btn_restore_all = QPushButton("♻️ استرجاع كافة المحذوفات")
+        self.btn_restore_all.setObjectName("btnTrashRestoreAll")
+        self.btn_restore_all.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_restore_all.setToolTip("استرجاع كافة العناصر المحذوفة وإعادتها لأماكنها ومزامنتها مع السحابة")
+        self.btn_restore_all.setStyleSheet("""
+            QPushButton {
+                background-color: #14372e; color: #ffffff; border: none;
+                border-radius: 8px; padding: 9px 18px; font-size: 12px; font-weight: bold;
+                font-family: 'Cairo', Tahoma;
+            }
+            QPushButton:hover { background-color: #1e4a3f; }
+        """)
+        self.btn_restore_all.clicked.connect(self._restore_all_trash)
+        th_layout.addWidget(self.btn_restore_all)
+
+        self.btn_restore_selected = QPushButton("↩️ استرجاع المحدد")
+        self.btn_restore_selected.setObjectName("btnTrashRestoreSelected")
+        self.btn_restore_selected.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_restore_selected.setToolTip("استرجاع الملف أو العنصر المحدد حالياً في الجدول ورفعه للسحابة")
+        self.btn_restore_selected.setStyleSheet("""
+            QPushButton {
+                background-color: #0284c7; color: #ffffff; border: none;
+                border-radius: 8px; padding: 9px 18px; font-size: 12px; font-weight: bold;
+                font-family: 'Cairo', Tahoma;
+            }
+            QPushButton:hover { background-color: #0369a1; }
+        """)
+        self.btn_restore_selected.clicked.connect(self._restore_selected_from_trash)
+        th_layout.addWidget(self.btn_restore_selected)
+
+        self.btn_empty_trash = QPushButton("🧹 إفراغ سلة المحذوفات")
+        self.btn_empty_trash.setObjectName("btnEmptyTrash")
+        self.btn_empty_trash.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_empty_trash.setStyleSheet("""
+            QPushButton {
+                background-color: #fee2e2; color: #991b1b; border: 1.5px solid #fecaca;
+                border-radius: 8px; padding: 9px 16px; font-size: 12px; font-weight: bold;
+                font-family: 'Cairo', Tahoma;
+            }
+            QPushButton:hover { background-color: #fecaca; color: #7f1d1d; }
+        """)
+        self.btn_empty_trash.clicked.connect(self._empty_all_trash)
+        th_layout.addWidget(self.btn_empty_trash)
 
         trash_layout.addWidget(trash_header)
 
@@ -781,10 +879,15 @@ class FileExchangeMainWindow(QMainWindow):
         self.trash_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.trash_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.trash_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        self.trash_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.trash_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        self.trash_table.setColumnWidth(4, 220)
         self.trash_table.verticalHeader().setVisible(False)
+        self.trash_table.verticalHeader().setDefaultSectionSize(52)
         self.trash_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.trash_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.trash_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.trash_table.customContextMenuRequested.connect(self._show_trash_context_menu)
+        self.trash_table.cellDoubleClicked.connect(self._on_trash_row_double_clicked)
         apply_gov_shadow(self.trash_table, blur=12, offset_y=2, alpha=10)
 
         trash_layout.addWidget(self.trash_table, stretch=1)
@@ -812,35 +915,35 @@ class FileExchangeMainWindow(QMainWindow):
         status_layout = QHBoxLayout(statusbar)
         status_layout.setContentsMargins(4, 2, 4, 2)
 
-        self.lbl_total = QLabel("المستندات: 0 ملف")
+        self.lbl_total = QLabel("المستندات: 0")
         self.lbl_total.setFont(QFont("Cairo", 10, QFont.Weight.Bold))
         self.lbl_total.setStyleSheet(f"color: {GOV_GREEN};")
         status_layout.addWidget(self.lbl_total)
 
         status_layout.addWidget(QLabel(" | "))
 
-        self.lbl_trash_stat = QLabel("سلة المحذوفات: 0 مستند")
+        self.lbl_trash_stat = QLabel("المحذوفات: 0")
         self.lbl_trash_stat.setFont(QFont("Cairo", 10))
         self.lbl_trash_stat.setStyleSheet("color: #4b635b;")
         status_layout.addWidget(self.lbl_trash_stat)
 
         status_layout.addWidget(QLabel(" | "))
 
-        self.lbl_watcher = QLabel("⚡ المزامنة الفورية: نشطة عند الحفظ (Ctrl+S)")
+        self.lbl_watcher = QLabel("⚡ المزامنة: متصل ونشط")
         self.lbl_watcher.setFont(QFont("Cairo", 10))
         self.lbl_watcher.setStyleSheet("color: #4b635b;")
         status_layout.addWidget(self.lbl_watcher)
 
         status_layout.addWidget(QLabel(" | "))
 
-        self.lbl_cloud_info = QLabel("السعة السحابية: 1000 MB مجاناً")
+        self.lbl_cloud_info = QLabel("السعة: 1000 MB")
         self.lbl_cloud_info.setFont(QFont("Cairo", 10))
         self.lbl_cloud_info.setStyleSheet("color: #4b635b;")
         status_layout.addWidget(self.lbl_cloud_info)
 
         status_layout.addStretch()
 
-        self.lbl_dept = QLabel("نسخة غرفة تجارة كربلاء المقدسة المعتمدة v2.0")
+        self.lbl_dept = QLabel("غرفة تجارة كربلاء المقدسة v2.0")
         self.lbl_dept.setFont(QFont("Cairo", 10, QFont.Weight.DemiBold))
         self.lbl_dept.setStyleSheet("color: #5c726a;")
         status_layout.addWidget(self.lbl_dept)
@@ -854,6 +957,19 @@ class FileExchangeMainWindow(QMainWindow):
         status_layout.addWidget(btn_settings)
 
         main_layout.addWidget(statusbar)
+
+    def _toggle_sidebar(self):
+        """إظهار أو إخفاء القائمة الجانبية للأقسام بنقرة واحدة على زر ☰"""
+        if not hasattr(self, 'sidebar_frame'):
+            return
+        is_vis = not self.sidebar_frame.isVisible()
+        self.sidebar_frame.setVisible(is_vis)
+        if hasattr(self, 'btn_toggle_sidebar'):
+            self.btn_toggle_sidebar.setChecked(is_vis)
+            if is_vis:
+                self.btn_toggle_sidebar.setText("☰ إخفاء الأقسام")
+            else:
+                self.btn_toggle_sidebar.setText("☰ الأقسام")
 
     def _create_gov_tab(self, label, tag, group, checked=False):
         btn = QPushButton(label)
@@ -900,12 +1016,30 @@ class FileExchangeMainWindow(QMainWindow):
             pass
 
     def _refresh_departments_sidebar(self):
-        """تحديث القائمة الجانبية للأقسام مع عدد المستندات في كل قسم"""
+        """تحديث القائمة الجانبية للأقسام مع عدد المستندات في كل قسم وإبراز قسم كافة الملفات والمجلدات"""
         if not hasattr(self, 'dept_list'):
             return
 
-        # تحديث النصوص في مكانها إذا لم يتغير عدد الأقسام لتجنب وميض الواجهة
-        if self.dept_list.count() == len(self.departments_list) + 1:
+        total_all_files = 0
+        try:
+            total_all_files = len([
+                x for x in self.sync_folder.iterdir()
+                if not x.name.startswith(".") and not x.name.startswith("~$") and x.name != ".trash"
+            ])
+        except Exception:
+            pass
+
+        # تحديث النصوص في مكانها إذا لم يتغير عدد الأقسام (1 للأرشيف الشامل + الأقسام)
+        expected_count = len(self.departments_list) + 1
+        if self.dept_list.count() == expected_count:
+            # 1. تحديث خيار كافة الملفات
+            item_all = self.dept_list.item(0)
+            if item_all:
+                new_all_txt = f"🗂️  كافة الملفات والمجلدات  ({total_all_files})"
+                if item_all.text() != new_all_txt:
+                    item_all.setText(new_all_txt)
+
+            # 2. تحديث باقي الأقسام
             for idx, dept in enumerate(self.departments_list):
                 name = dept['name']
                 icon = dept.get('icon', '📁')
@@ -926,14 +1060,19 @@ class FileExchangeMainWindow(QMainWindow):
         self.dept_list.blockSignals(True)
         self.dept_list.clear()
 
-        # 1. خيار كافة الأقسام (الأرشيف العام المشترك)
-        all_item = QListWidgetItem("🏛️  كافة الأقسام (الأرشيف العام)")
-        all_item.setData(Qt.ItemDataRole.UserRole, "ALL")
-        all_item.setFont(QFont("Cairo", 10, QFont.Weight.Bold))
-        self.dept_list.addItem(all_item)
+        selected_item = None
 
-        # 2. أقسام الدائرة المستقلة
-        selected_item = all_item
+        # 1. قسم كافة الملفات والمجلدات (الأرشيف الشامل) في المقدمة
+        item_all_text = f"🗂️  كافة الملفات والمجلدات  ({total_all_files})"
+        item_all = QListWidgetItem(item_all_text)
+        item_all.setData(Qt.ItemDataRole.UserRole, "__ALL__")
+        item_all.setFont(QFont("Cairo", 10, QFont.Weight.Bold))
+        self.dept_list.addItem(item_all)
+
+        if self.active_dept_name is None:
+            selected_item = item_all
+
+        # 2. أقسام الدائرة المستقلة والمعزولة
         for dept in self.departments_list:
             name = dept['name']
             icon = dept.get('icon', '📁')
@@ -954,11 +1093,17 @@ class FileExchangeMainWindow(QMainWindow):
             if self.active_dept_name == name:
                 selected_item = item
 
-        self.dept_list.setCurrentItem(selected_item)
+        if not selected_item:
+            selected_item = item_all
+            self.active_dept_name = None
+            self.current_subpath = Path(".")
+
+        if selected_item:
+            self.dept_list.setCurrentItem(selected_item)
         self.dept_list.blockSignals(False)
 
     def _on_department_clicked(self, item_or_key):
-        """عند اختيار قسم من القائمة الجانبية: عزل المستندات فوراً لعرض مستندات هذا القسم فقط"""
+        """عند اختيار قسم من القائمة الجانبية: عزل المستندات فوراً لعرض مستندات هذا القسم فقط أو عرض كافة الملفات"""
         if isinstance(item_or_key, str):
             dept_key = item_or_key
         else:
@@ -967,7 +1112,7 @@ class FileExchangeMainWindow(QMainWindow):
             except Exception:
                 dept_key = str(item_or_key)
 
-        if dept_key == "ALL":
+        if dept_key == "__ALL__" or not dept_key:
             self.active_dept_name = None
             self.current_subpath = Path(".")
         else:
@@ -977,7 +1122,10 @@ class FileExchangeMainWindow(QMainWindow):
             target.mkdir(parents=True, exist_ok=True)
 
         self._update_breadcrumb()
-        self._refresh_file_list()
+        if self.active_filter == "TRASH":
+            self._render_trash_table()
+        else:
+            self._refresh_file_list()
 
     def _show_department_context_menu(self, pos):
         """القائمة المنبثقة للقسم (استعراض، حذف القسم بالكامل)"""
@@ -992,15 +1140,19 @@ class FileExchangeMainWindow(QMainWindow):
             QMenu::item:selected { background-color: #f0f6f4; color: #14372e; font-weight: bold; }
         """)
 
-        if dept_key == "ALL":
-            act_open = menu.addAction("📂 استعراض المجلد الرئيسي في Windows")
+        if dept_key == "__ALL__":
+            act_enter = menu.addAction("📂 الدخول إلى كافة الملفات والمجلدات")
+            act_open_win = menu.addAction("📁 استعراض مجلد الأرشيف الشامل في Windows")
             action = menu.exec(self.dept_list.mapToGlobal(pos))
-            if action == act_open:
+            if action == act_enter:
+                self._on_department_clicked(item)
+            elif action == act_open_win:
                 os.startfile(str(self.sync_folder))
             return
 
         act_enter = menu.addAction(f"📂 الدخول إلى قسم {dept_key}")
         act_open_win = menu.addAction("📁 استعراض مجلد القسم في Windows")
+        act_rename = menu.addAction(f"✏️ تعديل اسم القسم ({dept_key})...")
         menu.addSeparator()
         act_del = menu.addAction(f"🗑️ حذف قسم '{dept_key}' بالكامل إلى سلة المحذوفات")
 
@@ -1011,8 +1163,40 @@ class FileExchangeMainWindow(QMainWindow):
             dept_dir = (self.sync_folder / dept_key).resolve()
             dept_dir.mkdir(parents=True, exist_ok=True)
             os.startfile(str(dept_dir))
+        elif action == act_rename:
+            self._rename_department(dept_key)
         elif action == act_del:
             self._delete_department(dept_key)
+
+    def _on_refresh_clicked(self):
+        """تحديث فوري وسحب أي ملفات جديدة من السحابة وتحديث كافة الجداول وسلة المحذوفات"""
+        self.btn_refresh.setEnabled(False)
+        self.btn_refresh.setText("⏳ جاري المزامنة...")
+        if hasattr(self, 'lbl_watcher'):
+            self.lbl_watcher.setText("⚡ المزامنة: جاري فحص ومزامنة السحابة...")
+        
+        def do_sync():
+            try:
+                if self.sync_engine:
+                    self.sync_engine.pull_remote_changes()
+            except Exception as e:
+                print(f"[Manual refresh error]: {e}")
+            finally:
+                QTimer.singleShot(0, self._on_refresh_finished)
+
+        import threading
+        threading.Thread(target=do_sync, daemon=True).start()
+
+    def _on_refresh_finished(self):
+        self.btn_refresh.setEnabled(True)
+        self.btn_refresh.setText("✅ تم التحديث")
+        if hasattr(self, 'lbl_watcher'):
+            self.lbl_watcher.setText("⚡ المزامنة: متصل ومحدث بالكامل مع السحابة")
+        self._refresh_departments_sidebar()
+        self._refresh_file_list()
+        if self.active_filter == "TRASH":
+            self._render_trash_table()
+        QTimer.singleShot(1800, lambda: self.btn_refresh.setText("🔄 تحديث"))
 
     def _show_add_department_dialog(self):
         """نافذة إنشاء قسم إداري جديد للغرفة"""
@@ -1092,6 +1276,15 @@ class FileExchangeMainWindow(QMainWindow):
                 dept_folder.mkdir(parents=True, exist_ok=True)
                 self.departments_list.append({"name": d_name, "icon": "🏛️"})
                 self.state_mgr.set_departments(self.departments_list)
+
+                # مزامنة إنشاء القسم فوراً إلى السحابة
+                if self.client and self.client.is_configured():
+                    try:
+                        if hasattr(self.client, 'create_folder'):
+                            self.client.create_folder(d_name)
+                    except Exception as ce:
+                        print(f"[Remote create dept]: {ce}")
+
                 dialog.accept()
 
                 # التبديل فوراً إلى القسم الجديد المنشأ
@@ -1106,6 +1299,136 @@ class FileExchangeMainWindow(QMainWindow):
 
         btn_create.clicked.connect(do_create_dept)
         btn_row.addWidget(btn_create)
+        layout.addLayout(btn_row)
+        dialog.exec()
+
+    def _rename_department(self, old_dept_name):
+        """تعديل اسم قسم إداري وتحديث مجلده التخزيني على الجهاز ومزامنته مع السحابة"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("✏️ تعديل اسم القسم الإداري")
+        dialog.resize(480, 230)
+        dialog.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        dialog.setStyleSheet("""
+            QDialog { background-color: #f8fafc; font-family: 'Cairo', Tahoma; }
+            QLabel { font-size: 12px; color: #162420; font-weight: 600; }
+            QLineEdit {
+                background-color: #ffffff; border: 1.5px solid #cbd5e1; border-radius: 8px;
+                padding: 10px 14px; font-size: 13px; color: #162420;
+            }
+            QLineEdit:focus { border-color: #14372e; }
+        """)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
+
+        title_lbl = QLabel(f"🏛️ تعديل اسم القسم: {old_dept_name}")
+        title_lbl.setFont(QFont("Cairo", 12, QFont.Weight.Bold))
+        title_lbl.setStyleSheet(f"color: {GOV_GREEN};")
+        layout.addWidget(title_lbl)
+
+        txt_name = QLineEdit(old_dept_name)
+        txt_name.selectAll()
+        layout.addWidget(txt_name)
+
+        hint_lbl = QLabel("⚠️ سيتم تغيير اسم مجلد القسم في موقع التخزين على الجهاز وكافة ملفاته فوراً.")
+        hint_lbl.setFont(QFont("Cairo", 9))
+        hint_lbl.setStyleSheet("color: #64748b;")
+        layout.addWidget(hint_lbl)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+        btn_row.addStretch()
+
+        btn_cancel = QPushButton("إلغاء")
+        btn_cancel.setObjectName("btnGovSecondary")
+        btn_cancel.clicked.connect(dialog.reject)
+        btn_row.addWidget(btn_cancel)
+
+        btn_save = QPushButton("💾 حفظ التعديل")
+        btn_save.setObjectName("btnGovPrimary")
+
+        def do_save():
+            new_name = txt_name.text().strip()
+            if not new_name:
+                QMessageBox.warning(dialog, "تنبيه", "يرجى إدخال اسم القسم الجديد.")
+                return
+            if new_name == old_dept_name:
+                dialog.accept()
+                return
+            invalid_chars = ['<', '>', ':', '"', '/', '\\', '|', '?', '*']
+            if any(c in new_name for c in invalid_chars):
+                QMessageBox.warning(dialog, "تنبيه", "اسم القسم يحتوي على رموز غير صالحة للويندوز.")
+                return
+            if new_name == "__ALL__":
+                QMessageBox.warning(dialog, "تنبيه", "هذا الاسم محجوز للنظام.")
+                return
+            if any(d['name'].lower() == new_name.lower() for d in self.departments_list if d['name'] != old_dept_name):
+                QMessageBox.warning(dialog, "تنبيه", f"يوجد قسم آخر باسم '{new_name}' بالفعل.")
+                return
+
+            old_dir = (self.sync_folder / old_dept_name).resolve()
+            new_dir = (self.sync_folder / new_name).resolve()
+
+            # 1. تغيير اسم المجلد الفعلي في القرص الصلب (موقع التخزين في الجهاز)
+            if old_dir.exists():
+                try:
+                    os.rename(str(old_dir), str(new_dir))
+                except PermissionError:
+                    QMessageBox.critical(
+                        dialog, "تعذر التعديل",
+                        "تعذر تغيير اسم مجلد القسم على الجهاز لأن أحد الملفات داخله مفتوح حالياً في برنامج آخر (مثل Word أو Excel).\n\nيرجى إغلاق المستندات المفتوحة ثم إعادة المحاولة."
+                    )
+                    return
+                except Exception as e:
+                    QMessageBox.critical(dialog, "خطأ", f"حدث خطأ أثناء تغيير اسم المجلد على الجهاز:\n{e}")
+                    return
+            else:
+                try:
+                    new_dir.mkdir(parents=True, exist_ok=True)
+                except Exception as e:
+                    QMessageBox.critical(dialog, "خطأ", f"تعذر إنشاء المجلد الجديد:\n{e}")
+                    return
+
+            # 2. تحديث قائمة الأقسام في الذاكرة والإعدادات المحلية
+            for d in self.departments_list:
+                if d['name'] == old_dept_name:
+                    d['name'] = new_name
+            self.state_mgr.set_departments(self.departments_list)
+
+            # 3. تحديث قاعدة البيانات المحلية (الملفات وسلة المحذوفات)
+            self.state_mgr.rename_department(old_dept_name, new_name)
+
+            # 4. تحديث المسار النشط إذا كان المستخدم داخل هذا القسم
+            if self.active_dept_name == old_dept_name:
+                self.active_dept_name = new_name
+                if self.current_subpath == Path(old_dept_name):
+                    self.current_subpath = Path(new_name)
+                elif str(self.current_subpath).startswith(old_dept_name):
+                    try:
+                        rel = self.current_subpath.relative_to(old_dept_name)
+                        self.current_subpath = Path(new_name) / rel
+                    except Exception:
+                        self.current_subpath = Path(new_name)
+
+            # 5. مزامنة تعديل المجلد مع السحابة فوراً
+            if self.client and self.client.is_configured():
+                try:
+                    if hasattr(self.client, 'create_folder'):
+                        self.client.create_folder(new_name)
+                    if hasattr(self.client, 'delete_folder'):
+                        self.client.delete_folder(old_dept_name)
+                except Exception as ce:
+                    print(f"[Remote dept rename sync]: {ce}")
+
+            dialog.accept()
+            self._refresh_departments_sidebar()
+            self._update_breadcrumb()
+            self._refresh_file_list()
+            QMessageBox.information(self, "تم التعديل", f"تم تعديل اسم القسم إلى '{new_name}' وتحديث موقعه على الجهاز بنجاح.")
+
+        btn_save.clicked.connect(do_save)
+        btn_row.addWidget(btn_save)
         layout.addLayout(btn_row)
         dialog.exec()
 
@@ -1126,20 +1449,27 @@ class FileExchangeMainWindow(QMainWindow):
             if dept_folder.exists():
                 shutil.move(str(dept_folder), str(trash_dest))
 
-            self.state_mgr.add_to_trash(dept_name, dept_name, str(trash_dest), 0, item_type='department')
+            self.state_mgr.add_to_trash(dept_name, dept_name, str(trash_dest), 0, item_type='department', dept_name=dept_name)
 
             self.departments_list = [d for d in self.departments_list if d['name'] != dept_name]
             self.state_mgr.set_departments(self.departments_list)
 
             if self.client and self.client.is_configured():
                 try:
-                    self.client.delete_file(dept_name)
+                    if hasattr(self.client, 'delete_folder'):
+                        self.client.delete_folder(dept_name)
+                    else:
+                        self.client.delete_file(dept_name)
                 except Exception as e:
                     print(f"[Delete remote dept]: {e}")
 
             if self.active_dept_name == dept_name:
-                self.active_dept_name = None
-                self.current_subpath = Path(".")
+                if self.departments_list:
+                    self.active_dept_name = self.departments_list[0]['name']
+                    self.current_subpath = Path(self.active_dept_name)
+                else:
+                    self.active_dept_name = None
+                    self.current_subpath = Path(".")
 
             self._refresh_departments_sidebar()
             self._update_breadcrumb()
@@ -1173,25 +1503,25 @@ class FileExchangeMainWindow(QMainWindow):
         if self.active_dept_name is None:
             if self.current_subpath == Path("."):
                 self.btn_nav_up.setEnabled(False)
-                self.lbl_current_path.setText("📂 الأرشيف العام: غرفة تجارة كربلاء المقدسة")
+                self.lbl_current_path.setText("🗂️ كافة الملفات والمجلدات (الأرشيف الشامل)")
             else:
                 self.btn_nav_up.setEnabled(True)
                 parts = list(self.current_subpath.parts)
                 path_str = " ◀ ".join(parts)
-                self.lbl_current_path.setText(f"📂 المسار: غرفة تجارة كربلاء المقدسة ◀ {path_str}")
+                self.lbl_current_path.setText(f"🗂️ كافة الملفات والمجلدات ◀ {path_str}")
         else:
             if self.current_subpath == Path(self.active_dept_name):
                 self.btn_nav_up.setEnabled(False)
-                self.lbl_current_path.setText(f"🏛️ قسم: {self.active_dept_name} ◀ المجلد الرئيسي للقسم")
+                self.lbl_current_path.setText(f"🏛️ {self.active_dept_name}")
             else:
                 self.btn_nav_up.setEnabled(True)
                 try:
                     rel_sub = self.current_subpath.relative_to(self.active_dept_name)
                     path_str = " ◀ ".join(rel_sub.parts)
-                    self.lbl_current_path.setText(f"🏛️ قسم: {self.active_dept_name} ◀ {path_str}")
+                    self.lbl_current_path.setText(f"🏛️ {self.active_dept_name} ◀ {path_str}")
                 except Exception:
                     path_str = " ◀ ".join(self.current_subpath.parts)
-                    self.lbl_current_path.setText(f"📂 المسار: {path_str}")
+                    self.lbl_current_path.setText(f"📂 {path_str}")
 
     def _show_new_folder_dialog(self):
         """نافذة إنشاء مجلد إداري جديد مع اقتراحات سريعة لأقسام الغرفة (قسم إنشاء مجلدات)"""
@@ -1268,6 +1598,16 @@ class FileExchangeMainWindow(QMainWindow):
                 return
             try:
                 target_dir.mkdir(parents=True, exist_ok=True)
+                rel_folder = str(target_dir.relative_to(self.sync_folder)).replace("\\", "/")
+                
+                # مزامنة إنشاء المجلد فوراً إلى السحابة
+                if self.client and self.client.is_configured():
+                    try:
+                        if hasattr(self.client, 'create_folder'):
+                            self.client.create_folder(rel_folder)
+                    except Exception as ce:
+                        print(f"[Remote create folder]: {ce}")
+
                 dialog.accept()
                 self._refresh_file_list()
                 QMessageBox.information(self, "تم الإنشاء", f"تم إنشاء المجلد '{f_name}' بنجاح.")
@@ -1277,6 +1617,112 @@ class FileExchangeMainWindow(QMainWindow):
         btn_create.clicked.connect(do_create)
         btn_row.addWidget(btn_create)
 
+        layout.addLayout(btn_row)
+        dialog.exec()
+
+    def _rename_folder(self, old_folder_name):
+        """تعديل اسم مجلد إداري وتحديث موقعه التخزيني على الجهاز ومزامنته في السحابة"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("✏️ تعديل اسم المجلد الإداري")
+        dialog.resize(480, 220)
+        dialog.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        dialog.setStyleSheet("""
+            QDialog { background-color: #f8fafc; font-family: 'Cairo', Tahoma; }
+            QLabel { font-size: 12px; color: #162420; font-weight: 600; }
+            QLineEdit {
+                background-color: #ffffff; border: 1.5px solid #cbd5e1; border-radius: 8px;
+                padding: 10px 14px; font-size: 13px; color: #162420;
+            }
+            QLineEdit:focus { border-color: #14372e; }
+        """)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
+
+        cur_parent_name = "كافة الملفات والمجلدات" if self.current_subpath == Path(".") else self.current_subpath.name
+        title_lbl = QLabel(f"📁 تعديل اسم المجلد: {old_folder_name}")
+        title_lbl.setFont(QFont("Cairo", 12, QFont.Weight.Bold))
+        title_lbl.setStyleSheet(f"color: {GOV_GREEN};")
+        layout.addWidget(title_lbl)
+
+        txt_name = QLineEdit(old_folder_name)
+        txt_name.selectAll()
+        layout.addWidget(txt_name)
+
+        hint_lbl = QLabel(f"المجلد يقع ضمن: ({cur_parent_name}) وسيتم تعديل اسمه في موقع التخزين مباشرة.")
+        hint_lbl.setFont(QFont("Cairo", 9))
+        hint_lbl.setStyleSheet("color: #64748b;")
+        layout.addWidget(hint_lbl)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+        btn_row.addStretch()
+
+        btn_cancel = QPushButton("إلغاء")
+        btn_cancel.setObjectName("btnGovSecondary")
+        btn_cancel.clicked.connect(dialog.reject)
+        btn_row.addWidget(btn_cancel)
+
+        btn_save = QPushButton("💾 حفظ التعديل")
+        btn_save.setObjectName("btnGovPrimary")
+
+        def do_save():
+            new_name = txt_name.text().strip()
+            if not new_name:
+                QMessageBox.warning(dialog, "تنبيه", "يرجى إدخال اسم المجلد الجديد.")
+                return
+            if new_name == old_folder_name:
+                dialog.accept()
+                return
+            invalid_chars = ['<', '>', ':', '"', '/', '\\', '|', '?', '*']
+            if any(c in new_name for c in invalid_chars):
+                QMessageBox.warning(dialog, "تنبيه", "اسم المجلد يحتوي على رموز غير صالحة للويندوز.")
+                return
+
+            old_path = (self._get_current_abs_folder() / old_folder_name).resolve()
+            new_path = (self._get_current_abs_folder() / new_name).resolve()
+
+            if new_path.exists():
+                QMessageBox.warning(dialog, "تنبيه", f"يوجد مجلد آخر باسم '{new_name}' في نفس المجلد.")
+                return
+
+            # 1. تغيير اسم المجلد الفعلي على الجهاز
+            if old_path.exists():
+                try:
+                    os.rename(str(old_path), str(new_path))
+                except PermissionError:
+                    QMessageBox.critical(
+                        dialog, "تعذر التعديل",
+                        "تعذر تغيير اسم المجلد على الجهاز لأن أحد الملفات داخله قيد الاستخدام حالياً في برنامج آخر.\n\nيرجى إغلاق المستندات المفتوحة ثم المحاولة مجدداً."
+                    )
+                    return
+                except Exception as e:
+                    QMessageBox.critical(dialog, "خطأ", f"حدث خطأ أثناء إعادة تسمية المجلد على الجهاز:\n{e}")
+                    return
+
+            # 2. تحديث قاعدة البيانات المحلية للملفات المنظمة داخل المجلد
+            old_rel = str(old_path.relative_to(self.sync_folder)).replace("\\", "/")
+            new_rel = str(new_path.relative_to(self.sync_folder)).replace("\\", "/")
+            self.state_mgr.rename_folder_prefix(old_rel, new_rel)
+
+            # 3. مزامنة التغيير في السحابة
+            if self.client and self.client.is_configured():
+                try:
+                    if hasattr(self.client, 'create_folder'):
+                        self.client.create_folder(new_rel)
+                    if hasattr(self.client, 'delete_folder'):
+                        self.client.delete_folder(old_rel)
+                except Exception as ce:
+                    print(f"[Remote folder rename sync]: {ce}")
+
+            dialog.accept()
+            self._refresh_file_list()
+            self._refresh_departments_sidebar()
+            QMessageBox.information(self, "تم التعديل", f"تم تعديل اسم المجلد إلى '{new_name}' بنجاح في موقع التخزين.")
+
+        btn_save.clicked.connect(do_save)
+        btn_row.addWidget(btn_save)
         layout.addLayout(btn_row)
         dialog.exec()
 
@@ -1305,6 +1751,7 @@ class FileExchangeMainWindow(QMainWindow):
         """)
         open_action = menu.addAction("📂 الدخول إلى المجلد")
         open_win_action = menu.addAction("📁 استعراض في مجلد Windows")
+        rename_action = menu.addAction("✏️ تعديل اسم المجلد (إعادة تسمية)...")
         menu.addSeparator()
         delete_action = menu.addAction("🗑️ نقل المجلد إلى سلة المحذوفات")
 
@@ -1315,6 +1762,8 @@ class FileExchangeMainWindow(QMainWindow):
             target = (self._get_current_abs_folder() / folder_name).resolve()
             if target.exists():
                 subprocess.Popen(f'explorer /select,"{str(target)}"')
+        elif action == rename_action:
+            self._rename_folder(folder_name)
         elif action == delete_action:
             self._move_folder_to_trash(folder_name)
 
@@ -1334,15 +1783,26 @@ class FileExchangeMainWindow(QMainWindow):
                 import shutil
                 shutil.move(str(target), str(trash_dest))
                 rel = str(target.relative_to(self.sync_folder)).replace("\\", "/")
-                self.state_mgr.add_to_trash(folder_name, rel, str(trash_dest), 0)
+                self.state_mgr.add_to_trash(folder_name, rel, str(trash_dest), 0, item_type='folder', dept_name=self.active_dept_name or '')
+                
+                # مزامنة حذف المجلد من السحابة
+                if self.client and self.client.is_configured():
+                    try:
+                        if hasattr(self.client, 'delete_folder'):
+                            self.client.delete_folder(rel)
+                        else:
+                            self.client.delete_file(rel)
+                    except Exception as ce:
+                        print(f"[Remote delete folder]: {ce}")
+
                 self._refresh_file_list()
                 QMessageBox.information(self, "تم الحذف", f"تم نقل المجلد '{folder_name}' إلى سلة المحذوفات.")
 
     def _move_file_to_trash(self, file_name, rel_path=None):
-        """نقل مستند رسمي إلى سلة المحذوفات (قسم حذف الملفات)"""
+        """نقل مستند رسمي إلى سلة المحذوفات الخاصة بالقسم"""
         reply = QMessageBox.question(
             self, "تأكيد النقل إلى سلة المحذوفات", 
-            f"هل أنت متأكد من نقل المستند التالي إلى سلة المحذوفات؟\n{file_name}\n\n(يمكنك استعادته في أي وقت من قسم سلة المحذوفات)",
+            f"هل أنت متأكد من نقل المستند التالي إلى سلة محذوفات القسم؟\n{file_name}\n\n(يمكنك استعادته في أي وقت من قسم سلة المحذوفات الخاص بالقسم)",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         if reply == QMessageBox.StandardButton.Yes:
@@ -1364,7 +1824,7 @@ class FileExchangeMainWindow(QMainWindow):
                 import shutil
                 shutil.move(str(file_path), str(trash_dest))
 
-                self.state_mgr.add_to_trash(file_name, rel_path, str(trash_dest), size)
+                self.state_mgr.add_to_trash(file_name, rel_path, str(trash_dest), size, item_type='file', dept_name=self.active_dept_name or '')
 
                 if self.client and self.client.is_configured():
                     try:
@@ -1373,17 +1833,154 @@ class FileExchangeMainWindow(QMainWindow):
                         print(f"[Delete remote skip]: {e}")
 
                 self._refresh_file_list()
-                QMessageBox.information(self, "تم النقل للمحذوفات", f"تم نقل '{file_name}' إلى سلة المحذوفات بنجاح.")
+                QMessageBox.information(self, "تم النقل للمحذوفات", f"تم نقل '{file_name}' إلى سلة محذوفات القسم بنجاح.")
+
+    def _rename_file(self, old_file_name):
+        """تعديل اسم مستند رسمي وتحديث موقعه التخزيني على الجهاز ومزامنته في السحابة"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("✏️ تعديل اسم المستند الرسمي")
+        dialog.resize(480, 240)
+        dialog.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        dialog.setStyleSheet("""
+            QDialog { background-color: #f8fafc; font-family: 'Cairo', Tahoma; }
+            QLabel { font-size: 12px; color: #162420; font-weight: 600; }
+            QLineEdit {
+                background-color: #ffffff; border: 1.5px solid #cbd5e1; border-radius: 8px;
+                padding: 10px 14px; font-size: 13px; color: #162420;
+            }
+            QLineEdit:focus { border-color: #14372e; }
+        """)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
+
+        title_lbl = QLabel(f"📄 تعديل اسم المستند: {old_file_name}")
+        title_lbl.setFont(QFont("Cairo", 12, QFont.Weight.Bold))
+        title_lbl.setStyleSheet(f"color: {GOV_GREEN};")
+        layout.addWidget(title_lbl)
+
+        old_stem = Path(old_file_name).stem
+        old_ext = Path(old_file_name).suffix
+
+        txt_name = QLineEdit(old_file_name)
+        # تحديد اسم الملف بدون الامتداد لتسهيل التعديل السريع
+        txt_name.setSelection(0, len(old_stem))
+        layout.addWidget(txt_name)
+
+        ext_note = f"ملاحظة: سيتم الحفاظ على صيغة المستند ({old_ext}) تلقائياً إذا تركت الامتداد." if old_ext else ""
+        hint_lbl = QLabel(ext_note)
+        hint_lbl.setFont(QFont("Cairo", 9))
+        hint_lbl.setStyleSheet("color: #64748b;")
+        layout.addWidget(hint_lbl)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+        btn_row.addStretch()
+
+        btn_cancel = QPushButton("إلغاء")
+        btn_cancel.setObjectName("btnGovSecondary")
+        btn_cancel.clicked.connect(dialog.reject)
+        btn_row.addWidget(btn_cancel)
+
+        btn_save = QPushButton("💾 حفظ التعديل")
+        btn_save.setObjectName("btnGovPrimary")
+
+        def do_save():
+            val = txt_name.text().strip()
+            if not val:
+                QMessageBox.warning(dialog, "تنبيه", "يرجى إدخال اسم المستند.")
+                return
+
+            # الحفاظ على الامتداد الأصلي في حال لم يكتب المستخدم امتداداً
+            if not Path(val).suffix and old_ext:
+                new_file_name = val + old_ext
+            else:
+                new_file_name = val
+
+            if new_file_name == old_file_name:
+                dialog.accept()
+                return
+
+            invalid_chars = ['<', '>', ':', '"', '/', '\\', '|', '?', '*']
+            if any(c in new_file_name for c in invalid_chars):
+                QMessageBox.warning(dialog, "تنبيه", "اسم الملف يحتوي على رموز غير صالحة للويندوز.")
+                return
+
+            old_path = (self._get_current_abs_folder() / old_file_name).resolve()
+            if not old_path.exists():
+                old_path = (self.sync_folder / old_file_name).resolve()
+
+            if not old_path.exists():
+                QMessageBox.critical(dialog, "خطأ", "لم يتم العثور على الملف الأصلي على القرص.")
+                return
+
+            new_path = old_path.parent / new_file_name
+            if new_path.exists():
+                QMessageBox.warning(dialog, "تنبيه", f"يوجد ملف آخر باسم '{new_file_name}' في نفس المجلد.")
+                return
+
+            # 1. تغيير اسم الملف الفعلي على الجهاز
+            try:
+                os.rename(str(old_path), str(new_path))
+            except PermissionError:
+                QMessageBox.critical(
+                    dialog, "تعذر التعديل",
+                    f"تعذر تعديل اسم المستند لأن الملف مفتوح حالياً في برنامج آخر (مثل Word أو Excel).\n\nيرجى حفظ وإغلاق الملف أولاً ثم إعادة المحاولة."
+                )
+                return
+            except Exception as e:
+                QMessageBox.critical(dialog, "خطأ", f"حدث خطأ أثناء إعادة تسمية الملف على الجهاز:\n{e}")
+                return
+
+            # 2. تحديث قاعدة البيانات المحلية
+            old_rel = str(old_path.relative_to(self.sync_folder)).replace("\\", "/")
+            new_rel = str(new_path.relative_to(self.sync_folder)).replace("\\", "/")
+            self.state_mgr.rename_file_record(old_rel, new_rel, new_file_name)
+
+            # 3. مزامنة التعديل في السحابة فوراً (حذف القديم ورفع الجديد)
+            if self.client and self.client.is_configured():
+                try:
+                    self.client.delete_file(old_rel)
+                    self.client.upload_file(str(new_path), new_file_name)
+                except Exception as ce:
+                    print(f"[Remote file rename sync]: {ce}")
+
+            if self.sync_engine:
+                self.sync_engine.on_local_file_saved(str(new_path))
+
+            dialog.accept()
+            self._refresh_file_list()
+            self._refresh_departments_sidebar()
+            QMessageBox.information(self, "تم التعديل", f"تم تعديل اسم المستند إلى '{new_file_name}' وتحديثه في موقع التخزين والسحابة.")
+
+        btn_save.clicked.connect(do_save)
+        btn_row.addWidget(btn_save)
+        layout.addLayout(btn_row)
+        dialog.exec()
 
     def _render_trash_table(self):
-        """تصيير قسم سلة المحذوفات (عرض المستندات والمجلدات والأقسام المحذوفة مؤقتاً)"""
-        items = self.state_mgr.get_trash_files()
+        """تصيير قسم سلة المحذوفات الخاص بالقسم النشط أو الأرشيف العام بالكامل مع أزرار الإجراءات"""
+        dept = self.active_dept_name or ""
+        if hasattr(self, 'th_title'):
+            self.th_title.setText(f"🗑️ سلة محذوفات قسم: {dept}" if dept else "🗑️ سلة المحذوفات العامة (كافة الأقسام)")
+        if hasattr(self, 'th_desc'):
+            self.th_desc.setText(f"المستندات والمجلدات المحذوفة الخاصة بـ ({dept}) محفوظة بأمان هنا ومستقلة عن باقي الأقسام." if dept else "كافة المستندات المنقولة للمحذوفات محفوظة بأمان هنا.")
+        if hasattr(self, 'btn_empty_trash'):
+            self.btn_empty_trash.setText(f"🧹 إفراغ سلة محذوفات ({dept})" if dept else "🧹 إفراغ سلة المحذوفات")
+        if hasattr(self, 'btn_restore_all'):
+            self.btn_restore_all.setText(f"♻️ استرجاع كافة محذوفات ({dept})" if dept else "♻️ استرجاع كافة المحذوفات")
+
+        items = self.state_mgr.get_trash_files(dept_name=dept if dept else None)
         self.trash_table.setRowCount(0)
         for row_idx, item in enumerate(items):
             self.trash_table.insertRow(row_idx)
+            self.trash_table.setRowHeight(row_idx, 52)
 
             name = item['file_name']
+            trash_id = item['id']
             itype = item.get('item_type', 'file')
+
             if itype == 'department':
                 icon = get_file_office_icon(name, size=32, is_folder=True)
                 display_name = f"🏛️ {name} (قسم إداري محذوف)"
@@ -1397,6 +1994,7 @@ class FileExchangeMainWindow(QMainWindow):
             name_cell = QTableWidgetItem(display_name)
             name_cell.setIcon(icon)
             name_cell.setFont(QFont("Cairo", 10, QFont.Weight.Bold))
+            name_cell.setData(Qt.ItemDataRole.UserRole, trash_id)
             self.trash_table.setItem(row_idx, 0, name_cell)
 
             origin = item.get('original_rel_path', name)
@@ -1405,6 +2003,7 @@ class FileExchangeMainWindow(QMainWindow):
             path_cell = QTableWidgetItem(origin)
             path_cell.setFont(QFont("Segoe UI", 10))
             path_cell.setForeground(QColor("#566c65"))
+            path_cell.setData(Qt.ItemDataRole.UserRole, trash_id)
             self.trash_table.setItem(row_idx, 1, path_cell)
 
             date_raw = item.get('deleted_at', '')
@@ -1428,57 +2027,197 @@ class FileExchangeMainWindow(QMainWindow):
             size_cell.setForeground(QColor("#566c65"))
             self.trash_table.setItem(row_idx, 3, size_cell)
 
+            # أزرار الإجراءات البارزة الواضحة في كل صف
             action_widget = QWidget()
             act_layout = QHBoxLayout(action_widget)
-            act_layout.setContentsMargins(4, 2, 4, 2)
-            act_layout.setSpacing(6)
+            act_layout.setContentsMargins(6, 4, 6, 4)
+            act_layout.setSpacing(8)
 
-            trash_id = item['id']
-            btn_res = QPushButton("🔄 استعادة")
-            btn_res.setObjectName("btnTrashRestore")
+            btn_res = QPushButton("↩️ استرجاع")
             btn_res.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            btn_res.setToolTip(f"استرجاع '{name}' وإعادة رفعه للسحابة فوراً")
+            btn_res.setStyleSheet("""
+                QPushButton {
+                    background-color: #14372e; color: #ffffff; border: none;
+                    border-radius: 6px; padding: 6px 14px; font-weight: bold; font-size: 11px;
+                    font-family: 'Cairo', Tahoma;
+                }
+                QPushButton:hover { background-color: #1e4a3f; }
+            """)
             btn_res.clicked.connect(lambda _, tid=trash_id: self._restore_from_trash(tid))
             act_layout.addWidget(btn_res)
 
-            btn_del = QPushButton("❌ حذف نهائي")
-            btn_del.setObjectName("btnTrashPurge")
+            btn_del = QPushButton("🗑️ حذف نهائي")
             btn_del.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            btn_del.setToolTip(f"حذف '{name}' نهائياً وتفريغ مساحته")
+            btn_del.setStyleSheet("""
+                QPushButton {
+                    background-color: #fee2e2; color: #991b1b; border: 1.5px solid #fecaca;
+                    border-radius: 6px; padding: 6px 12px; font-weight: bold; font-size: 11px;
+                    font-family: 'Cairo', Tahoma;
+                }
+                QPushButton:hover { background-color: #fecaca; color: #7f1d1d; }
+            """)
             btn_del.clicked.connect(lambda _, tid=trash_id: self._purge_from_trash(tid))
             act_layout.addWidget(btn_del)
 
             self.trash_table.setCellWidget(row_idx, 4, action_widget)
 
-    def _restore_from_trash(self, trash_id):
-        """استعادة مستند رسمي أو مجلد أو قسم من سلة المحذوفات إلى موقعه الأصلي"""
+    def _restore_from_trash(self, trash_id, show_msg=True):
+        """استعادة مستند رسمي أو مجلد أو قسم من سلة المحذوفات إلى موقعه الأصلي ورفعه ومزامنته فوراً إلى السحابة"""
         row = self.state_mgr.remove_from_trash(trash_id)
-        if row:
-            trash_path = Path(row['trash_path'])
-            target_path = (self.sync_folder / row['original_rel_path']).resolve()
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            if trash_path.exists():
-                import shutil
-                shutil.move(str(trash_path), str(target_path))
+        if not row:
+            return
 
-            # إذا كان العنصر قسماً إدارياً، يعاد إدراجه في قائمة الأقسام
-            if row.get('item_type') == 'department':
-                if not any(d['name'] == row['file_name'] for d in self.departments_list):
-                    self.departments_list.append({"name": row['file_name'], "icon": "🏛️"})
-                    self.state_mgr.set_departments(self.departments_list)
-                self._refresh_departments_sidebar()
+        trash_path = Path(row['trash_path'])
+        orig_rel = row['original_rel_path']
+        target_path = (self.sync_folder / orig_rel).resolve()
+        target_path.parent.mkdir(parents=True, exist_ok=True)
 
-            if target_path.exists():
-                if target_path.is_file():
-                    sha = self.sync_engine.calculate_hash(str(target_path)) if self.sync_engine else "hash"
-                    self.state_mgr.set_file_state(row['original_rel_path'], row['file_name'], sha, row['file_size'], 'synced')
-                    if self.sync_engine:
-                        self.sync_engine.on_local_file_saved(str(target_path))
-                elif target_path.is_dir():
-                    if self.sync_engine:
-                        self.sync_engine.scan_initial_local_files()
+        if trash_path.exists():
+            import shutil
+            shutil.move(str(trash_path), str(target_path))
 
+        # 1. إذا كان قسماً إدارياً
+        if row.get('item_type') == 'department':
+            dept_name = row['file_name']
+            if not any(d['name'] == dept_name for d in self.departments_list):
+                self.departments_list.append({"name": dept_name, "icon": "🏛️"})
+                self.state_mgr.set_departments(self.departments_list)
+            self._refresh_departments_sidebar()
+            if self.client and self.client.is_configured():
+                try:
+                    if hasattr(self.client, 'create_folder'):
+                        self.client.create_folder(dept_name)
+                except Exception as ce:
+                    print(f"[Restore dept cloud]: {ce}")
+
+        # 2. إذا كان مجلداً
+        elif row.get('item_type') == 'folder' or target_path.is_dir():
+            if self.client and self.client.is_configured():
+                try:
+                    if hasattr(self.client, 'create_folder'):
+                        self.client.create_folder(orig_rel)
+                except Exception as ce:
+                    print(f"[Restore folder cloud]: {ce}")
+
+        # 3. إذا كان مستنداً رسمياً (Word / Excel / Access / PDF)
+        if target_path.exists() and target_path.is_file():
+            # إزالة الحالة القديمة لضمان الرفع النظيف للسحابة
+            with self.state_mgr._get_connection() as conn:
+                conn.execute("DELETE FROM local_files WHERE relative_path = ? OR file_name = ?", (orig_rel, target_path.name))
+
+            # إعادة الرفع الفوري والمباشر إلى السحابة
+            if self.client and self.client.is_configured():
+                try:
+                    user_name = self.state_mgr.get_setting("user_email", "موظف الغرفة")
+                    dev_name = self.state_mgr.get_setting("device_name", os.environ.get('COMPUTERNAME', 'جهاز الغرفة'))
+                    if hasattr(self.client, 'upload_file'):
+                        self.client.upload_file(str(target_path), file_name=target_path.name, user_name=user_name, device_name=dev_name)
+                    elif hasattr(self.client, 'upload_file_to_storage'):
+                        self.client.upload_file_to_storage(str(target_path), f"shared/{orig_rel}")
+                except Exception as ue:
+                    print(f"[Restore cloud upload error]: {ue}")
+
+            if self.sync_engine:
+                self.sync_engine.on_local_file_saved(str(target_path))
+
+        if show_msg:
+            self._refresh_departments_sidebar()
             self._refresh_file_list()
             self._render_trash_table()
-            QMessageBox.information(self, "تمت الاستعادة", f"تمت استعادة '{row['file_name']}' بنجاح إلى موقعه الأصلي.")
+            QMessageBox.information(
+                self, "تمت الاستعادة والمزامنة السحابية",
+                f"✅ تمت استعادة المستند بنجاح:\n{row['file_name']}\n\nتمت إعادته إلى مكانه الأصلي وإعادة رفعه ومزامنته مع السحابة."
+            )
+
+    def _restore_all_trash(self):
+        """استعادة كافة المستندات المحذوفة وإعادتها لمواقعها الأصلية ورفعها للسحابة دفعة واحدة"""
+        dept = self.active_dept_name or ""
+        items = self.state_mgr.get_trash_files(dept_name=dept if dept else None)
+        if not items:
+            QMessageBox.information(self, "سلة المحذوفات", "سلة المحذوفات فارغة حالياً ولا توجد عناصر لاسترجاعها.")
+            return
+
+        reply = QMessageBox.question(
+            self, "تأكيد استعادة كافة المحذوفات",
+            f"هل أنت متأكد من استرجاع كافة المحذوفات ({len(items)} عنصر) وإعادة رفعها للسحابة؟",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            count = 0
+            for item in items:
+                try:
+                    self._restore_from_trash(item['id'], show_msg=False)
+                    count += 1
+                except Exception as e:
+                    print(f"[Error restoring item {item.get('file_name')}]: {e}")
+            self._refresh_departments_sidebar()
+            self._refresh_file_list()
+            self._render_trash_table()
+            QMessageBox.information(
+                self, "اكتملت الاستعادة السحابية",
+                f"✅ تم بنجاح استرجاع كافة العناصر ({count} عنصر) وإعادة رفعها ومزامنتها مع السحابة."
+            )
+
+    def _restore_selected_from_trash(self):
+        """استرجاع الملف أو العنصر المحدد حالياً في جدول المحذوفات"""
+        selected_rows = self.trash_table.selectionModel().selectedRows()
+        if not selected_rows:
+            QMessageBox.warning(self, "تنبيه", "يرجى تحديد صف أو ملف من جدول المحذوفات أولاً لاسترجاعه.")
+            return
+
+        row_idx = selected_rows[0].row()
+        item_cell = self.trash_table.item(row_idx, 0)
+        if not item_cell:
+            return
+        trash_id = item_cell.data(Qt.ItemDataRole.UserRole)
+        if trash_id:
+            self._restore_from_trash(trash_id)
+
+    def _show_trash_context_menu(self, pos):
+        """قائمة الخيارات بالزر الأيمن على عنصر في سلة المحذوفات"""
+        item = self.trash_table.itemAt(pos)
+        if not item:
+            return
+        row_idx = item.row()
+        cell_0 = self.trash_table.item(row_idx, 0)
+        if not cell_0:
+            return
+        trash_id = cell_0.data(Qt.ItemDataRole.UserRole)
+        file_name = cell_0.text().split("\n")[0]
+
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu { background-color: #ffffff; color: #162420; border: 1.5px solid #d5dfdb; border-radius: 8px; padding: 4px; }
+            QMenu::item { padding: 8px 24px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+            QMenu::item:selected { background-color: #f0f6f4; color: #14372e; font-weight: bold; }
+        """)
+
+        act_res = menu.addAction(f"↩️ استرجاع '{file_name}' ورفعه للسحابة")
+        menu.addSeparator()
+        act_del = menu.addAction(f"🗑️ حذف نهائي (تفريغ من القرص والسحابة)")
+
+        action = menu.exec(self.trash_table.mapToGlobal(pos))
+        if action == act_res:
+            self._restore_from_trash(trash_id)
+        elif action == act_del:
+            self._purge_from_trash(trash_id)
+
+    def _on_trash_row_double_clicked(self, row, col):
+        """عند النقر المزدوج على سطر في سلة المحذوفات: اقتراح استعادته ومزامنته فوراً"""
+        cell_0 = self.trash_table.item(row, 0)
+        if not cell_0:
+            return
+        trash_id = cell_0.data(Qt.ItemDataRole.UserRole)
+        file_name = cell_0.text().split("\n")[0]
+        reply = QMessageBox.question(
+            self, "استعادة المستند",
+            f"هل تريد استرجاع '{file_name}' إلى مكانه الأصلي وإعادة رفعه للسحابة؟",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self._restore_from_trash(trash_id)
 
     def _purge_from_trash(self, trash_id):
         """الحذف النهائي لمستند أو مجلد أو قسم من سلة المحذوفات وتفريغ مساحته"""
@@ -1508,19 +2247,21 @@ class FileExchangeMainWindow(QMainWindow):
             self._render_trash_table()
 
     def _empty_all_trash(self):
-        """إفراغ سلة المحذوفات بالكامل وحذف كل الملفات والمجلدات المحذوفة مؤقتاً نهائياً"""
-        count = self.state_mgr.get_trash_count()
+        """إفراغ سلة محذوفات القسم النشط وحذف عناصره المحذوفة مؤقتاً نهائياً"""
+        dept = self.active_dept_name
+        count = self.state_mgr.get_trash_count(dept_name=dept)
         if count == 0:
-            QMessageBox.information(self, "سلة المحذوفات", "سلة المحذوفات فارغة بالفعل.")
+            QMessageBox.information(self, "سلة المحذوفات", f"سلة محذوفات قسم '{dept}' فارغة بالفعل." if dept else "سلة المحذوفات فارغة بالفعل.")
             return
 
+        title_target = f"قسم '{dept}'" if dept else "القسم"
         reply = QMessageBox.critical(
-            self, "تأكيد إفراغ سلة المحذوفات",
-            f"هل تريد بالتأكيد إفراغ سلة المحذوفات وحذف كافة العناصر ({count} عنصر) نهائياً؟\nهذا الإجراء نهائي ولا يمكن التراجع عنه.",
+            self, "تأكيد إفراغ سلة محذوفات القسم",
+            f"هل تريد بالتأكيد إفراغ سلة محذوفات {title_target} وحذف كافة عناصره ({count} عنصر) نهائياً؟\nهذا الإجراء نهائي ولا يمكن التراجع عنه.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         if reply == QMessageBox.StandardButton.Yes:
-            rows = self.state_mgr.clear_all_trash()
+            rows = self.state_mgr.clear_all_trash(dept_name=dept)
             for r in rows:
                 trash_path = Path(r['trash_path'])
                 if trash_path.exists():
@@ -1539,7 +2280,7 @@ class FileExchangeMainWindow(QMainWindow):
                         pass
             self._refresh_file_list()
             self._render_trash_table()
-            QMessageBox.information(self, "تم الإفراغ", "تم إفراغ سلة المحذوفات نهائياً بنجاح.")
+            QMessageBox.information(self, "تم الإفراغ", f"تم إفراغ سلة محذوفات {title_target} نهائياً بنجاح.")
 
     def _set_active_filter(self, tag):
         self.active_filter = tag
@@ -1671,10 +2412,10 @@ class FileExchangeMainWindow(QMainWindow):
             all_items = folders_list + files_list
             self.all_files_cache = all_items
 
-            trash_cnt = self.state_mgr.get_trash_count()
-            self.lbl_total.setText(f"المستندات: {len(files_list)} ملف | المجلدات: {len(folders_list)}")
-            self.lbl_trash_stat.setText(f"سلة المحذوفات: {trash_cnt} مستند")
-            self.tab_trash.setText(f"🗑️ سلة المحذوفات ({trash_cnt})" if trash_cnt > 0 else "🗑️ سلة المحذوفات")
+            trash_cnt = self.state_mgr.get_trash_count(dept_name=self.active_dept_name)
+            self.lbl_total.setText(f"المستندات: {len(files_list)} | المجلدات: {len(folders_list)}")
+            self.lbl_trash_stat.setText(f"المحذوفات: {trash_cnt}")
+            self.tab_trash.setText(f"المحذوفات 🗑️ ({trash_cnt})" if trash_cnt > 0 else "المحذوفات 🗑️")
 
             self._filter_content()
             self._refresh_departments_sidebar()
@@ -1830,6 +2571,13 @@ class FileExchangeMainWindow(QMainWindow):
                 btn_open.clicked.connect(lambda _, n=name: self._navigate_into_folder(n))
                 act_layout.addWidget(btn_open)
 
+                btn_rename = QPushButton("✏️")
+                btn_rename.setObjectName("btnTableRename")
+                btn_rename.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+                btn_rename.setToolTip("تعديل اسم المجلد (F2)")
+                btn_rename.clicked.connect(lambda _, n=name: self._rename_folder(n))
+                act_layout.addWidget(btn_rename)
+
                 btn_del = QPushButton("🗑️")
                 btn_del.setObjectName("btnTableDelete")
                 btn_del.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -1842,6 +2590,13 @@ class FileExchangeMainWindow(QMainWindow):
                 btn_open.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
                 btn_open.clicked.connect(lambda _, n=name: self._open_file_by_name(n))
                 act_layout.addWidget(btn_open)
+
+                btn_rename = QPushButton("✏️")
+                btn_rename.setObjectName("btnTableRename")
+                btn_rename.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+                btn_rename.setToolTip("تعديل اسم المستند (F2)")
+                btn_rename.clicked.connect(lambda _, n=name: self._rename_file(n))
+                act_layout.addWidget(btn_rename)
 
                 btn_del = QPushButton("🗑️")
                 btn_del.setObjectName("btnTableDelete")
@@ -1948,6 +2703,7 @@ class FileExchangeMainWindow(QMainWindow):
         """)
         open_action = menu.addAction("⚡ فتح المستند بالبرنامج الأصلي")
         open_folder_action = menu.addAction("📂 استعراض في مجلد Windows")
+        rename_action = menu.addAction("✏️ تعديل اسم المستند (إعادة تسمية)...")
         menu.addSeparator()
         delete_action = menu.addAction("🗑️ نقل المستند إلى سلة المحذوفات")
 
@@ -1957,6 +2713,8 @@ class FileExchangeMainWindow(QMainWindow):
         elif action == open_folder_action:
             if file_path.exists():
                 subprocess.Popen(f'explorer /select,"{str(file_path)}"')
+        elif action == rename_action:
+            self._rename_file(file_name)
         elif action == delete_action:
             self._move_file_to_trash(file_name)
 

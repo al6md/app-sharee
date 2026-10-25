@@ -44,5 +44,16 @@ local_state.db
 .DS_Store
 Thumbs.db
 
+# Local binaries & scripts in root
+/*.exe
+FileExchangeSetup.spec
+install_app.py
+*.bat
+
+# Web dashboard temporary exes
+web-dashboard/public/*.old
+web-dashboard/public/FileExchange_Latest.exe
+web-dashboard/public/FileExchange_Updated.exe
+
 # Agent metadata
 .gemini/

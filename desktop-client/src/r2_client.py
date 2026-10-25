@@ -228,3 +228,59 @@ class CloudflareR2Client:
             return True, "تم رفع برنامج التثبيت بنجاح"
         except Exception as e:
             return False, str(e)
+
+    def delete_file(self, file_name_or_rel_path):
+        """حذف ملف وميتاداتا الملف من Cloudflare R2"""
+        if not self.s3_client:
+            return False, "Cloudflare R2 غير متصل"
+        clean = file_name_or_rel_path.replace("\\", "/").strip("/")
+        name = os.path.basename(clean)
+        try:
+            keys_to_del = [
+                {"Key": f"files/{clean}"},
+                {"Key": f"files/{name}"},
+                {"Key": f"metadata/{clean}.json"},
+                {"Key": f"metadata/{name}.json"}
+            ]
+            self.s3_client.delete_objects(
+                Bucket=self.bucket_name,
+                Delete={"Objects": keys_to_del, "Quiet": True}
+            )
+            return True, "تم حذف الملف من R2"
+        except Exception as e:
+            logger.error(f"خطأ في حذف ملف من R2: {e}")
+            return False, str(e)
+
+    def create_folder(self, folder_name_or_rel_path):
+        """إنشاء مجلد في Cloudflare R2 عبر وضع علامة .keep"""
+        if not self.s3_client:
+            return False, "غير متصل"
+        clean = folder_name_or_rel_path.replace("\\", "/").strip("/")
+        try:
+            self.s3_client.put_object(
+                Bucket=self.bucket_name,
+                Key=f"files/{clean}/.keep",
+                Body=b"",
+                ContentType="application/octet-stream"
+            )
+            return True, "تم إنشاء المجلد في R2"
+        except Exception as e:
+            logger.error(f"خطأ في إنشاء مجلد في R2: {e}")
+            return False, str(e)
+
+    def delete_folder(self, folder_name_or_rel_path):
+        """حذف مجلد وكافة محتوياته من Cloudflare R2"""
+        if not self.s3_client:
+            return False, "غير متصل"
+        clean = folder_name_or_rel_path.replace("\\", "/").strip("/")
+        prefix = f"files/{clean}/"
+        try:
+            response = self.s3_client.list_objects_v2(Bucket=self.bucket_name, Prefix=prefix)
+            objects = response.get("Contents", [])
+            if objects:
+                delete_keys = [{"Key": obj["Key"]} for obj in objects]
+                self.s3_client.delete_objects(Bucket=self.bucket_name, Delete={"Objects": delete_keys, "Quiet": True})
+            return True, "تم حذف المجلد من R2"
+        except Exception as e:
+            logger.error(f"خطأ في حذف مجلد من R2: {e}")
+            return False, str(e)

@@ -95,29 +95,55 @@ class SupabaseClient:
             merged = []
             seen_names = set()
 
+            storage_objects = []
             if list_res.status_code == 200 and isinstance(list_res.json(), list):
-                for obj in list_res.json():
-                    raw_name = obj.get("name", "")
-                    if not raw_name or raw_name == ".emptyFolderPlaceholder":
-                        continue
-                    storage_path = f"shared/{raw_name}"
+                storage_objects.extend(list_res.json())
 
-                    if storage_path in db_by_storage:
-                        item = dict(db_by_storage[storage_path])
-                    elif raw_name in db_by_name:
-                        item = dict(db_by_name[raw_name])
-                    else:
-                        item = {
-                            "file_name": raw_name,
-                            "file_path": raw_name,
+            # فحص الجذر أيضاً
+            try:
+                list_root = requests.post(storage_url, json={"prefix": "", "limit": 100}, headers=self.headers, timeout=4)
+                if list_root.status_code == 200 and isinstance(list_root.json(), list):
+                    for r_obj in list_root.json():
+                        if r_obj.get("name") and r_obj.get("name") != "shared" and r_obj.get("id"):
+                            storage_objects.append(r_obj)
+            except Exception:
+                pass
+
+            for obj in storage_objects:
+                raw_name = obj.get("name", "")
+                if not raw_name or raw_name == ".emptyFolderPlaceholder" or raw_name == ".keep":
+                    continue
+                storage_path = raw_name if raw_name.startswith("shared/") else f"shared/{raw_name}"
+
+                if storage_path in db_by_storage:
+                    item = dict(db_by_storage[storage_path])
+                elif raw_name in db_by_name:
+                    item = dict(db_by_name[raw_name])
+                else:
+                    item = {
+                        "file_name": os.path.basename(raw_name),
+                        "file_path": os.path.basename(raw_name),
+                        "storage_path": storage_path,
+                        "file_size": obj.get("metadata", {}).get("size", 0),
+                        "updated_at": obj.get("updated_at", "")
+                    }
+                    # مزامنة الملف المكتشف في التخزين تلقائياً مع جدول files
+                    try:
+                        upsert_url = f"{self.supabase_url}/rest/v1/files"
+                        requests.post(upsert_url, json={
+                            "file_name": item["file_name"],
+                            "file_path": item["file_path"],
                             "storage_path": storage_path,
-                            "file_size": obj.get("metadata", {}).get("size", 0),
-                            "updated_at": obj.get("updated_at", "")
-                        }
-                    
-                    if item["file_name"] not in seen_names:
-                        seen_names.add(item["file_name"])
-                        merged.append(item)
+                            "file_size": item["file_size"],
+                            "last_modified_by_name": "سحابة التخزين المباشرة",
+                            "updated_at": datetime.utcnow().isoformat()
+                        }, headers={**self.headers, "Prefer": "resolution=merge-duplicates"}, timeout=3)
+                    except Exception:
+                        pass
+                
+                if item["file_name"] not in seen_names:
+                    seen_names.add(item["file_name"])
+                    merged.append(item)
 
             for f_name, db_item in db_by_name.items():
                 if f_name not in seen_names:
@@ -223,11 +249,25 @@ class SupabaseClient:
         except Exception:
             return False
 
-    def download_file(self, file_name, local_dest_path):
-        """تنزيل ملف من Supabase"""
-        dest = self.get_safe_storage_path(file_name)
-        ok = self.download_file_from_storage(dest, local_dest_path)
-        return ok, "تم التنزيل" if ok else "فشل التنزيل"
+    def download_file(self, file_name, local_dest_path, storage_path=None):
+        """تنزيل ملف من Supabase بتجربة عدة مسارات لضمان تنزيل أي ملف من لوحة التحكم أو الهاتف أو التطبيق"""
+        candidates = []
+        if storage_path:
+            candidates.append(storage_path)
+            if not storage_path.startswith("shared/"):
+                candidates.append(f"shared/{storage_path}")
+        candidates.append(f"shared/{file_name}")
+        candidates.append(self.get_safe_storage_path(file_name))
+        candidates.append(file_name)
+
+        Path(local_dest_path).parent.mkdir(parents=True, exist_ok=True)
+        for dest in candidates:
+            if not dest:
+                continue
+            ok = self.download_file_from_storage(dest, local_dest_path)
+            if ok and os.path.exists(local_dest_path) and os.path.getsize(local_dest_path) > 0:
+                return True, "تم التنزيل بنجاح"
+        return False, "فشل التنزيل من السحابة"
 
     def download_file_from_storage(self, storage_path, local_dest_path):
         """تنزيل الملف مباشرة من Supabase Storage بدون باسورد مع تشفير المسار للمسافات"""
@@ -253,19 +293,119 @@ class SupabaseClient:
         except Exception:
             return False
 
-    def delete_file(self, file_name_or_rel_path):
-        """حذف ملف من قاعدة بيانات Supabase ووعاء التخزين"""
+    def create_folder(self, folder_name_or_rel_path):
+        """إنشاء مجلد في قاعدة بيانات السحابة (shared_folders) وتأكيده في التخزين"""
+        if not self.is_configured():
+            return False, "غير متصل"
+        try:
+            folder_clean = folder_name_or_rel_path.replace("\\", "/").strip("/")
+            folder_name = os.path.basename(folder_clean)
+            if not folder_name:
+                return False, "اسم المجلد غير صالح"
+
+            # 1. إدراج في جدول shared_folders
+            url = f"{self.supabase_url}/rest/v1/shared_folders"
+            payload = {"name": folder_name}
+            res = requests.post(url, json=payload, headers={**self.headers, "Prefer": "resolution=merge-duplicates"}, timeout=6)
+            
+            # 2. إنشاء علامة مجلد في وعاء التخزين
+            safe_folder = self.get_safe_storage_path(folder_clean)
+            storage_url = f"{self.supabase_url}/storage/v1/object/file-exchange-storage/{safe_folder}/.keep"
+            storage_headers = {
+                "apikey": self.anon_key,
+                "Authorization": f"Bearer {self.anon_key}",
+                "x-upsert": "true"
+            }
+            try:
+                requests.post(storage_url, data=b"", headers=storage_headers, timeout=5)
+            except Exception:
+                pass
+
+            self.log_audit("create_folder", "folder", None, folder_name, {"rel_path": folder_clean})
+            return True, "تم إنشاء المجلد في السحابة بنجاح"
+        except Exception as e:
+            print(f"[Supabase create_folder]: {e}")
+            return False, str(e)
+
+    def delete_folder(self, folder_name_or_rel_path):
+        """حذف مجلد وكافة محتوياته من قاعدة البيانات والتخزين السحابي"""
         if not self.is_configured():
             return True
         try:
-            name = os.path.basename(file_name_or_rel_path)
-            quoted_name = urllib.parse.quote(name)
-            url_db = f"{self.supabase_url}/rest/v1/files?file_name=eq.{quoted_name}"
-            requests.delete(url_db, headers=self.headers, timeout=6)
+            folder_clean = folder_name_or_rel_path.replace("\\", "/").strip("/")
+            folder_name = os.path.basename(folder_clean)
+            quoted_name = urllib.parse.quote(folder_name)
+            quoted_clean = urllib.parse.quote(folder_clean)
 
-            safe_dest = self.get_safe_storage_path(name)
+            # 1. حذف المجلد من shared_folders
+            url_folder = f"{self.supabase_url}/rest/v1/shared_folders?name=eq.{quoted_name}"
+            requests.delete(url_folder, headers=self.headers, timeout=6)
+
+            # 2. حذف ملفات المجلد من جدول files
+            url_files_path = f"{self.supabase_url}/rest/v1/files?file_path=like.{quoted_clean}%"
+            requests.delete(url_files_path, headers=self.headers, timeout=6)
+
+            # 3. حذف من التخزين السحابي
+            safe_folder = self.get_safe_storage_path(folder_clean)
             del_url = f"{self.supabase_url}/storage/v1/object/file-exchange-storage"
-            requests.delete(del_url, json={"prefixes": [safe_dest, f"shared/{name}", f"shared/{file_name_or_rel_path}"]}, headers=self.headers, timeout=6)
+            prefixes_to_del = [
+                f"{safe_folder}/.keep",
+                f"shared/{folder_clean}/.emptyFolderPlaceholder",
+                f"shared/{folder_name}/.emptyFolderPlaceholder",
+                f"shared/{folder_clean}",
+                f"shared/{folder_name}"
+            ]
+            requests.delete(del_url, json={"prefixes": prefixes_to_del}, headers=self.headers, timeout=6)
+
+            self.log_audit("delete_folder", "folder", None, folder_name, {"rel_path": folder_clean})
+            return True
+        except Exception as e:
+            print(f"[Supabase delete_folder]: {e}")
+            return False
+
+    def list_folders(self):
+        """جلب قائمة المجلدات المشتركة من سحابة Supabase"""
+        if not self.is_configured():
+            return []
+        try:
+            url = f"{self.supabase_url}/rest/v1/shared_folders?select=*&order=name.asc"
+            res = requests.get(url, headers=self.headers, timeout=6)
+            if res.status_code == 200:
+                return res.json()
+        except Exception as e:
+            print(f"[Supabase list_folders]: {e}")
+        return []
+
+    def delete_file(self, file_name_or_rel_path):
+        """حذف ملف من قاعدة بيانات Supabase ووعاء التخزين بشكل شامل"""
+        if not self.is_configured():
+            return True
+        try:
+            rel_path = file_name_or_rel_path.replace("\\", "/").strip("/")
+            name = os.path.basename(rel_path)
+            quoted_name = urllib.parse.quote(name)
+            quoted_rel = urllib.parse.quote(rel_path)
+
+            # 1. حذف من قاعدة بيانات files بالاسم والمسار
+            url_db1 = f"{self.supabase_url}/rest/v1/files?file_name=eq.{quoted_name}"
+            requests.delete(url_db1, headers=self.headers, timeout=6)
+            
+            if rel_path != name:
+                url_db2 = f"{self.supabase_url}/rest/v1/files?file_path=eq.{quoted_rel}"
+                requests.delete(url_db2, headers=self.headers, timeout=6)
+
+            # 2. حذف من وعاء التخزين
+            safe_dest_name = self.get_safe_storage_path(name)
+            safe_dest_rel = self.get_safe_storage_path(rel_path)
+            del_url = f"{self.supabase_url}/storage/v1/object/file-exchange-storage"
+            prefixes = [
+                safe_dest_name,
+                safe_dest_rel,
+                f"shared/{name}",
+                f"shared/{rel_path}"
+            ]
+            requests.delete(del_url, json={"prefixes": prefixes}, headers=self.headers, timeout=6)
+            self.log_audit("delete_file", "file", None, name, {"rel_path": rel_path})
             return True
         except Exception as e:
             print(f"[Supabase delete]: {e}")

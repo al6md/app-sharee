@@ -8,7 +8,7 @@ a = Analysis(
     ['src/main.py'],
     pathex=['src'],
     binaries=[],
-    datas=[],
+    datas=[('assets', 'assets')],
     hiddenimports=[
         'PyQt6',
         'PyQt6.QtCore',
@@ -45,7 +45,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='FileExchangeSetup',
+    name='share coc',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -53,6 +53,7 @@ exe = EXE(
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False, # نافذة تطبيق Windows دون ظهور شاشة موجه الأوامر السوداء
+    icon='assets/logo.ico',
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

@@ -125,19 +125,59 @@ class LoginDialog(QDialog):
         self.device_info = dev_data
         self.accept()
 
+def ensure_desktop_shortcut():
+    """إنشاء وتأكيد وجود اختصار لتطبيق share coc على سطح المكتب بشعاره الرسمي"""
+    try:
+        import subprocess
+        if getattr(sys, 'frozen', False):
+            target_exe = sys.executable
+            app_dir = Path(target_exe).parent
+        else:
+            target_exe = str(Path(__file__).resolve())
+            app_dir = Path(__file__).parent.parent
+
+        ico_path = app_dir / "assets" / "logo.ico"
+        if not ico_path.exists():
+            ico_path = app_dir / "logo.ico"
+
+        ps_script = f"""
+        $wsh = New-Object -ComObject WScript.Shell
+        $desktop = [Environment]::GetFolderPath('Desktop')
+        $shortcutPath = Join-Path $desktop 'share coc.lnk'
+        $s = $wsh.CreateShortcut($shortcutPath)
+        $s.TargetPath = '{target_exe}'
+        $s.WorkingDirectory = '{str(app_dir)}'
+        $s.Description = 'Share COC - منظومة تبادل وأرشفة مستندات غرفة تجارة كربلاء المقدسة'
+        if (Test-Path '{str(ico_path)}') {{
+            $s.IconLocation = '{str(ico_path)},0'
+        }} else {{
+            $s.IconLocation = '{target_exe},0'
+        }}
+        $s.Save()
+        """
+        subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], capture_output=True, timeout=5)
+    except Exception as e:
+        print(f"[Shortcut creation]: {e}")
+
 def main():
     app = QApplication(sys.argv)
-    app.setApplicationName("KarbalaChamberFileExchange")
+    app.setApplicationName("share coc")
+    app.setApplicationDisplayName("Share COC")
     app.setOrganizationName("KarbalaChamberOfCommerce")
 
     if getattr(sys, 'frozen', False):
         base_dir = Path(sys._MEIPASS)
     else:
         base_dir = Path(__file__).parent.parent
-    logo_path = base_dir / "assets" / "logo.png"
+    logo_path = base_dir / "assets" / "logo.ico"
+    if not logo_path.exists():
+        logo_path = base_dir / "assets" / "logo.png"
     if logo_path.exists():
         from PyQt6.QtGui import QIcon
         app.setWindowIcon(QIcon(str(logo_path)))
+
+    # تأكيد وجود اختصار البرنامج على سطح المكتب بشعاره المعتمد
+    ensure_desktop_shortcut()
 
     # مجلد المزامنة المحلي على جهاز المستخدم
     sync_folder = Path(os.environ.get('USERPROFILE', 'C:')) / "FileExchangeShared"

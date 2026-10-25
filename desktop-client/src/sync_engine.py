@@ -35,6 +35,12 @@ class LocalFolderWatcher(FileSystemEventHandler):
             return
         self.sync_engine.on_local_file_deleted(event.src_path)
 
+    def on_moved(self, event):
+        if event.is_directory:
+            return
+        self.sync_engine.on_local_file_deleted(event.src_path)
+        self._handle_event(event.dest_path)
+
     def _handle_event(self, filepath):
         filename = os.path.basename(filepath)
 
@@ -135,7 +141,15 @@ class SyncEngine:
         with self.state_mgr._get_connection() as conn:
             conn.execute("DELETE FROM local_files WHERE relative_path = ? OR file_name = ?", (rel_path, path.name))
             conn.execute("DELETE FROM upload_queue WHERE relative_path = ?", (rel_path,))
-        self.notify_status({"event": "deleted", "file": rel_path, "status": "تم حذف الملف محلياً"})
+        
+        # مزامنة الحذف فوراً إلى السحابة
+        if self.client and self.client.is_configured():
+            try:
+                self.client.delete_file(rel_path)
+            except Exception as e:
+                print(f"[Remote delete on watcher]: {e}")
+
+        self.notify_status({"event": "deleted", "file": rel_path, "status": "تم حذف الملف محلياً وسحابياً"})
 
     def on_local_file_saved(self, filepath):
         """يتم استدعاؤها عند ضغط Ctrl+S واكتمال حفظ الملف في Word أو Excel أو Access"""
@@ -228,12 +242,19 @@ class SyncEngine:
 
             for r_file in remote_files:
                 file_name = r_file['file_name']
-                local_path = self.sync_folder / file_name
+                storage_path = r_file.get('storage_path', file_name)
+                rel_file_path = r_file.get('file_path') or file_name
+
+                # تجاهل أي ملف موجود في سلة المحذوفات لتجنب إعادة تنزيله تلقائياً
+                if self.state_mgr.is_in_trash(file_name, storage_path):
+                    continue
+
+                local_path = (self.sync_folder / rel_file_path).resolve()
 
                 if local_path.exists() and OfficeHandler.is_file_locked_by_os(str(local_path)):
                     continue
 
-                local_state = self.state_mgr.get_file_state(file_name)
+                local_state = self.state_mgr.get_file_state(rel_file_path) or self.state_mgr.get_file_state(file_name)
                 needs_download = False
 
                 if not local_path.exists():
@@ -244,21 +265,22 @@ class SyncEngine:
                 if needs_download:
                     self._is_syncing_remote = True
                     try:
-                        self.notify_status({"event": "syncing", "file": file_name, "status": "تنزيل من R2..."})
+                        self.notify_status({"event": "syncing", "file": file_name, "status": "تنزيل من السحابة..."})
+                        local_path.parent.mkdir(parents=True, exist_ok=True)
                         if hasattr(self.client, 'download_file'):
-                            success, msg = self.client.download_file(file_name, str(local_path))
+                            success, msg = self.client.download_file(file_name, str(local_path), storage_path=storage_path)
                         else:
-                            success = self.client.download_file_from_storage(r_file.get('storage_path', f"shared/{file_name}"), str(local_path))
+                            success = self.client.download_file_from_storage(storage_path, str(local_path))
 
-                        if success:
+                        if success and local_path.exists():
                             file_size = os.path.getsize(str(local_path))
                             file_hash = self.calculate_hash(str(local_path))
-                            self.state_mgr.set_file_state(file_name, file_name, file_hash, file_size, 'synced')
-                            self.notify_status({"event": "synced", "file": file_name, "status": "محدث من R2"})
+                            self.state_mgr.set_file_state(rel_file_path, file_name, file_hash, file_size, 'synced')
+                            self.notify_status({"event": "synced", "file": file_name, "status": "محدث من السحابة"})
                     finally:
                         self._is_syncing_remote = False
         except Exception as e:
-            print(f"[خطأ في جلب التحديثات من R2]: {e}")
+            print(f"[خطأ في جلب التحديثات من السحابة]: {e}")
 
     def _background_sync_loop(self):
         while self.is_running:

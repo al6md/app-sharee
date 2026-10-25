@@ -128,8 +128,8 @@ def get_gov_stylesheet():
         color: {TEXT_MUTED};
         border: none;
         border-bottom: 3px solid transparent;
-        padding: 10px 18px;
-        font-size: 12.5px;
+        padding: 8px 12px;
+        font-size: 12px;
         font-weight: 600;
     }}
     QPushButton#govTab:hover {{
@@ -181,8 +181,8 @@ def get_gov_stylesheet():
         color: {TEXT_MUTED};
         border: none;
         border-radius: 6px;
-        padding: 6px 14px;
-        font-size: 12px;
+        padding: 5px 10px;
+        font-size: 11.5px;
         font-weight: 600;
     }}
     QPushButton#btnViewMode:hover {{
@@ -347,6 +347,28 @@ def get_gov_stylesheet():
         border-color: {GOV_GREEN};
     }}
 
+    /* زر التبديل للقائمة الجانبية للأقسام (Hamburger Button ☰) */
+    QPushButton#btnToggleSidebar {{
+        background-color: #f0f6f4;
+        color: {GOV_GREEN};
+        border: 1.5px solid #c2d5cd;
+        border-radius: 7px;
+        padding: 7px 14px;
+        font-size: 12.5px;
+        font-weight: 700;
+    }}
+    QPushButton#btnToggleSidebar:hover {{
+        background-color: {GOV_GREEN};
+        color: #ffffff;
+        border-color: {GOV_GREEN};
+    }}
+    QPushButton#btnToggleSidebar:checked {{
+        background-color: {GOV_GREEN};
+        color: #f7e6a7;
+        border-color: {GOV_GOLD};
+        font-weight: 800;
+    }}
+
     /* القائمة الجانبية لأقسام الدائرة */
     QFrame#sidebarFrame {{
         background-color: #ffffff;
@@ -357,7 +379,7 @@ def get_gov_stylesheet():
     QFrame#sidebarHeaderFrame {{
         background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #14372e, stop:1 #1c4d40);
         border-radius: 8px;
-        padding: 8px 12px;
+        padding: 7px 10px;
     }}
     QPushButton#btnAddDept {{
         background-color: #fdfaf3;
@@ -373,6 +395,20 @@ def get_gov_stylesheet():
         color: #ffffff;
         border-color: #c59b27;
     }}
+    QPushButton#btnCloseSidebar {{
+        background-color: rgba(255, 255, 255, 0.15);
+        color: #ffffff;
+        border: 1px solid rgba(255, 255, 255, 0.25);
+        border-radius: 4px;
+        padding: 2px 7px;
+        font-size: 11px;
+        font-weight: bold;
+    }}
+    QPushButton#btnCloseSidebar:hover {{
+        background-color: #dc2626;
+        border-color: #dc2626;
+        color: #ffffff;
+    }}
     QListWidget#deptList {{
         background: transparent;
         border: none;
@@ -383,10 +419,10 @@ def get_gov_stylesheet():
         color: #162420;
         border: 1px solid #e2ece8;
         border-radius: 8px;
-        padding: 9px 10px;
-        margin-bottom: 5px;
-        font-size: 12px;
-        font-weight: 700;
+        padding: 8px 10px;
+        margin-bottom: 4px;
+        font-size: 11.5px;
+        font-weight: 600;
     }}
     QListWidget#deptList::item:hover {{
         background-color: #eaf3f0;
@@ -398,6 +434,35 @@ def get_gov_stylesheet():
         color: #ffffff;
         border: 1px solid #0e2720;
         border-right: 4px solid #c59b27;
+    }}
+
+    /* أزرار تعديل الاسم وإعادة التسمية للمستندات والمجلدات */
+    QPushButton#btnCardRename, QPushButton#btnTileRename {{
+        background-color: #f0fdf4;
+        color: #166534;
+        border: 1px solid #bbf7d0;
+        border-radius: 6px;
+        padding: 4px 10px;
+        font-size: 11px;
+        font-weight: 700;
+    }}
+    QPushButton#btnCardRename:hover, QPushButton#btnTileRename:hover {{
+        background-color: #166534;
+        color: #ffffff;
+        border-color: #166534;
+    }}
+    QPushButton#btnTableRename {{
+        background-color: #f0fdf4;
+        color: #166534;
+        border: 1px solid #bbf7d0;
+        border-radius: 5px;
+        padding: 3px 8px;
+        font-size: 11px;
+        font-weight: 700;
+    }}
+    QPushButton#btnTableRename:hover {{
+        background-color: #166534;
+        color: #ffffff;
     }}
 
     /* أزرار الحذف السريع للمستندات والمجلدات */
