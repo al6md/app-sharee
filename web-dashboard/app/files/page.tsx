@@ -161,7 +161,12 @@ export default function FilesPage() {
         .order('updated_at', { ascending: false });
 
       if (dbFiles) {
-        const mapped: FileItem[] = dbFiles.map(f => {
+        const validDbFiles = dbFiles.filter(f => {
+          const fn = f.file_name || '';
+          // استبعاد أي سجلات base64 مشوهة لضمان عرض الأسماء العربية الأصلية فقط
+          return !(fn.length > 35 && /\.(docx|xlsx|pdf|accdb)$/i.test(fn) && !/[^\x00-\x7F]/.test(fn) && (fn.startsWith('2Y') || fn.startsWith('VGh') || fn.startsWith('TG')));
+        });
+        const mapped: FileItem[] = validDbFiles.map(f => {
           const fileName = f.file_name || f.file_path || 'مستند';
           let folderName = 'كافة الملفات';
           if (f.file_path && f.file_path.includes('/')) {

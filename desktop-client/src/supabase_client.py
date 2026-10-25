@@ -90,89 +90,25 @@ class SupabaseClient:
         return self.list_accessible_files()
 
     def list_accessible_files(self):
-        """جلب قائمة الملفات من السحابة بدمج سجلات قاعدة البيانات مع وعاء التخزين الفعلي"""
+        """جلب قائمة الملفات الرسمية المسجلة في السحابة مع الحفاظ الكامل على الأسماء العربية الأصلية ومنع تحولها إلى رموز إنجليزية"""
         if not self.is_configured():
             return []
         try:
-            db_by_storage = {}
-            db_by_name = {}
             url = f"{self.supabase_url}/rest/v1/files?is_deleted=eq.false&select=*"
             res = requests.get(url, headers=self.headers, timeout=6)
             if res.status_code == 200 and isinstance(res.json(), list):
+                clean_files = []
                 for r in res.json():
-                    if r.get("storage_path"):
-                        db_by_storage[r["storage_path"]] = r
-                    if r.get("file_name"):
-                        db_by_name[r["file_name"]] = r
-
-            storage_url = f"{self.supabase_url}/storage/v1/object/list/file-exchange-storage"
-            list_res = requests.post(storage_url, json={"prefix": "shared", "limit": 100}, headers=self.headers, timeout=6)
-            
-            merged = []
-            seen_names = set()
-
-            storage_objects = []
-            if list_res.status_code == 200 and isinstance(list_res.json(), list):
-                storage_objects.extend(list_res.json())
-
-            # فحص الجذر أيضاً
-            try:
-                list_root = requests.post(storage_url, json={"prefix": "", "limit": 100}, headers=self.headers, timeout=4)
-                if list_root.status_code == 200 and isinstance(list_root.json(), list):
-                    for r_obj in list_root.json():
-                        if r_obj.get("name") and r_obj.get("name") != "shared" and r_obj.get("id"):
-                            storage_objects.append(r_obj)
-            except Exception:
-                pass
-
-            for obj in storage_objects:
-                if not obj.get("id"):
-                    continue
-                raw_name = obj.get("name", "")
-                if not raw_name or raw_name == ".emptyFolderPlaceholder" or raw_name == ".keep":
-                    continue
-                storage_path = raw_name if raw_name.startswith("shared/") else f"shared/{raw_name}"
-
-                if storage_path in db_by_storage:
-                    item = dict(db_by_storage[storage_path])
-                elif raw_name in db_by_name:
-                    item = dict(db_by_name[raw_name])
-                else:
-                    meta = obj.get("metadata") or {}
-                    item = {
-                        "file_name": os.path.basename(raw_name),
-                        "file_path": os.path.basename(raw_name),
-                        "storage_path": storage_path,
-                        "file_size": meta.get("size", 0) if isinstance(meta, dict) else 0,
-                        "updated_at": obj.get("updated_at", "")
-                    }
-                    # مزامنة الملف المكتشف في التخزين تلقائياً مع جدول files
-                    try:
-                        upsert_url = f"{self.supabase_url}/rest/v1/files"
-                        requests.post(upsert_url, json={
-                            "file_name": item["file_name"],
-                            "file_path": item["file_path"],
-                            "storage_path": storage_path,
-                            "file_size": item["file_size"],
-                            "last_modified_by_name": "سحابة التخزين المباشرة",
-                            "updated_at": datetime.utcnow().isoformat()
-                        }, headers={**self.headers, "Prefer": "resolution=merge-duplicates"}, timeout=3)
-                    except Exception:
-                        pass
-                
-                if item["file_name"] not in seen_names:
-                    seen_names.add(item["file_name"])
-                    merged.append(item)
-
-            for f_name, db_item in db_by_name.items():
-                if f_name not in seen_names:
-                    seen_names.add(f_name)
-                    merged.append(db_item)
-
-            return merged
+                    fn = r.get("file_name", "")
+                    # حماية: استبعاد أي سجلات مشفرة بـ Base64 لكي لا تظهر أسماء إنجليزية غريبة للمستخدمين
+                    if fn.endswith(('.docx', '.xlsx', '.pdf', '.accdb')) and len(fn) > 35 and not any(ord(c) > 127 for c in fn):
+                        continue
+                    clean_files.append(r)
+                return clean_files
+            return []
         except Exception as e:
             print(f"[Supabase list_accessible_files error]: {e}")
-            return list(db_by_name.values()) if db_by_name else []
+            return []
 
     def check_file_lock(self, file_id_or_name):
         """فحص ما إذا كان الملف مقفولاً من جهاز آخر (خاصة ملفات Access)"""
