@@ -1,19 +1,19 @@
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --foreground-rgb: 30, 41, 59;
-  --background-start-rgb: 248, 250, 252;
-  --background-end-rgb: 241, 245, 249;
+  --gov-green: #14372e;
+  --gov-dark: #0e2720;
+  --gov-gold: #c59b27;
+  --gov-light-gold: #ecd58a;
 }
 
 body {
-  color: rgb(var(--foreground-rgb));
-  background: linear-gradient(
-      to bottom,
-      transparent,
-      rgb(var(--background-end-rgb))
-    )
-    rgb(var(--background-start-rgb));
+  font-family: 'Cairo', 'Segoe UI', Tahoma, sans-serif;
+  background-color: #f4f7f6;
+  color: #162420;
+  -webkit-tap-highlight-color: transparent;
 }

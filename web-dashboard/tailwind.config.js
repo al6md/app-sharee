@@ -8,8 +8,17 @@ module.exports = {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['Segoe UI', 'Tahoma', 'Arial', 'sans-serif'],
+        sans: ['Cairo', 'Segoe UI', 'Tahoma', 'Arial', 'sans-serif'],
       },
+      colors: {
+        gov: {
+          green: '#14372e',
+          dark: '#0e2720',
+          gold: '#c59b27',
+          lightGold: '#ecd58a',
+          bg: '#f4f7f6',
+        }
+      }
     },
   },
   plugins: [],
