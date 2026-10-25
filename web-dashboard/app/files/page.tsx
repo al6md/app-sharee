@@ -76,6 +76,10 @@ export default function FilesPage() {
   const [itemToRename, setItemToRename] = useState<{ id: string; name: string; isFolder?: boolean } | null>(null);
   const [newRenameValue, setNewRenameValue] = useState('');
 
+  // نافذة خيارات فتح المستند على الهاتف المحمول (Mobile Action Sheet)
+  const [selectedMobileFile, setSelectedMobileFile] = useState<FileItem | null>(null);
+  const [preparingMobileOpen, setPreparingMobileOpen] = useState(false);
+
   // إشعار عائم للمستخدم عند فتح الملفات
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'info' | 'error' } | null>(null);
 
@@ -353,32 +357,8 @@ export default function FilesPage() {
 
     if (isMobile) {
       if (['word', 'excel'].includes(file.type)) {
-        const scheme = file.type === 'word' ? 'ms-word' : 'ms-excel';
-        // بروتوكول مايكروسوفت أوفيس الرسمي لتشغيل تطبيقات Word و Excel و Microsoft 365 على الهاتف
-        const officeUri = `${scheme}:ofe|u|${directUrl}`;
-
-        setToastMessage({
-          text: `📱 جاري تشغيل تطبيق ${officeName} الأصلي في هاتفك...`,
-          type: 'success'
-        });
-
-        // تشغيل الرابط فوراً لنظام الهاتف ليفتح التطبيق دون اعتراض
-        const a = document.createElement('a');
-        a.href = officeUri;
-        a.target = '_self';
-        document.body.appendChild(a);
-        a.click();
-        setTimeout(() => {
-          try { document.body.removeChild(a); } catch {}
-        }, 1200);
-
-        // إشعار مساعد إذا كان الهاتف بحاجة لخيارات أخرى
-        setTimeout(() => {
-          setToastMessage({
-            text: `💡 نصيحة: إذا رغبت بفتحه في Google Docs أو WPS، اضغط على زر المشاركة 📤.`,
-            type: 'info'
-          });
-        }, 3000);
+        // فتح قائمة خيارات الجوال فوراً لتمرير الملف محلياً وتفادي قفل خوادم مايكروسوفت
+        setSelectedMobileFile(file);
         return;
       } else if (file.type === 'access') {
         alert('ملفات Microsoft Access (.accdb) مخصصة لحواسيب الويندوز فقط.');
@@ -438,6 +418,75 @@ export default function FilesPage() {
         type: 'info'
       });
     }, 1800);
+  };
+
+  // فتح المستند في تطبيق الهاتف (Word / Excel) بتمريره محلياً لتجاوز خطأ خادم مايكروسوفت
+  const handleLaunchMobileApp = async (file: FileItem) => {
+    try {
+      setPreparingMobileOpen(true);
+      setToastMessage({
+        text: `⏳ جاري تجهيز "${file.name}" لتطبيق الهاتف...`,
+        type: 'info'
+      });
+
+      const directUrl = getFileDirectUrl(file);
+      const res = await fetch(directUrl);
+      if (!res.ok) throw new Error('فشل جلب الملف من السحابة');
+      const blob = await res.blob();
+
+      let mimeType = 'application/octet-stream';
+      if (file.type === 'word') {
+        mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      } else if (file.type === 'excel') {
+        mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      } else if (file.type === 'pdf') {
+        mimeType = 'application/pdf';
+      }
+
+      const fileObj = new File([blob], file.name, {
+        type: mimeType,
+        lastModified: Date.now()
+      });
+
+      setSelectedMobileFile(null);
+
+      // استخدام مشاركة النظام الرسمية (Web Share API) لتمرير الملف محلياً إلى تطبيق Word
+      // هذا هو الحل المعتمد لتفادي خطأ "تم تخزين الملف على خادم لا يعتمده هذا الإصدار من Office"
+      if (typeof navigator !== 'undefined' && navigator.canShare && navigator.canShare({ files: [fileObj] })) {
+        await navigator.share({
+          files: [fileObj],
+          title: file.name
+        });
+        setToastMessage({
+          text: `✅ اختر تطبيق ${file.type === 'word' ? 'Word' : 'Excel'} من القائمة لفتحه فوراً.`,
+          type: 'success'
+        });
+        return;
+      }
+
+      // إذا كان المتصفح لا يدعم canShare، يتم حفظ وتنزيل الملف Blob محلياً
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = file.name;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        try { document.body.removeChild(a); } catch {}
+        URL.revokeObjectURL(blobUrl);
+      }, 3000);
+
+      setToastMessage({
+        text: `💾 تم تنزيل المستند، اضغط عليه في التنزيلات لفتحه في Word فوراً.`,
+        type: 'success'
+      });
+    } catch (e: any) {
+      if (e.name !== 'AbortError') {
+        alert(`تعذر فتح المستند: ${e.message || e}`);
+      }
+    } finally {
+      setPreparingMobileOpen(false);
+    }
   };
 
   // 2. فتح المستند في تطبيقات الهاتف المختلفة أو مشاركته (Web Share API)
@@ -1198,7 +1247,115 @@ export default function FilesPage() {
         </div>
       )}
 
-      {/* 8. إشعار عائم بتشغيل برامج Microsoft Office الأصلية */}
+      {/* 8. نافذة خيارات فتح المستند على الهاتف الذكي (Mobile Sheet) */}
+      {selectedMobileFile && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+          <div className="bg-white rounded-t-3xl sm:rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl border border-slate-200 animate-in slide-in-from-bottom duration-200">
+            <div className="flex items-center justify-between border-b pb-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                {getFileIcon(selectedMobileFile.type)}
+                <div className="min-w-0">
+                  <h3 className="font-bold text-sm text-[#14372e] truncate">
+                    {selectedMobileFile.name}
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    خيارات فتح المستند على الهاتف
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setSelectedMobileFile(null)} 
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-full hover:bg-slate-100"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed">
+              اختر طريقة الفتح المناسبة لهاتفك:
+            </p>
+
+            <div className="space-y-2.5">
+              {/* الخيار 1: الفتح في تطبيق Word أو Office عبر التمرير المحلي */}
+              <button
+                onClick={() => handleLaunchMobileApp(selectedMobileFile)}
+                disabled={preparingMobileOpen}
+                className="w-full flex items-start gap-3 p-3.5 bg-[#14372e] hover:bg-[#1a473b] text-white rounded-2xl transition active:scale-98 shadow-sm text-right"
+              >
+                <div className="p-2 bg-white/10 rounded-xl shrink-0 mt-0.5">
+                  <Smartphone className="w-5 h-5 text-amber-300" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-xs">
+                      {preparingMobileOpen ? '⏳ جاري التجهيز...' : `فتح في تطبيق ${selectedMobileFile.type === 'word' ? 'Word' : 'Excel'} بالهاتف`}
+                    </span>
+                    <span className="text-[10px] bg-amber-400/20 text-amber-300 px-2 py-0.5 rounded-full font-bold">موصى به</span>
+                  </div>
+                  <p className="text-[11px] text-emerald-100/80 mt-1 leading-normal">
+                    يتم تمرير الملف محلياً إلى تطبيق Word/Office لتجاوز قيد الخوادم وفتحه فوراً.
+                  </p>
+                </div>
+              </button>
+
+              {/* الخيار 2: المعاينة السريعة عبر المتصفح (Office Online) */}
+              <button
+                onClick={() => {
+                  const f = selectedMobileFile;
+                  setSelectedMobileFile(null);
+                  handleOpenOfficeOnline(f);
+                }}
+                className="w-full flex items-start gap-3 p-3.5 bg-blue-50 hover:bg-blue-100 text-blue-900 rounded-2xl transition active:scale-98 border border-blue-200 text-right"
+              >
+                <div className="p-2 bg-blue-600 text-white rounded-xl shrink-0 mt-0.5">
+                  <Eye className="w-5 h-5" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <span className="font-bold text-xs block text-blue-950">
+                    معاينة مباشرة في المتصفح (Office Online)
+                  </span>
+                  <p className="text-[11px] text-blue-700/80 mt-1 leading-normal">
+                    قراءة المستند فوراً في المتصفح دون الحاجة لتثبيت أي تطبيقات إضافية.
+                  </p>
+                </div>
+              </button>
+
+              {/* الخيار 3: تنزيل نسخة للملف */}
+              <button
+                onClick={() => {
+                  const f = selectedMobileFile;
+                  setSelectedMobileFile(null);
+                  handleDownloadFile(f);
+                }}
+                className="w-full flex items-start gap-3 p-3.5 bg-slate-50 hover:bg-slate-100 text-slate-800 rounded-2xl transition active:scale-98 border border-slate-200 text-right"
+              >
+                <div className="p-2 bg-slate-700 text-white rounded-xl shrink-0 mt-0.5">
+                  <Download className="w-5 h-5" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <span className="font-bold text-xs block text-slate-900">
+                    حفظ وتنزيل في ذاكرة الهاتف
+                  </span>
+                  <p className="text-[11px] text-slate-500 mt-1 leading-normal">
+                    تنزيل نسخة في مجلد التنزيلات والملفات في جهازك.
+                  </p>
+                </div>
+              </button>
+            </div>
+
+            <div className="pt-2 border-t">
+              <button
+                onClick={() => setSelectedMobileFile(null)}
+                className="w-full py-2.5 text-xs font-bold text-slate-500 hover:text-slate-800 rounded-xl transition"
+              >
+                إغلاق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 9. إشعار عائم بتشغيل برامج Microsoft Office الأصلية */}
       {toastMessage && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 animate-bounce shadow-2xl pointer-events-none">
           <div className={`flex items-center gap-2.5 px-5 py-3 rounded-2xl text-xs font-bold border backdrop-blur-md ${
