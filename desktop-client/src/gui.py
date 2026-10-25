@@ -328,9 +328,9 @@ class FileExchangeMainWindow(QMainWindow):
         is_cloud = self.client and self.client.is_configured()
         if is_cloud:
             if hasattr(self.client, 'account_id'):
-                badge_text = "● متصل بـ Cloudflare R2 (10GB)"
+                badge_text = "● متصل بـ Cloudflare R2"
             else:
-                badge_text = "● متصل بالسحابة"
+                badge_text = "● متصل بـ Supabase (بدون باسورد)"
         else:
             badge_text = "● وضع المزامنة المحلي"
         badge_color = STATUS_SYNCED if is_cloud else BLUE_ACCENT
@@ -400,10 +400,10 @@ class FileExchangeMainWindow(QMainWindow):
         self.btn_autostart.clicked.connect(self._toggle_autostart)
         ctrl_layout.addWidget(self.btn_autostart)
 
-        self.btn_cloud = QPushButton("☁️ سحابة R2")
+        self.btn_cloud = QPushButton("☁️ ربط السحابة")
         self.btn_cloud.setObjectName("btnStitchSecondary")
         self.btn_cloud.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.btn_cloud.clicked.connect(self._open_r2_settings)
+        self.btn_cloud.clicked.connect(self._open_cloud_settings)
         ctrl_layout.addWidget(self.btn_cloud)
 
         main_layout.addLayout(ctrl_layout)
@@ -889,18 +889,18 @@ class FileExchangeMainWindow(QMainWindow):
         else:
             QMessageBox.warning(self, "خطأ", msg)
 
-    def _open_r2_settings(self):
-        """نافذة إعدادات سحابة Cloudflare R2 المجانية (10GB)"""
+    def _open_cloud_settings(self):
+        """نافذة إعدادات التخزين السحابي المجاني (Supabase بدون كلمة مرور)"""
         dialog = QDialog(self)
-        dialog.setWindowTitle("إعدادات سحابة Cloudflare R2 (10GB مجاناً)")
-        dialog.resize(480, 360)
+        dialog.setWindowTitle("إعدادات الربط السحابي – تبادل الملفات (بدون كلمة مرور)")
+        dialog.resize(500, 420)
         dialog.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         dialog.setStyleSheet("""
             QDialog { background-color: #f8fafc; font-family: 'Segoe UI', Tahoma; }
             QLabel { font-size: 12px; color: #0f172a; font-weight: 600; }
             QLineEdit {
                 background-color: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px;
-                padding: 8px 12px; font-size: 12px; color: #0f172a;
+                padding: 9px 12px; font-size: 12px; color: #0f172a;
             }
             QLineEdit:focus { border: 1.5px solid #2563eb; }
             QPushButton {
@@ -911,72 +911,63 @@ class FileExchangeMainWindow(QMainWindow):
         """)
 
         layout = QVBoxLayout(dialog)
-        layout.setSpacing(10)
+        layout.setSpacing(12)
 
-        header_lbl = QLabel("☁️ ربط التخزين السحابي المجاني (Cloudflare R2)")
-        header_lbl.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+        header_lbl = QLabel("☁️ ربط السحابة المجانية (Supabase)")
+        header_lbl.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
         layout.addWidget(header_lbl)
 
-        desc_lbl = QLabel("سعة 10 جيجابايت مجانية بالكامل مع نقل بيانات وتنزيل غير محدود (0$ Egress Fees).")
-        desc_lbl.setStyleSheet("color: #64748b; font-size: 11px;")
+        desc_lbl = QLabel("⚡ نظام يعمل بالكامل بدون كلمة مرور أو تسجيل دخول للموظفين عبر المفتاح العام (Anon Key).")
+        desc_lbl.setStyleSheet("color: #059669; font-size: 11px; font-weight: 600; background: #ecfdf5; padding: 8px 12px; border-radius: 6px; border: 1px solid #a7f3d0;")
         desc_lbl.setWordWrap(True)
         layout.addWidget(desc_lbl)
 
-        cur_acc = self.state_mgr.get_setting("r2_account_id", os.environ.get("R2_ACCOUNT_ID", ""))
-        cur_key = self.state_mgr.get_setting("r2_access_key_id", os.environ.get("R2_ACCESS_KEY_ID", ""))
-        cur_sec = self.state_mgr.get_setting("r2_secret_access_key", os.environ.get("R2_SECRET_ACCESS_KEY", ""))
-        cur_bkt = self.state_mgr.get_setting("r2_bucket_name", os.environ.get("R2_BUCKET_NAME", "file-exchange-storage"))
+        cur_url = self.state_mgr.get_setting("supabase_url", "https://bjcillpivgcntzbwmpsm.supabase.co")
+        cur_key = self.state_mgr.get_setting("supabase_key", "")
 
-        layout.addWidget(QLabel("Cloudflare Account ID (معرف الحساب):"))
-        txt_acc = QLineEdit(cur_acc)
-        txt_acc.setPlaceholderText("مثال: 8a1b2c3d4e5f6...")
-        layout.addWidget(txt_acc)
+        layout.addWidget(QLabel("عنوان الخادم السحابي (Supabase URL):"))
+        txt_url = QLineEdit(cur_url)
+        txt_url.setPlaceholderText("https://xxxx.supabase.co")
+        layout.addWidget(txt_url)
 
-        layout.addWidget(QLabel("R2 Access Key ID (مفتاح الوصول):"))
+        layout.addWidget(QLabel("المفتاح العام للمشروع (Anon Public Key):"))
         txt_key = QLineEdit(cur_key)
+        txt_key.setPlaceholderText("انسخ المفتاح العام من إعدادات Supabase > API")
         layout.addWidget(txt_key)
 
-        layout.addWidget(QLabel("R2 Secret Access Key (المفتاح السري):"))
-        txt_sec = QLineEdit(cur_sec)
-        txt_sec.setEchoMode(QLineEdit.EchoMode.Password)
-        layout.addWidget(txt_sec)
-
-        layout.addWidget(QLabel("اسم وعاء التخزين (Bucket Name):"))
-        txt_bkt = QLineEdit(cur_bkt)
-        layout.addWidget(txt_bkt)
+        info_lbl = QLabel("📌 للحصول على المفتاح العام (بدون أي باسورد):\nمن موقع Supabase اضغط ⚙️ Project Settings > ثم API > وانسخ المفتاح من خانة anon public.")
+        info_lbl.setStyleSheet("color: #64748b; font-size: 11px; line-height: 1.4;")
+        info_lbl.setWordWrap(True)
+        layout.addWidget(info_lbl)
 
         btn_save = QPushButton("اختبار الاتصال وحفظ الإعدادات السحابية")
         def save_and_test():
-            acc = txt_acc.text().strip()
+            url = txt_url.text().strip()
             key = txt_key.text().strip()
-            sec = txt_sec.text().strip()
-            bkt = txt_bkt.text().strip() or "file-exchange-storage"
 
-            if not all([acc, key, sec, bkt]):
-                QMessageBox.warning(dialog, "تنبيه", "يرجى ملء جميع الحقول المطلوبة.")
+            if not url or not key:
+                QMessageBox.warning(dialog, "تنبيه", "يرجى إدخال رابط السحابة والمفتاح العام.")
                 return
 
-            client = CloudflareR2Client(acc, key, sec, bkt)
-            ok, msg = client.ensure_bucket_exists()
-            if ok:
-                self.state_mgr.set_setting("r2_account_id", acc)
-                self.state_mgr.set_setting("r2_access_key_id", key)
-                self.state_mgr.set_setting("r2_secret_access_key", sec)
-                self.state_mgr.set_setting("r2_bucket_name", bkt)
+            from supabase_client import SupabaseClient
+            client = SupabaseClient(url, key)
+            files = client.list_files()
+            
+            self.state_mgr.set_setting("supabase_url", url)
+            self.state_mgr.set_setting("supabase_key", key)
 
-                self.client = client
-                if self.sync_engine:
-                    self.sync_engine.client = client
+            self.client = client
+            if self.sync_engine:
+                self.sync_engine.client = client
+                self.sync_engine.pull_remote_changes()
 
-                self.cloud_badge.setText("● متصل بـ Cloudflare R2 (10GB)")
-                self.cloud_badge.setStyleSheet("""
-                    background-color: #ecfdf5; color: #10b981; font-weight: 700;
-                    padding: 6px 14px; border-radius: 16px; border: 1px solid #a7f3d0; font-size: 11px;
-                """)
-                QMessageBox.information(dialog, "نجاح الاتصال", f"تم الاتصال بسحابة Cloudflare R2 بنجاح!\nالوعاء: {bkt}\nالمساحة: 10GB مجاناً وباندويث غير محدود.")
-                dialog.accept()
-            else:
-                QMessageBox.critical(dialog, "فشل الاتصال", f"تعذر الاتصال بـ Cloudflare R2:\n{msg}\nيرجى التأكد من صحة المفاتيح ومعرف الحساب.")
+            self.cloud_badge.setText("● متصل بـ Supabase (بدون باسورد)")
+            self.cloud_badge.setStyleSheet("""
+                background-color: #ecfdf5; color: #10b981; font-weight: 700;
+                padding: 6px 14px; border-radius: 16px; border: 1px solid #a7f3d0; font-size: 11px;
+            """)
+            QMessageBox.information(dialog, "نجاح الاتصال", "تم الاتصال بالسحابة بنجاح وبدون أي كلمة مرور!\nسيبدأ المزامنة التلقائية لجميع الملفات فوراً.")
+            dialog.accept()
 
         btn_save.clicked.connect(save_and_test)
         layout.addWidget(btn_save)
