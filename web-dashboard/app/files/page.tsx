@@ -391,7 +391,9 @@ export default function FilesPage() {
 
     if (isMobile) {
       if (['word', 'excel'].includes(file.type)) {
-        // فتح قائمة خيارات الجوال فوراً لتمرير الملف محلياً وتفادي قفل خوادم مايكروسوفت
+        // تشغيل التنزيل فوراً بالاسم العربي الصحيح ونوع MIME الأصلي
+        handleLaunchMobileApp(file);
+        // فتح بطاقة الإرشاد التفاعلية لبيان كيفية الفتح بضغطة واحدة في Word/Excel
         setSelectedMobileFile(file);
         return;
       } else if (file.type === 'access') {
@@ -399,8 +401,8 @@ export default function FilesPage() {
         return;
       } else {
         // PDF أو صورة أو ملف عام: فتح مباشر في المتصفح أو تطبيق العرض الافتراضي
-        const directUrl = await getFileDirectUrl(file);
-        window.open(directUrl, '_blank');
+        const inlineUrl = `/api/storage/download?path=${encodeURIComponent(file.storagePath)}&name=${encodeURIComponent(file.name)}&inline=true`;
+        window.open(inlineUrl, '_blank');
         return;
       }
     }
@@ -453,72 +455,28 @@ export default function FilesPage() {
     }, 1800);
   };
 
-  // فتح المستند في تطبيق الهاتف (Word / Excel) بتمريره محلياً لتجاوز خطأ خادم مايكروسوفت
-  const handleLaunchMobileApp = async (file: FileItem) => {
+  // فتح وتنزيل المستند لتطبيق الهاتف (Word / Excel) بالاسم العربي الصريح ونوع MIME الأصلي
+  const handleLaunchMobileApp = (file: FileItem) => {
     try {
       setPreparingMobileOpen(true);
-      setToastMessage({
-        text: `⏳ جاري تجهيز "${file.name}" لتطبيق الهاتف...`,
-        type: 'info'
-      });
-
-      const directUrl = await getFileDirectUrl(file);
-      const res = await fetch(directUrl);
-      if (!res.ok) throw new Error('فشل جلب الملف من السحابة');
-      const blob = await res.blob();
-
-      let mimeType = 'application/octet-stream';
-      if (file.type === 'word') {
-        mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-      } else if (file.type === 'excel') {
-        mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-      } else if (file.type === 'pdf') {
-        mimeType = 'application/pdf';
-      }
-
-      const fileObj = new File([blob], file.name, {
-        type: mimeType,
-        lastModified: Date.now()
-      });
-
-      setSelectedMobileFile(null);
-
-      // استخدام مشاركة النظام الرسمية (Web Share API) لتمرير الملف محلياً إلى تطبيق Word
-      // هذا هو الحل المعتمد لتفادي خطأ "تم تخزين الملف على خادم لا يعتمده هذا الإصدار من Office"
-      if (typeof navigator !== 'undefined' && navigator.canShare && navigator.canShare({ files: [fileObj] })) {
-        await navigator.share({
-          files: [fileObj],
-          title: file.name
-        });
-        setToastMessage({
-          text: `✅ اختر تطبيق ${file.type === 'word' ? 'Word' : 'Excel'} من القائمة لفتحه فوراً.`,
-          type: 'success'
-        });
-        return;
-      }
-
-      // إذا كان المتصفح لا يدعم canShare، يتم حفظ وتنزيل الملف Blob محلياً
-      const blobUrl = URL.createObjectURL(blob);
+      const downloadUrl = `/api/storage/download?path=${encodeURIComponent(file.storagePath)}&name=${encodeURIComponent(file.name)}`;
       const a = document.createElement('a');
-      a.href = blobUrl;
+      a.href = downloadUrl;
       a.download = file.name;
       document.body.appendChild(a);
       a.click();
       setTimeout(() => {
         try { document.body.removeChild(a); } catch {}
-        URL.revokeObjectURL(blobUrl);
-      }, 3000);
+      }, 2500);
 
       setToastMessage({
-        text: `💾 تم تنزيل المستند، اضغط عليه في التنزيلات لفتحه في Word فوراً.`,
+        text: `📥 تم تنزيل المستند، اضغط [ فتح ] لتشغيله في تطبيق ${file.type === 'word' ? 'Word' : 'Excel'} الأصلي`,
         type: 'success'
       });
     } catch (e: any) {
-      if (e.name !== 'AbortError') {
-        alert(`تعذر فتح المستند: ${e.message || e}`);
-      }
+      console.error('Mobile launch error:', e);
     } finally {
-      setPreparingMobileOpen(false);
+      setTimeout(() => setPreparingMobileOpen(false), 800);
     }
   };
 
@@ -571,11 +529,23 @@ export default function FilesPage() {
     }
   };
 
-  // 3. تنزيل نسخة عادية من الملف
-  const handleDownloadFile = async (file: FileItem) => {
+  // 3. تنزيل نسخة عادية من الملف بالاسم العربي الصريح
+  const handleDownloadFile = (file: FileItem) => {
     try {
-      const directUrl = await getFileDirectUrl(file);
-      window.open(directUrl, '_blank');
+      const downloadUrl = `/api/storage/download?path=${encodeURIComponent(file.storagePath)}&name=${encodeURIComponent(file.name)}`;
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      a.download = file.name;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        try { document.body.removeChild(a); } catch {}
+      }, 2000);
+
+      setToastMessage({
+        text: `📥 جاري تنزيل "${file.name}" بالاسم العربي الأصلي...`,
+        type: 'info'
+      });
     } catch (e: any) {
       alert(`فشل التحميل: ${e.message || e}`);
     }
@@ -1280,9 +1250,9 @@ export default function FilesPage() {
         </div>
       )}
 
-      {/* 8. نافذة خيارات فتح المستند على الهاتف الذكي (Mobile Sheet) */}
+      {/* 8. نافذة إرشاد فتح المستند في تطبيقات الهاتف الأصلية (Mobile Sheet) */}
       {selectedMobileFile && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
           <div className="bg-white rounded-t-3xl sm:rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl border border-slate-200 animate-in slide-in-from-bottom duration-200">
             <div className="flex items-center justify-between border-b pb-3">
               <div className="flex items-center gap-2.5 min-w-0">
@@ -1292,7 +1262,7 @@ export default function FilesPage() {
                     {selectedMobileFile.name}
                   </h3>
                   <p className="text-[11px] text-slate-500">
-                    خيارات فتح المستند على الهاتف
+                    تشغيل في تطبيق {selectedMobileFile.type === 'word' ? 'Word' : 'Excel'} الأصلي بالهاتف
                   </p>
                 </div>
               </div>
@@ -1304,75 +1274,63 @@ export default function FilesPage() {
               </button>
             </div>
 
-            <p className="text-xs text-slate-600 leading-relaxed">
-              اختر طريقة الفتح المناسبة لهاتفك:
-            </p>
+            {/* بطاقة الإرشاد التفاعلي لفتح الملف بالهاتف */}
+            <div className="bg-gradient-to-br from-emerald-50 via-teal-50 to-slate-50 border border-emerald-200 rounded-2xl p-4 space-y-3">
+              <div className="flex items-center gap-2 text-emerald-900 font-bold text-xs">
+                <span className="relative flex h-2.5 w-2.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-600"></span>
+                </span>
+                <span>تم إرسال المستند بنجاح إلى هاتفك!</span>
+              </div>
+              
+              <div className="space-y-2.5 text-xs text-slate-700 leading-relaxed pr-1">
+                <div className="flex items-start gap-2.5">
+                  <span className="bg-[#14372e] text-white font-bold w-5 h-5 rounded-full flex items-center justify-center text-[10px] shrink-0 mt-0.5">1</span>
+                  <span>اضغط على زر <strong className="text-emerald-950 bg-white px-1.5 py-0.5 rounded-md border border-emerald-300 font-bold">[ فتح ]</strong> الظاهر أسفل الشاشة أو في شريط الإشعارات أعلى الهاتف.</span>
+                </div>
+                <div className="flex items-start gap-2.5">
+                  <span className="bg-[#14372e] text-white font-bold w-5 h-5 rounded-full flex items-center justify-center text-[10px] shrink-0 mt-0.5">2</span>
+                  <span>سيفتح هاتفك المستند مباشرة داخل تطبيق <strong className="text-emerald-950 font-bold">Microsoft {selectedMobileFile.type === 'word' ? 'Word' : 'Excel'}</strong> الأصلي دون أي أخطاء!</span>
+                </div>
+              </div>
+            </div>
 
-            <div className="space-y-2.5">
-              {/* الخيار 1: الفتح في تطبيق Word أو Office عبر التمرير المحلي */}
+            <div className="space-y-2">
+              {/* زر إعادة التنزيل والفتح */}
               <button
                 onClick={() => handleLaunchMobileApp(selectedMobileFile)}
                 disabled={preparingMobileOpen}
-                className="w-full flex items-start gap-3 p-3.5 bg-[#14372e] hover:bg-[#1a473b] text-white rounded-2xl transition active:scale-98 shadow-sm text-right"
+                className="w-full flex items-center justify-center gap-2 p-3 bg-[#14372e] hover:bg-[#1a473b] text-white rounded-xl font-bold text-xs transition active:scale-98 shadow-sm"
               >
-                <div className="p-2 bg-white/10 rounded-xl shrink-0 mt-0.5">
-                  <Smartphone className="w-5 h-5 text-amber-300" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-xs">
-                      {preparingMobileOpen ? '⏳ جاري التجهيز...' : `فتح في تطبيق ${selectedMobileFile.type === 'word' ? 'Word' : 'Excel'} بالهاتف`}
-                    </span>
-                    <span className="text-[10px] bg-amber-400/20 text-amber-300 px-2 py-0.5 rounded-full font-bold">موصى به</span>
-                  </div>
-                  <p className="text-[11px] text-emerald-100/80 mt-1 leading-normal">
-                    يتم تمرير الملف محلياً إلى تطبيق Word/Office لتجاوز قيد الخوادم وفتحه فوراً.
-                  </p>
-                </div>
+                <Download className="w-4 h-4 text-amber-300" />
+                <span>{preparingMobileOpen ? '⏳ جاري التنزيل...' : `إعادة تنزيل وفتح في ${selectedMobileFile.type === 'word' ? 'Word' : 'Excel'}`}</span>
               </button>
 
-              {/* الخيار 2: المعاينة السريعة عبر المتصفح (Office Online) */}
+              {/* زر المعاينة السريعة عبر المتصفح (Office Online) */}
               <button
                 onClick={() => {
                   const f = selectedMobileFile;
                   setSelectedMobileFile(null);
                   handleOpenOfficeOnline(f);
                 }}
-                className="w-full flex items-start gap-3 p-3.5 bg-blue-50 hover:bg-blue-100 text-blue-900 rounded-2xl transition active:scale-98 border border-blue-200 text-right"
+                className="w-full flex items-center justify-center gap-2 p-3 bg-blue-50 hover:bg-blue-100 text-blue-900 rounded-xl font-bold text-xs transition active:scale-98 border border-blue-200"
               >
-                <div className="p-2 bg-blue-600 text-white rounded-xl shrink-0 mt-0.5">
-                  <Eye className="w-5 h-5" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <span className="font-bold text-xs block text-blue-950">
-                    معاينة مباشرة في المتصفح (Office Online)
-                  </span>
-                  <p className="text-[11px] text-blue-700/80 mt-1 leading-normal">
-                    قراءة المستند فوراً في المتصفح دون الحاجة لتثبيت أي تطبيقات إضافية.
-                  </p>
-                </div>
+                <Eye className="w-4 h-4 text-blue-700" />
+                <span>معاينة فورية في المتصفح (Office Online)</span>
               </button>
 
-              {/* الخيار 3: تنزيل نسخة للملف */}
+              {/* زر مشاركة المستند */}
               <button
                 onClick={() => {
                   const f = selectedMobileFile;
                   setSelectedMobileFile(null);
-                  handleDownloadFile(f);
+                  handleShareFile(f);
                 }}
-                className="w-full flex items-start gap-3 p-3.5 bg-slate-50 hover:bg-slate-100 text-slate-800 rounded-2xl transition active:scale-98 border border-slate-200 text-right"
+                className="w-full flex items-center justify-center gap-2 p-2.5 bg-slate-50 hover:bg-slate-100 text-slate-700 rounded-xl font-medium text-xs transition active:scale-98 border border-slate-200"
               >
-                <div className="p-2 bg-slate-700 text-white rounded-xl shrink-0 mt-0.5">
-                  <Download className="w-5 h-5" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <span className="font-bold text-xs block text-slate-900">
-                    حفظ وتنزيل في ذاكرة الهاتف
-                  </span>
-                  <p className="text-[11px] text-slate-500 mt-1 leading-normal">
-                    تنزيل نسخة في مجلد التنزيلات والملفات في جهازك.
-                  </p>
-                </div>
+                <Share2 className="w-4 h-4 text-emerald-700" />
+                <span>مشاركة أو إرسال عبر WhatsApp أو التطبيقات</span>
               </button>
             </div>
 
