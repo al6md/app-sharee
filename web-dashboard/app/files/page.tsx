@@ -28,7 +28,10 @@ import {
   Monitor,
   FolderOpen,
   Share2,
-  Smartphone
+  Smartphone,
+  UploadCloud,
+  CheckCircle2,
+  Play
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 
@@ -55,6 +58,22 @@ const DEFAULT_DEPARTMENTS = [
   'العلاقات العامة والإعلام',
   'المخازن والتجهيزات'
 ];
+
+const MIME_MAP: Record<string, string> = {
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  doc: 'application/msword',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  xls: 'application/vnd.ms-excel',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  ppt: 'application/vnd.ms-powerpoint',
+  pdf: 'application/pdf',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+  accdb: 'application/msaccess',
+  mdb: 'application/msaccess',
+};
 
 // دالة تنظيف اسم الملف من أي محارف مخفية أو محارف اتجاه غير مرئية (Bidi / Isolates)
 const cleanFileNameString = (rawName: string): string => {
@@ -108,9 +127,20 @@ export default function FilesPage() {
     }
   }, [toastMessage]);
 
-  // مراجع رفع الملفات والكاميرا
+  // مراجع رفع الملفات والكاميرا وتحديث المستندات المعدلة
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
+  const updateFileInputRef = useRef<HTMLInputElement>(null);
+  const [fileToUpdate, setFileToUpdate] = useState<FileItem | null>(null);
+
+  // تشغيل نافذة اختيار الملف لتحديث مستند موجود بنسخة معدلة
+  const triggerUpdateFile = (file: FileItem) => {
+    setFileToUpdate(file);
+    if (updateFileInputRef.current) {
+      updateFileInputRef.current.value = '';
+      updateFileInputRef.current.click();
+    }
+  };
 
   const formatSize = (bytes: number) => {
     if (!bytes || bytes === 0) return '0 B';
@@ -217,6 +247,99 @@ export default function FilesPage() {
     };
   }, []);
 
+  // تحديث محتوى مستند موجود بنسخة معدلة من الهاتف أو الكمبيوتر ومشاركتها فوراً
+  const handleUpdateFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = event.target.files?.[0];
+    if (!selectedFile || !fileToUpdate) return;
+
+    const targetFile = fileToUpdate;
+
+    try {
+      setActionLoading(true);
+      setToastMessage({
+        text: `⏳ جاري رفع النسخة المعدلة لـ "${targetFile.name}" وحفظها في السحابة...`,
+        type: 'info'
+      });
+
+      // 1. تحديد مسار التخزين السحابي الأصلي للمستند لضمان استبداله مباشرة دون فقدان المسار
+      const storageDest = targetFile.storagePath || getSafeStorageKey(targetFile.name);
+      const cleanDest = storageDest.startsWith('/') ? storageDest.slice(1) : storageDest;
+
+      // 2. رفع محتوى الملف المعدل إلى وعاء التخزين
+      const { error: uploadErr } = await supabase.storage
+        .from('file-exchange-storage')
+        .upload(cleanDest, selectedFile, { upsert: true });
+
+      if (uploadErr) {
+        throw new Error(`فشل رفع النسخة المعدلة: ${uploadErr.message}`);
+      }
+
+      // 3. تحديث جدول files في قاعدة البيانات (حجم الملف، الإصدار الجديد، تاريخ التعديل)
+      const newVersion = (targetFile.version || 1) + 1;
+      const nowIso = new Date().toISOString();
+
+      const updateData = {
+        file_size: selectedFile.size,
+        current_version: newVersion,
+        last_modified_by_name: 'تعديل عبر الجوال',
+        is_deleted: false,
+        updated_at: nowIso
+      };
+
+      const { error: dbErr } = await supabase
+        .from('files')
+        .update(updateData)
+        .eq('id', targetFile.id);
+
+      if (dbErr) {
+        // محاولة بديلة باسم الملف
+        await supabase
+          .from('files')
+          .update(updateData)
+          .eq('file_name', targetFile.name);
+      }
+
+      // 4. توثيق العملية في سجل التدقيق إن وجد
+      try {
+        await supabase.from('audit_logs').insert({
+          action: 'UPLOAD',
+          entity_type: 'FILE',
+          entity_id: targetFile.id,
+          entity_name: targetFile.name,
+          details: {
+            source: 'mobile_update',
+            new_size: selectedFile.size,
+            version: newVersion,
+            uploaded_name: selectedFile.name
+          }
+        });
+      } catch {}
+
+      // 5. إغلاق النوافذ المنبثقة وتحديث القائمة
+      setSelectedMobileFile(null);
+      setFileToUpdate(null);
+      await loadData();
+
+      setToastMessage({
+        text: `🎉 تم حفظ التعديلات بنجاح! تم اعتماد الإصدار (V${newVersion}) ومزامنته فوراً مع كافة الأجهزة.`,
+        type: 'success'
+      });
+
+      alert(
+        `✅ تم حفظ التعديلات بنجاح في النظام!\n\n` +
+        `📄 المستند: ${targetFile.name}\n` +
+        `🔢 الإصدار الجديد: V${newVersion}\n` +
+        `👥 تمت مزامنة التعديلات فوراً مع كافة أجهزة الغرفة والمستخدمين.`
+      );
+    } catch (err: any) {
+      console.error('Error updating file:', err);
+      alert(`تعذر حفظ التعديلات في النظام: ${err.message || err}`);
+    } finally {
+      setActionLoading(false);
+      if (event.target) event.target.value = '';
+    }
+  };
+
   // رفع ملف من الجوال أو من الكاميرا
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>, isCameraCapture = false) => {
     const file = event.target.files?.[0];
@@ -229,6 +352,51 @@ export default function FilesPage() {
 
       if (isCameraCapture) {
         fileName = `كتاب_رسمي_مصور_${timestamp}.jpg`;
+      }
+
+      // فحص ذكي: هل هذا الملف نسخة معدلة من مستند موجود مسبقاً في السحابة؟
+      const baseCandidateName = fileName.replace(/\s*\(\d+\)\s*(?=\.[^.]+$)/, '');
+      const existingDoc = files.find(f => 
+        !f.isDeleted && (
+          cleanFileNameString(f.name).toLowerCase() === fileName.toLowerCase() ||
+          cleanFileNameString(f.name).toLowerCase() === baseCandidateName.toLowerCase()
+        )
+      );
+
+      if (existingDoc && !isCameraCapture) {
+        const confirmUpdate = confirm(
+          `📌 تنبيه ذكي:\nالمستند "${existingDoc.name}" موجود مسبقاً في السحابة.\n\n` +
+          `هل الملف الذي ترفعه هو النسخة المعدلة وتريد حفظ التعديلات عليه ومشاركتها مع الجميع؟\n\n` +
+          `• اضغط [موافق] لتحديث المستند الأصلي فوراً إلى إصدار جديد ومشاركته مع الأجهزة.\n` +
+          `• اضغط [إلغاء] لرفعه كمستند جديد منفصل.`
+        );
+
+        if (confirmUpdate) {
+          const storageDest = existingDoc.storagePath || getSafeStorageKey(existingDoc.name);
+          const cleanDest = storageDest.startsWith('/') ? storageDest.slice(1) : storageDest;
+
+          const { error: upErr } = await supabase.storage
+            .from('file-exchange-storage')
+            .upload(cleanDest, file, { upsert: true });
+
+          if (upErr) throw new Error(`فشل رفع النسخة المعدلة: ${upErr.message}`);
+
+          const newVersion = (existingDoc.version || 1) + 1;
+          await supabase
+            .from('files')
+            .update({
+              file_size: file.size,
+              current_version: newVersion,
+              last_modified_by_name: 'لوحة الويب (نسخة محدثة)',
+              is_deleted: false,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', existingDoc.id);
+
+          await loadData();
+          alert(`✅ تم تحديث المستند "${existingDoc.name}" إلى الإصدار (V${newVersion}) بنجاح ومزامنته مع الجميع.`);
+          return;
+        }
       }
 
       // تحديد مسار المجلد النشط وتوليد المسار الآمن للتخزين
@@ -391,10 +559,10 @@ export default function FilesPage() {
 
     if (isMobile) {
       if (['word', 'excel'].includes(file.type)) {
-        // تشغيل التنزيل فوراً بالاسم العربي الصحيح ونوع MIME الأصلي
-        handleLaunchMobileApp(file);
-        // فتح بطاقة الإرشاد التفاعلية لبيان كيفية الفتح بضغطة واحدة في Word/Excel
+        // فتح بطاقة الإرشاد والتشغيل التفاعلية للهاتف
         setSelectedMobileFile(file);
+        // تشغيل فوري للتطبيق عبر Web Share مع نوع MIME دقيق لفتح Word/Excel فوراً
+        handleOpenInMobileApp(file);
         return;
       } else if (file.type === 'access') {
         alert('ملفات Microsoft Access (.accdb) مخصصة لحواسيب الويندوز فقط.');
@@ -455,28 +623,76 @@ export default function FilesPage() {
     }, 1800);
   };
 
-  // فتح وتنزيل المستند لتطبيق الهاتف (Word / Excel) بالاسم العربي الصريح ونوع MIME الأصلي
-  const handleLaunchMobileApp = (file: FileItem) => {
+  // تشغيل المستند في تطبيق الهاتف الأصلي (Word / Excel / WPS) عبر Web Share مع نوع MIME دقيق
+  const handleOpenInMobileApp = async (file: FileItem) => {
     try {
       setPreparingMobileOpen(true);
-      const downloadUrl = `/api/storage/download?path=${encodeURIComponent(file.storagePath)}&name=${encodeURIComponent(file.name)}`;
-      const a = document.createElement('a');
-      a.href = downloadUrl;
-      a.download = file.name;
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => {
-        try { document.body.removeChild(a); } catch {}
-      }, 2500);
-
       setToastMessage({
-        text: `📥 تم تنزيل المستند، اضغط [ فتح ] لتشغيله في تطبيق ${file.type === 'word' ? 'Word' : 'Excel'} الأصلي`,
-        type: 'success'
+        text: `⏳ جاري تحضير وفتح "${file.name}" في التطبيق...`,
+        type: 'info'
       });
-    } catch (e: any) {
-      console.error('Mobile launch error:', e);
+
+      const directUrl = await getFileDirectUrl(file);
+      const response = await fetch(directUrl);
+      const blob = await response.blob();
+      const ext = file.name.split('.').pop()?.toLowerCase() || '';
+      const mimeType = MIME_MAP[ext] || blob.type || 'application/octet-stream';
+      const fileObj = new File([blob], file.name, {
+        type: mimeType,
+        lastModified: Date.now()
+      });
+
+      if (typeof navigator !== 'undefined' && navigator.canShare && navigator.canShare({ files: [fileObj] })) {
+        await navigator.share({
+          files: [fileObj],
+          title: file.name,
+          text: `مستند: ${file.name}`
+        });
+        setToastMessage({
+          text: `🚀 تم فتح قائمة تطبيقات الهاتف للمستند بنجاح!`,
+          type: 'success'
+        });
+        return;
+      }
+
+      // إذا لم يكن Web Share مدعوماً، نجرب بروتوكول Microsoft 365 المباشر
+      if (['word', 'excel'].includes(file.type)) {
+        const scheme = file.type === 'word' ? 'ms-word' : 'ms-excel';
+        window.location.href = `${scheme}:ofe|u|${directUrl}`;
+        return;
+      }
+
+      // كخيار أخير: تنزيل مباشر
+      handleDownloadFile(file);
+    } catch (err: any) {
+      if (err.name !== 'AbortError') {
+        const directUrl = await getFileDirectUrl(file);
+        if (['word', 'excel'].includes(file.type)) {
+          const scheme = file.type === 'word' ? 'ms-word' : 'ms-excel';
+          window.location.href = `${scheme}:ofe|u|${directUrl}`;
+        }
+      }
     } finally {
-      setTimeout(() => setPreparingMobileOpen(false), 800);
+      setPreparingMobileOpen(false);
+    }
+  };
+
+  // استدعاء بروتوكول Microsoft Office المباشر (ms-word / ms-excel)
+  const handleLaunchOfficeProtocol = async (file: FileItem) => {
+    try {
+      setToastMessage({
+        text: `⏳ جاري استدعاء تطبيق Microsoft Office...`,
+        type: 'info'
+      });
+      const directUrl = await getFileDirectUrl(file);
+      const ext = file.name.split('.').pop()?.toLowerCase() || '';
+      let scheme = 'ms-word';
+      if (ext === 'xlsx' || ext === 'xls') scheme = 'ms-excel';
+      if (ext === 'pptx' || ext === 'ppt') scheme = 'ms-powerpoint';
+
+      window.location.href = `${scheme}:ofe|u|${directUrl}`;
+    } catch (e: any) {
+      alert(`تعذر استدعاء التطبيق: ${e.message || e}`);
     }
   };
 
@@ -721,6 +937,14 @@ export default function FilesPage() {
             onChange={(e) => handleFileUpload(e, false)} 
           />
 
+          {/* مدخل رفع تحديث المستند بنسخة معدلة */}
+          <input 
+            type="file" 
+            ref={updateFileInputRef} 
+            className="hidden" 
+            onChange={handleUpdateFile} 
+          />
+
           {/* زر إنشاء مجلد جديد */}
           <button
             onClick={() => setShowNewFolderModal(true)}
@@ -912,8 +1136,8 @@ export default function FilesPage() {
                   {/* زر الفتح بالبرنامج الأصلي */}
                   <button
                     onClick={() => handleOpenFile(file)}
-                    className="flex-1 min-w-[120px] flex items-center justify-center gap-1.5 bg-[#14372e] text-white text-xs font-bold py-2 px-3 rounded-xl hover:bg-[#1a473b] transition active:scale-95 shadow-sm"
-                    title="فتح في برنامج Office الأصلي"
+                    className="flex-1 min-w-[110px] flex items-center justify-center gap-1.5 bg-[#14372e] text-white text-xs font-bold py-2 px-3 rounded-xl hover:bg-[#1a473b] transition active:scale-95 shadow-sm"
+                    title="تشغيل في برنامج Office الأصلي على الهاتف"
                   >
                     {file.type === 'word' && <FileText className="w-3.5 h-3.5 text-blue-300" />}
                     {file.type === 'excel' && <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-300" />}
@@ -925,6 +1149,19 @@ export default function FilesPage() {
                        file.type === 'access' ? 'فتح Access' : 'فتح المستند'}
                     </span>
                   </button>
+
+                  {/* زر حفظ التعديلات المباشر من الهاتف ومشاركتها مع الجميع */}
+                  {activeTab === 'ACTIVE' && ['word', 'excel', 'file', 'pdf'].includes(file.type) && (
+                    <button
+                      onClick={() => triggerUpdateFile(file)}
+                      disabled={actionLoading}
+                      className="flex items-center justify-center gap-1 bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-black py-2 px-2.5 rounded-xl transition active:scale-95 shadow-sm shrink-0"
+                      title="حفظ التعديلات التي أجريتها في الهاتف ومشاركتها فوراً مع النظام"
+                    >
+                      <UploadCloud className="w-3.5 h-3.5 text-slate-950" />
+                      <span>حفظ التعديلات</span>
+                    </button>
+                  )}
 
                   {/* زر معاينة Office Online */}
                   {['word', 'excel'].includes(file.type) && (
@@ -939,11 +1176,11 @@ export default function FilesPage() {
 
                   {/* زر فتح عبر تطبيقات الهاتف (Word / Excel / WPS / Google Docs) */}
                   <button
-                    onClick={() => handleShareFile(file)}
+                    onClick={() => handleOpenInMobileApp(file)}
                     className="p-2 text-emerald-800 bg-emerald-50 hover:bg-emerald-100 rounded-xl transition"
-                    title="فتح عبر تطبيقات الهاتف أو مشاركة المستند"
+                    title="تشغيل في تطبيقات الهاتف أو مشاركة المستند"
                   >
-                    <Share2 className="w-4 h-4" />
+                    <Smartphone className="w-4 h-4" />
                   </button>
 
                   {/* زر تنزيل نسخة */}
@@ -1052,6 +1289,18 @@ export default function FilesPage() {
                              file.type === 'access' ? 'فتح Access' : 'فتح'}
                           </span>
                         </button>
+
+                        {/* زر حفظ التعديلات بنسخة جديدة ومشاركتها مع الجميع */}
+                        {activeTab === 'ACTIVE' && ['word', 'excel', 'file', 'pdf'].includes(file.type) && (
+                          <button
+                            onClick={() => triggerUpdateFile(file)}
+                            className="flex items-center gap-1 bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-bold py-1.5 px-2 rounded-lg transition active:scale-95 shadow-xs"
+                            title="رفع نسخة معدلة وتحديث المستند في السحابة ومشاركته فوراً"
+                          >
+                            <UploadCloud className="w-3.5 h-3.5 text-slate-950" />
+                            <span>حفظ التعديلات</span>
+                          </button>
+                        )}
 
                         {/* زر معاينة Office Online */}
                         {['word', 'excel'].includes(file.type) && (
@@ -1250,10 +1499,11 @@ export default function FilesPage() {
         </div>
       )}
 
-      {/* 8. نافذة إرشاد فتح المستند في تطبيقات الهاتف الأصلية (Mobile Sheet) */}
+      {/* 8. نافذة إرشاد وتشغيل وحفظ المستند في تطبيقات الهاتف الأصلية (Mobile Sheet) */}
       {selectedMobileFile && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
-          <div className="bg-white rounded-t-3xl sm:rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl border border-slate-200 animate-in slide-in-from-bottom duration-200">
+          <div className="bg-white rounded-t-3xl sm:rounded-3xl p-5 sm:p-6 max-w-lg w-full space-y-4 shadow-2xl border border-slate-200 animate-in slide-in-from-bottom duration-200 max-h-[92vh] overflow-y-auto">
+            {/* الترويسة */}
             <div className="flex items-center justify-between border-b pb-3">
               <div className="flex items-center gap-2.5 min-w-0">
                 {getFileIcon(selectedMobileFile.type)}
@@ -1261,9 +1511,13 @@ export default function FilesPage() {
                   <h3 className="font-bold text-sm text-[#14372e] truncate">
                     {selectedMobileFile.name}
                   </h3>
-                  <p className="text-[11px] text-slate-500">
-                    تشغيل في تطبيق {selectedMobileFile.type === 'word' ? 'Word' : 'Excel'} الأصلي بالهاتف
-                  </p>
+                  <div className="flex items-center gap-2 text-[11px] text-slate-500 mt-0.5">
+                    <span>📂 {selectedMobileFile.folder}</span>
+                    <span>•</span>
+                    <span className="font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200">
+                      الإصدار V{selectedMobileFile.version}
+                    </span>
+                  </div>
                 </div>
               </div>
               <button 
@@ -1274,63 +1528,80 @@ export default function FilesPage() {
               </button>
             </div>
 
-            {/* بطاقة الإرشاد التفاعلي لفتح الملف بالهاتف */}
-            <div className="bg-gradient-to-br from-emerald-50 via-teal-50 to-slate-50 border border-emerald-200 rounded-2xl p-4 space-y-3">
-              <div className="flex items-center gap-2 text-emerald-900 font-bold text-xs">
-                <span className="relative flex h-2.5 w-2.5">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-600"></span>
+            {/* 1. الخطوة الأولى: تشغيل وتعديل المستند في تطبيقات الهاتف */}
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                  <span className="w-5 h-5 rounded-full bg-[#14372e] text-white flex items-center justify-center text-[10px]">1</span>
+                  <span>الخطوة الأولى: فتح وتعديل المستند</span>
                 </span>
-                <span>تم إرسال المستند بنجاح إلى هاتفك!</span>
+                <span className="text-[10px] text-slate-500">اختر التطبيق</span>
               </div>
-              
-              <div className="space-y-2.5 text-xs text-slate-700 leading-relaxed pr-1">
-                <div className="flex items-start gap-2.5">
-                  <span className="bg-[#14372e] text-white font-bold w-5 h-5 rounded-full flex items-center justify-center text-[10px] shrink-0 mt-0.5">1</span>
-                  <span>اضغط على زر <strong className="text-emerald-950 bg-white px-1.5 py-0.5 rounded-md border border-emerald-300 font-bold">[ فتح ]</strong> الظاهر أسفل الشاشة أو في شريط الإشعارات أعلى الهاتف.</span>
-                </div>
-                <div className="flex items-start gap-2.5">
-                  <span className="bg-[#14372e] text-white font-bold w-5 h-5 rounded-full flex items-center justify-center text-[10px] shrink-0 mt-0.5">2</span>
-                  <span>سيفتح هاتفك المستند مباشرة داخل تطبيق <strong className="text-emerald-950 font-bold">Microsoft {selectedMobileFile.type === 'word' ? 'Word' : 'Excel'}</strong> الأصلي دون أي أخطاء!</span>
-                </div>
-              </div>
-            </div>
 
-            <div className="space-y-2">
-              {/* زر إعادة التنزيل والفتح */}
+              {/* زر التشغيل في تطبيق الهاتف المثبت (Primary) */}
               <button
-                onClick={() => handleLaunchMobileApp(selectedMobileFile)}
+                onClick={() => handleOpenInMobileApp(selectedMobileFile)}
                 disabled={preparingMobileOpen}
                 className="w-full flex items-center justify-center gap-2 p-3 bg-[#14372e] hover:bg-[#1a473b] text-white rounded-xl font-bold text-xs transition active:scale-98 shadow-sm"
               >
-                <Download className="w-4 h-4 text-amber-300" />
-                <span>{preparingMobileOpen ? '⏳ جاري التنزيل...' : `إعادة تنزيل وفتح في ${selectedMobileFile.type === 'word' ? 'Word' : 'Excel'}`}</span>
+                <Smartphone className="w-4 h-4 text-emerald-300" />
+                <span>
+                  {preparingMobileOpen ? '⏳ جاري تحضير التطبيق...' : `📱 تشغيل وتعديل في تطبيق ${selectedMobileFile.type === 'word' ? 'Word' : 'Excel'} بهاتفك`}
+                </span>
               </button>
 
-              {/* زر المعاينة السريعة عبر المتصفح (Office Online) */}
-              <button
-                onClick={() => {
-                  const f = selectedMobileFile;
-                  setSelectedMobileFile(null);
-                  handleOpenOfficeOnline(f);
-                }}
-                className="w-full flex items-center justify-center gap-2 p-3 bg-blue-50 hover:bg-blue-100 text-blue-900 rounded-xl font-bold text-xs transition active:scale-98 border border-blue-200"
-              >
-                <Eye className="w-4 h-4 text-blue-700" />
-                <span>معاينة فورية في المتصفح (Office Online)</span>
-              </button>
+              {/* أزرار مساعدة سريعة */}
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                <button
+                  onClick={() => handleLaunchOfficeProtocol(selectedMobileFile)}
+                  className="flex items-center justify-center gap-1.5 p-2 bg-white hover:bg-slate-100 text-slate-700 rounded-xl font-bold text-[11px] border border-slate-200 transition"
+                  title="استدعاء بروتوكول Microsoft 365"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-blue-600" />
+                  <span>بروتوكول Office</span>
+                </button>
 
-              {/* زر مشاركة المستند */}
+                <button
+                  onClick={() => {
+                    const f = selectedMobileFile;
+                    setSelectedMobileFile(null);
+                    handleOpenOfficeOnline(f);
+                  }}
+                  className="flex items-center justify-center gap-1.5 p-2 bg-white hover:bg-slate-100 text-slate-700 rounded-xl font-bold text-[11px] border border-slate-200 transition"
+                  title="معاينة في المتصفح عبر Office Online"
+                >
+                  <Eye className="w-3.5 h-3.5 text-blue-600" />
+                  <span>معاينة بالمتصفح</span>
+                </button>
+              </div>
+
               <button
-                onClick={() => {
-                  const f = selectedMobileFile;
-                  setSelectedMobileFile(null);
-                  handleShareFile(f);
-                }}
-                className="w-full flex items-center justify-center gap-2 p-2.5 bg-slate-50 hover:bg-slate-100 text-slate-700 rounded-xl font-medium text-xs transition active:scale-98 border border-slate-200"
+                onClick={() => handleDownloadFile(selectedMobileFile)}
+                className="w-full flex items-center justify-center gap-1.5 py-1.5 text-slate-500 hover:text-slate-800 text-[11px] font-medium transition"
               >
-                <Share2 className="w-4 h-4 text-emerald-700" />
-                <span>مشاركة أو إرسال عبر WhatsApp أو التطبيقات</span>
+                <Download className="w-3.5 h-3.5" />
+                <span>تنزيل نسخة عادية إلى الهاتف</span>
+              </button>
+            </div>
+
+            {/* 2. الخطوة الثانية: حفظ التعديلات ومشاركتها في النظام (Core Feature) */}
+            <div className="bg-gradient-to-br from-amber-50 to-emerald-50 border border-amber-300 rounded-2xl p-4 space-y-3 shadow-xs">
+              <div className="flex items-center gap-2">
+                <span className="w-5 h-5 rounded-full bg-amber-600 text-white flex items-center justify-center text-[10px] font-bold">2</span>
+                <span className="text-xs font-bold text-slate-900">الخطوة الثانية: حفظ ومشاركة التعديلات</span>
+              </div>
+
+              <p className="text-xs text-slate-600 leading-relaxed">
+                بعد فتح المستند في برنامج <strong>{selectedMobileFile.type === 'word' ? 'Word' : 'Excel'}</strong> وإجراء التعديلات وحفظها بهاتفك، اضغط الزر أدناه لاختيار الملف المعدل. سيتم حفظ التعديلات في النظام فوراً ومشاركتها مع جميع أجهزة الغرفة والمستخدمين.
+              </p>
+
+              <button
+                onClick={() => triggerUpdateFile(selectedMobileFile)}
+                disabled={actionLoading}
+                className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-xl font-black text-xs transition active:scale-98 shadow-md"
+              >
+                <UploadCloud className="w-4 h-4 text-slate-950" />
+                <span>📤 اضغط هنا لاختيار الملف المعدل وحفظ التعديلات في النظام</span>
               </button>
             </div>
 
@@ -1339,7 +1610,7 @@ export default function FilesPage() {
                 onClick={() => setSelectedMobileFile(null)}
                 className="w-full py-2.5 text-xs font-bold text-slate-500 hover:text-slate-800 rounded-xl transition"
               >
-                إغلاق
+                إغلاق النافذة
               </button>
             </div>
           </div>
