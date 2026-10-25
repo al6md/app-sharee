@@ -2371,6 +2371,7 @@ class FileExchangeMainWindow(QMainWindow):
 
             folders_list = []
             files_list = []
+            seen_file_paths = set()
 
             for item in current_abs.iterdir():
                 if item.name.startswith(".") or item.name == ".trash":
@@ -2391,6 +2392,7 @@ class FileExchangeMainWindow(QMainWindow):
                     })
                 elif item.is_file():
                     rel = str(item.relative_to(self.sync_folder)).replace("\\", "/")
+                    seen_file_paths.add(rel)
                     st = self.state_mgr.get_file_state(rel)
                     if not st:
                         st = {
@@ -2405,6 +2407,33 @@ class FileExchangeMainWindow(QMainWindow):
                         st = dict(st)
                         st['is_folder'] = False
                     files_list.append(st)
+
+            # في وضع الأرشيف الشامل (كافة الملفات والمجلدات):
+            # نعرض أيضاً كافة المستندات في المجلدات الفرعية لكي تظهر فوراً أمام المستخدم كما في لوحة الويب
+            if self.active_dept_name is None and self.current_subpath == Path("."):
+                for sub_item in self.sync_folder.rglob("*"):
+                    if sub_item.is_file():
+                        if ".trash" in sub_item.parts or sub_item.name.startswith("."):
+                            continue
+                        if sub_item.name.startswith("~$") or sub_item.name.endswith(".tmp") or sub_item.name.endswith(".laccdb") or sub_item.name.endswith(".ldb"):
+                            continue
+                        sub_rel = str(sub_item.relative_to(self.sync_folder)).replace("\\", "/")
+                        if sub_rel not in seen_file_paths:
+                            seen_file_paths.add(sub_rel)
+                            st = self.state_mgr.get_file_state(sub_rel)
+                            if not st:
+                                st = {
+                                    'file_name': sub_item.name,
+                                    'is_folder': False,
+                                    'relative_path': sub_rel,
+                                    'file_size': sub_item.stat().st_size,
+                                    'sync_status': 'synced',
+                                    'last_modified_local': datetime.fromtimestamp(sub_item.stat().st_mtime).isoformat()
+                                }
+                            else:
+                                st = dict(st)
+                                st['is_folder'] = False
+                            files_list.append(st)
 
             folders_list.sort(key=lambda x: x['file_name'].lower())
             files_list.sort(key=lambda x: x['file_name'].lower())

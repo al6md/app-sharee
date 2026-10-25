@@ -232,7 +232,9 @@ export default function FilesPage() {
       }
 
       // تحديد مسار المجلد النشط وتوليد المسار الآمن للتخزين
-      const targetDept = selectedDept !== '__ALL__' ? selectedDept : 'المجلد العام';
+      const isSpecificDept = selectedDept !== '__ALL__' && selectedDept !== 'كافة الملفات';
+      const targetDept = isSpecificDept ? selectedDept : '';
+      const filePath = targetDept ? `${targetDept}/${fileName}` : fileName;
       const safeStoragePath = getSafeStorageKey(fileName);
 
       // 1. الرفع الفعلي إلى وعاء التخزين السحابي بالمسار الآمن
@@ -247,10 +249,10 @@ export default function FilesPage() {
       // 2. التسجيل في جدول files
       const { error: dbErr } = await supabase.from('files').upsert({
         file_name: fileName,
-        file_path: `${targetDept}/${fileName}`,
+        file_path: filePath,
         storage_path: safeStoragePath,
         file_size: file.size,
-        last_modified_by_name: isCameraCapture ? 'كاميرا الجوال' : 'تطبيق الجوال',
+        last_modified_by_name: isCameraCapture ? 'كاميرا الجوال' : 'لوحة الويب',
         is_deleted: false,
         updated_at: new Date().toISOString()
       }, { onConflict: 'file_name' });
