@@ -95,9 +95,8 @@ class SyncEngine:
                     if not existing:
                         file_hash = self.calculate_hash(str(item))
                         self.state_mgr.set_file_state(rel_path, filename, file_hash, file_size, 'synced')
-                        print(f"[رصد ملف محلي حقيقي]: {filename} ({file_size} بايت)")
-        except Exception as e:
-            print(f"[خطأ فحص الملفات المحلية]: {e}")
+        except Exception:
+            pass
 
     def start(self):
         if self.is_running:
@@ -109,7 +108,6 @@ class SyncEngine:
         handler = LocalFolderWatcher(self)
         self.observer.schedule(handler, str(self.sync_folder), recursive=True)
         self.observer.start()
-        print(f"تم بدء مراقبة المجلد المشترك: {self.sync_folder}")
 
         threading.Thread(target=self._background_sync_loop, daemon=True).start()
 
@@ -152,7 +150,6 @@ class SyncEngine:
             attempts += 1
 
         if OfficeHandler.is_file_locked_by_os(filepath):
-            print(f"[تحذير] لم ينته Office بعد من كتابة الملف: {path.name}")
             return
 
         file_size = os.path.getsize(filepath)
@@ -162,7 +159,6 @@ class SyncEngine:
         if current_state and current_state.get('sha256_hash') == file_hash and current_state.get('sync_status') == 'synced':
             return
 
-        print(f"[تعديل تم رصده] {path.name} | الحجم: {file_size} بايت | الهاش: {file_hash[:8]}")
         self.state_mgr.set_file_state(rel_path, path.name, file_hash, file_size, 'syncing')
         self.notify_status({"event": "syncing", "file": path.name, "status": "جارٍ الرفع السحابي..."})
 

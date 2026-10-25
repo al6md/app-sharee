@@ -1,266 +1,64 @@
 """
-تبادل الملفات – File Exchange System
-واجهة سطح المكتب بأسلوب Google Stitch (Modern Minimalist & Mica UX Edition)
-تصميم أنيق، فائق النقاء، مريح للعين، وبطاقات عصرية فسيحة
+غرفة تجارة كربلاء المقدسة – منظومة التبادل السحابي وأرشفة المستندات
+Karbala Chamber of Commerce – Official Cloud File Exchange System
+الواجهة الحكومية الرسمية المعتمدة (Official Enterprise Edition)
 """
 import os
 import sys
 import subprocess
 from pathlib import Path
+from datetime import datetime
+
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-    QLabel, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, 
-    QLineEdit, QSystemTrayIcon, QMenu, QMessageBox, QFileDialog, 
-    QFrame, QScrollArea, QGridLayout, QStackedWidget, QButtonGroup,
-    QSizePolicy, QDialog
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+    QLabel, QPushButton, QTableWidget, QTableWidgetItem, 
+    QHeaderView, QLineEdit, QSystemTrayIcon, QMenu, QMessageBox, QFileDialog, 
+    QFrame, QButtonGroup, QDialog, QApplication
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QSize
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
 from PyQt6.QtGui import QIcon, QFont, QColor, QPixmap, QCursor
 
-from office_handler import OfficeHandler
-from icon_provider import get_file_office_icon, get_file_office_pixmap
-from autostart import set_windows_autostart, is_windows_autostart_enabled
-from r2_client import CloudflareR2Client
 from theme import (
-    get_stitch_stylesheet, apply_stitch_shadow,
-    BG_CANVAS, BG_SURFACE, BG_SURFACE_HOVER, BORDER_SUBTLE,
-    TEXT_TITLE, TEXT_BODY, TEXT_MUTED, TEXT_FAINT,
-    PRIMARY_ACCENT, BLUE_ACCENT,
+    get_gov_stylesheet, apply_gov_shadow,
+    GOV_GREEN, GOV_GOLD, TEXT_TITLE, TEXT_MUTED,
     STATUS_SYNCED, STATUS_SYNCED_BG, STATUS_SYNCED_BORDER,
-    STATUS_SYNCING, STATUS_SYNCING_BG, STATUS_SYNCING_BORDER,
-    STATUS_LOCKED, STATUS_LOCKED_BG, STATUS_LOCKED_BORDER,
-    COLOR_WORD, COLOR_EXCEL, COLOR_ACCESS, COLOR_PDF
+    STATUS_SYNCING, STATUS_LOCKED, STATUS_LOCKED_BG, STATUS_LOCKED_BORDER
 )
+from icon_provider import get_file_office_icon
+from office_handler import OfficeHandler
+from autostart import is_windows_autostart_enabled, set_windows_autostart
 
 class StatusBridge(QObject):
     sync_updated = pyqtSignal(dict)
 
-
-class StitchFileCard(QFrame):
-    """بطاقة ملف عصرية بتصميم Google Stitch المينيمالي الأنيق"""
-    def __init__(self, file_data, sync_folder, on_open_callback, on_delete_callback, parent=None):
-        super().__init__(parent)
-        self.file_data = file_data
-        self.sync_folder = Path(sync_folder)
-        self.on_open_callback = on_open_callback
-        self.on_delete_callback = on_delete_callback
-        self.file_name = file_data['file_name']
-        self.file_path = (self.sync_folder / self.file_name).resolve()
-
-        self._init_card()
-
-    def _init_card(self):
-        self.setObjectName("stitchCard")
-        self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.setStyleSheet(f"""
-            QFrame#stitchCard {{
-                background-color: {BG_SURFACE};
-                border: 1px solid {BORDER_SUBTLE};
-                border-radius: 12px;
-                padding: 16px;
-            }}
-            QFrame#stitchCard:hover {{
-                border: 1px solid #94a3b8;
-                background-color: #ffffff;
-            }}
-        """)
-        apply_stitch_shadow(self, blur=14, offset_y=3, alpha=8)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(12)
-
-        # 1. الترويسة العلوية للبطاقة: أيقونة Office بحجم 56px + معلومات الملف
-        top_layout = QHBoxLayout()
-        top_layout.setSpacing(12)
-
-        # أيقونة Stitch عالية النقاء
-        icon_lbl = QLabel()
-        pixmap = get_file_office_pixmap(self.file_name, size=56)
-        icon_lbl.setPixmap(pixmap)
-        icon_lbl.setFixedSize(56, 56)
-        top_layout.addWidget(icon_lbl)
-
-        # بيانات الملف والعنوان
-        info_layout = QVBoxLayout()
-        info_layout.setSpacing(3)
-
-        ext = self.file_path.suffix.lower()
-        if ext in ['.docx', '.doc']:
-            tag_text = "Microsoft Word"
-            tag_color = COLOR_WORD
-            tag_bg = "#eff6ff"
-        elif ext in ['.xlsx', '.xls', '.csv']:
-            tag_text = "Microsoft Excel"
-            tag_color = COLOR_EXCEL
-            tag_bg = "#ecfdf5"
-        elif ext in ['.accdb', '.mdb']:
-            tag_text = "Microsoft Access"
-            tag_color = COLOR_ACCESS
-            tag_bg = "#fff1f2"
-        elif ext == '.pdf':
-            tag_text = "Adobe PDF"
-            tag_color = COLOR_PDF
-            tag_bg = "#fef2f2"
-        else:
-            tag_text = "ملف عام"
-            tag_color = "#475569"
-            tag_bg = "#f1f5f9"
-
-        tag_badge = QLabel(f" {tag_text} ")
-        tag_badge.setStyleSheet(f"""
-            background-color: {tag_bg};
-            color: {tag_color};
-            border-radius: 4px;
-            font-size: 11px;
-            font-weight: 700;
-            padding: 2px 6px;
-        """)
-        info_layout.addWidget(tag_badge, alignment=Qt.AlignmentFlag.AlignRight)
-
-        # اسم الملف بخط Segoe UI عريض
-        name_lbl = QLabel(self.file_name)
-        name_lbl.setWordWrap(True)
-        name_lbl.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
-        name_lbl.setStyleSheet(f"color: {TEXT_TITLE}; font-weight: 800;")
-        name_lbl.setToolTip(str(self.file_path))
-        info_layout.addWidget(name_lbl)
-
-        top_layout.addLayout(info_layout)
-        top_layout.addStretch()
-        layout.addLayout(top_layout)
-
-        # 2. شريط التفاصيل المصغرة (الحجم وتاريخ آخر حفظ)
-        meta_layout = QHBoxLayout()
-        meta_layout.setSpacing(12)
-
-        size_bytes = self.file_data.get('file_size', 0)
-        if size_bytes < 1024:
-            size_str = f"{size_bytes} B"
-        elif size_bytes < 1048576:
-            size_str = f"{round(size_bytes / 1024, 1)} KB"
-        else:
-            size_str = f"{round(size_bytes / 1048576, 2)} MB"
-
-        size_lbl = QLabel(f"💾 {size_str}")
-        size_lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px; font-weight: 600;")
-        meta_layout.addWidget(size_lbl)
-
-        date_raw = self.file_data.get('last_modified_local', '')[:16].replace('T', ' ')
-        date_lbl = QLabel(f"🕒 {date_raw}")
-        date_lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
-        meta_layout.addWidget(date_lbl)
-        meta_layout.addStretch()
-
-        layout.addLayout(meta_layout)
-
-        # 3. شارة حالة المزامنة اللحظية
-        status_map = {
-            'synced': ('● متزامن سحابياً', STATUS_SYNCED, STATUS_SYNCED_BG, STATUS_SYNCED_BORDER),
-            'syncing': ('● جارٍ المزامنة...', STATUS_SYNCING, STATUS_SYNCING_BG, STATUS_SYNCING_BORDER),
-            'pending_upload': ('● بانتظار الاتصال', '#0284c7', '#f0f9ff', '#bae6fd'),
-            'conflict': ('● تعارض محمي', '#b45309', '#fffbeb', '#fde68a'),
-            'failed': ('● فشل التزامن', '#ef4444', '#fef2f2', '#fecaca'),
-            'locked': ('🔒 محجوز ومؤمن ضد التلف', STATUS_LOCKED, STATUS_LOCKED_BG, STATUS_LOCKED_BORDER)
-        }
-        status_key = self.file_data.get('sync_status', 'synced')
-        s_text, s_color, s_bg, s_border = status_map.get(status_key, (status_key, '#475569', '#f8fafc', '#e2e8f0'))
-
-        status_pill = QLabel(f" {s_text} ")
-        status_pill.setStyleSheet(f"""
-            background-color: {s_bg};
-            color: {s_color};
-            border: 1px solid {s_border};
-            border-radius: 12px;
-            font-size: 11px;
-            font-weight: 700;
-            padding: 4px 10px;
-        """)
-        layout.addWidget(status_pill, alignment=Qt.AlignmentFlag.AlignRight)
-
-        # 4. أزرار التحكم بأسلوب Google Stitch
-        actions_layout = QHBoxLayout()
-        actions_layout.setSpacing(6)
-
-        btn_open = QPushButton("⚡ فتح الملف الآن")
-        btn_open.setObjectName("btnCardAction")
-        btn_open.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        btn_open.clicked.connect(lambda: self.on_open_callback(self.file_name))
-        actions_layout.addWidget(btn_open, stretch=3)
-
-        btn_folder = QPushButton("📂 المجلد")
-        btn_folder.setObjectName("btnStitchSecondary")
-        btn_folder.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        btn_folder.clicked.connect(self._open_in_explorer)
-        actions_layout.addWidget(btn_folder, stretch=1)
-
-        btn_more = QPushButton("⋮")
-        btn_more.setObjectName("btnStitchSecondary")
-        btn_more.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        btn_more.clicked.connect(self._show_options_menu)
-        actions_layout.addWidget(btn_more)
-
-        layout.addLayout(actions_layout)
-
-    def mouseDoubleClickEvent(self, event):
-        self.on_open_callback(self.file_name)
-
-    def _open_in_explorer(self):
-        if self.file_path.exists():
-            subprocess.Popen(f'explorer /select,"{str(self.file_path)}"')
-
-    def _show_options_menu(self):
-        menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu {
-                background-color: #ffffff;
-                color: #0f172a;
-                border: 1px solid #cbd5e1;
-                border-radius: 8px;
-                padding: 4px;
-            }
-            QMenu::item {
-                padding: 6px 20px;
-                border-radius: 4px;
-                font-size: 12px;
-            }
-            QMenu::item:selected {
-                background-color: #f1f5f9;
-                color: #0f172a;
-                font-weight: bold;
-            }
-        """)
-        open_action = menu.addAction("⚡ فتح بالبرنامج الأصلي")
-        folder_action = menu.addAction("📂 استعراض في مجلد Windows")
-        menu.addSeparator()
-        delete_action = menu.addAction("🗑️ حذف الملف")
-
-        action = menu.exec(QCursor.pos())
-        if action == open_action:
-            self.on_open_callback(self.file_name)
-        elif action == folder_action:
-            self._open_in_explorer()
-        elif action == delete_action:
-            self.on_delete_callback(self.file_name)
-
-
 class FileExchangeMainWindow(QMainWindow):
-    """النافذة الرئيسية لنظام تبادل الملفات بأسلوب Google Stitch العصري"""
-    def __init__(self, sync_engine, supabase_client, local_state_mgr, sync_folder):
+    """النافذة الرسمية لمنظومة تبادل وأرشفة مستندات غرفة تجارة كربلاء المقدسة"""
+    def __init__(self, sync_engine, cloud_client, local_state_mgr, sync_folder):
         super().__init__()
         self.sync_engine = sync_engine
-        self.client = supabase_client
+        self.client = cloud_client
         self.state_mgr = local_state_mgr
         self.sync_folder = Path(sync_folder)
 
         self.active_filter = "ALL"
-        self.current_view_mode = "GRID"
+        self.all_files_cache = []
 
-        self.setWindowTitle("تبادل الملفات – File Exchange System (Stitch Minimalist Edition)")
-        self.resize(1160, 760)
+        # مسار شعار الغرفة الرسمي المتوافق مع ملف التثبيت المستقل
+        if getattr(sys, 'frozen', False):
+            base_dir = Path(sys._MEIPASS)
+        else:
+            base_dir = Path(__file__).parent.parent
+        self.logo_path = base_dir / "assets" / "logo.png"
+
+        self.setWindowTitle("غرفة تجارة كربلاء المقدسة – منظومة التبادل السحابي للمستندات")
+        self.resize(1140, 740)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
 
-        self.setStyleSheet(get_stitch_stylesheet())
+        # ضبط أيقونة النافذة الرسمية
+        if self.logo_path.exists():
+            self.setWindowIcon(QIcon(str(self.logo_path)))
+
+        self.setStyleSheet(get_gov_stylesheet())
 
         self.bridge = StatusBridge()
         self.bridge.sync_updated.connect(self.handle_sync_update)
@@ -271,7 +69,7 @@ class FileExchangeMainWindow(QMainWindow):
         self._setup_tray()
         self._refresh_file_list()
 
-        # مؤقت دوري للتحديث الهادئ
+        # فحص دوري هادئ للتحديثات
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._refresh_file_list)
         self.timer.start(2500)
@@ -280,363 +78,236 @@ class FileExchangeMainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
-        main_layout.setContentsMargins(24, 18, 24, 18)
+        main_layout.setContentsMargins(24, 18, 24, 16)
         main_layout.setSpacing(14)
 
-        # 1. ترويسة Stitch العلوية النقية (Minimalist Top Bar)
-        top_bar = QFrame()
-        top_bar.setStyleSheet(f"""
-            QFrame {{
-                background-color: {BG_SURFACE};
-                border: 1px solid {BORDER_SUBTLE};
+        # ========================================================
+        # 1. شريط الترويسة الرسمي مع شعار غرفة تجارة كربلاء المقدسة
+        # ========================================================
+        gov_header = QFrame()
+        gov_header.setStyleSheet("""
+            QFrame {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+                    stop:0 #0e2720, stop:0.5 #163d33, stop:1 #1a443a);
+                border: 1px solid #0a1f19;
+                border-bottom: 3px solid #c59b27;
                 border-radius: 12px;
                 padding: 10px 18px;
-            }}
+            }
         """)
-        apply_stitch_shadow(top_bar, blur=14, offset_y=2, alpha=6)
+        apply_gov_shadow(gov_header, blur=18, offset_y=3, alpha=20)
 
-        top_layout = QHBoxLayout(top_bar)
-        top_layout.setContentsMargins(4, 2, 4, 2)
+        header_layout = QHBoxLayout(gov_header)
+        header_layout.setContentsMargins(6, 4, 6, 4)
 
-        # شعار النظام المينيمالي
-        logo_lbl = QLabel("⚡")
-        logo_lbl.setStyleSheet("""
-            background-color: #0f172a;
-            color: #ffffff;
-            border-radius: 8px;
-            font-size: 16px;
-            padding: 6px 10px;
-            font-weight: bold;
-        """)
-        top_layout.addWidget(logo_lbl)
-
-        title_box = QVBoxLayout()
-        title_box.setSpacing(1)
-        app_title = QLabel("تبادل الملفات – File Exchange System")
-        app_title.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
-        app_title.setStyleSheet(f"color: {TEXT_TITLE}; font-weight: 800;")
-        
-        app_sub = QLabel("مزامنة فورية (Ctrl+S) بين 10 أجهزة لملفات Word و Excel وقواعد Access")
-        app_sub.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
-        title_box.addWidget(app_title)
-        title_box.addWidget(app_sub)
-        top_layout.addLayout(title_box)
-
-        top_layout.addStretch()
-
-        # شارة حالة الاتصال
-        is_cloud = self.client and self.client.is_configured()
-        if is_cloud:
-            if hasattr(self.client, 'account_id'):
-                badge_text = "● متصل بـ Cloudflare R2"
-            else:
-                badge_text = "● متصل بـ Supabase (بدون باسورد)"
+        # شعار الغرفة الرسمي
+        logo_lbl = QLabel()
+        if self.logo_path.exists():
+            pix = QPixmap(str(self.logo_path))
+            scaled_pix = pix.scaled(56, 56, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            logo_lbl.setPixmap(scaled_pix)
+            logo_lbl.setStyleSheet("background: transparent; border: none;")
         else:
-            badge_text = "● وضع المزامنة المحلي"
-        badge_color = STATUS_SYNCED if is_cloud else BLUE_ACCENT
-        badge_bg = STATUS_SYNCED_BG if is_cloud else "#eff6ff"
-        badge_border = STATUS_SYNCED_BORDER if is_cloud else "#bfdbfe"
+            logo_lbl.setText("🏛️")
+            logo_lbl.setStyleSheet("font-size: 26px; background: transparent; border: none;")
+        header_layout.addWidget(logo_lbl)
 
-        self.cloud_badge = QLabel(badge_text)
-        self.cloud_badge.setStyleSheet(f"""
-            background-color: {badge_bg};
-            color: {badge_color};
-            font-weight: 700;
-            padding: 6px 14px;
-            border-radius: 16px;
-            border: 1px solid {badge_border};
-            font-size: 11px;
+        # نصوص الهوية الرسمية
+        brand_box = QVBoxLayout()
+        brand_box.setSpacing(1)
+
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
+
+        gov_title = QLabel("غرفة تجارة كربلاء المقدسة")
+        gov_title.setFont(QFont("Cairo", 15, QFont.Weight.Bold))
+        gov_title.setStyleSheet("color: #ffffff; font-weight: 800; background: transparent; border: none;")
+        title_row.addWidget(gov_title)
+
+        gold_badge = QLabel("• تأسست 1952 م")
+        gold_badge.setFont(QFont("Cairo", 11, QFont.Weight.DemiBold))
+        gold_badge.setStyleSheet("color: #ecd58a; background: transparent; border: none;")
+        title_row.addWidget(gold_badge)
+        title_row.addStretch()
+
+        gov_sub = QLabel("منظومة التبادل السحابي وأرشفة المستندات الرسمية • الربط اللحظي لملفات Office 365")
+        gov_sub.setFont(QFont("Segoe UI", 11))
+        gov_sub.setStyleSheet("color: #bad3ca; background: transparent; border: none;")
+
+        brand_box.addLayout(title_row)
+        brand_box.addWidget(gov_sub)
+        header_layout.addLayout(brand_box)
+
+        header_layout.addStretch()
+
+        # شارة حالة الربط السحابي
+        self.cloud_badge = QLabel("● الربط السحابي مؤمّن ومفعّل")
+        self.cloud_badge.setFont(QFont("Cairo", 11, QFont.Weight.Bold))
+        self.cloud_badge.setStyleSheet("""
+            background: rgba(13, 138, 85, 0.25);
+            color: #86efac;
+            padding: 6px 16px;
+            border-radius: 20px;
+            border: 1px solid rgba(34, 197, 94, 0.45);
         """)
-        top_layout.addWidget(self.cloud_badge)
+        header_layout.addWidget(self.cloud_badge)
 
-        main_layout.addWidget(top_bar)
+        main_layout.addWidget(gov_header)
 
-        # 2. شريط كبسولات الإحصائيات المصغرة (Stitch Compact Metric Pills)
-        metrics_bar = QHBoxLayout()
-        metrics_bar.setSpacing(8)
+        # ========================================================
+        # 2. شريط الإجراءات النظيف والخالي من الحشو
+        # ========================================================
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(10)
 
-        self.pill_total = self._create_metric_pill("📁 المستندات:", "0 ملف")
-        self.pill_watcher = self._create_metric_pill("⚡ المراقبة اللحظية:", "نشطة (Ctrl+S)")
-        self.pill_access = self._create_metric_pill("🔒 حماية Access:", "مفعلة بالكامل")
-        self.pill_devices = self._create_metric_pill("☁️ الأجهزة المترابطة:", "10 أجهزة مصرحة")
-
-        metrics_bar.addWidget(self.pill_total)
-        metrics_bar.addWidget(self.pill_watcher)
-        metrics_bar.addWidget(self.pill_access)
-        metrics_bar.addWidget(self.pill_devices)
-        main_layout.addLayout(metrics_bar)
-
-        # 3. شريط البحث والأوامر بأسلوب Stitch (Controls Row)
-        ctrl_layout = QHBoxLayout()
-        ctrl_layout.setSpacing(8)
-
-        self.search_box = QLineEdit()
-        self.search_box.setObjectName("stitchSearch")
-        self.search_box.setPlaceholderText("🔍 بحث سريع في الملفات المشتركة...")
-        self.search_box.textChanged.connect(self._filter_content)
-        ctrl_layout.addWidget(self.search_box, stretch=3)
-
-        self.btn_upload = QPushButton("＋ إضافة ملف")
-        self.btn_upload.setObjectName("btnStitchPrimary")
-        self.btn_upload.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.btn_upload.clicked.connect(self._upload_custom_file)
-        ctrl_layout.addWidget(self.btn_upload)
-
-        self.btn_open_folder = QPushButton("📁 المجلد المشترك")
-        self.btn_open_folder.setObjectName("btnStitchSecondary")
+        # زر فتح المجلد المشترك الرئيسي
+        self.btn_open_folder = QPushButton("📁 استعراض المجلد المشترك")
+        self.btn_open_folder.setObjectName("btnGovPrimary")
         self.btn_open_folder.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.btn_open_folder.clicked.connect(lambda: os.startfile(str(self.sync_folder)))
-        ctrl_layout.addWidget(self.btn_open_folder)
+        toolbar.addWidget(self.btn_open_folder)
 
+        # زر إضافة مستند جديد
+        self.btn_upload = QPushButton("➕ إضافة مستند جديد")
+        self.btn_upload.setObjectName("btnGovSecondary")
+        self.btn_upload.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_upload.clicked.connect(self._upload_custom_file)
+        toolbar.addWidget(self.btn_upload)
+
+        # زر التحديث اليدوي
         self.btn_refresh = QPushButton("🔄 تحديث")
-        self.btn_refresh.setObjectName("btnStitchSecondary")
+        self.btn_refresh.setObjectName("btnGovSecondary")
         self.btn_refresh.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.btn_refresh.clicked.connect(self._refresh_file_list)
-        ctrl_layout.addWidget(self.btn_refresh)
+        toolbar.addWidget(self.btn_refresh)
 
-        self.btn_autostart = QPushButton("⚙️ بدء مع ويندوز")
-        self.btn_autostart.setObjectName("btnStitchSecondary")
-        self.btn_autostart.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.btn_autostart.clicked.connect(self._toggle_autostart)
-        ctrl_layout.addWidget(self.btn_autostart)
+        # حقل البحث الفوري
+        self.search_box = QLineEdit()
+        self.search_box.setObjectName("govSearch")
+        self.search_box.setPlaceholderText("🔍 بحث فوري في مستندات الغرفة والكتب الرسمية...")
+        self.search_box.textChanged.connect(self._filter_content)
+        toolbar.addWidget(self.search_box, stretch=1)
 
-        self.btn_cloud = QPushButton("☁️ ربط السحابة")
-        self.btn_cloud.setObjectName("btnStitchSecondary")
-        self.btn_cloud.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.btn_cloud.clicked.connect(self._open_cloud_settings)
-        ctrl_layout.addWidget(self.btn_cloud)
+        main_layout.addLayout(toolbar)
 
-        main_layout.addLayout(ctrl_layout)
+        # ========================================================
+        # 3. تبويبات التصنيف الرسمية الهادئة
+        # ========================================================
+        tabs_layout = QHBoxLayout()
+        tabs_layout.setSpacing(6)
 
-        # 4. رقائق التصفية السريعة (Filter Chips) + تبديل العرض
-        filter_layout = QHBoxLayout()
-        filter_layout.setSpacing(6)
+        tab_group = QButtonGroup(self)
+        tab_group.setExclusive(True)
 
-        filter_group = QButtonGroup(self)
-        filter_group.setExclusive(True)
+        self.tab_all = self._create_gov_tab("كافة المستندات", "ALL", tab_group, checked=True)
+        self.tab_word = self._create_gov_tab("الكتب والمراسلات (Word)", "WORD", tab_group)
+        self.tab_excel = self._create_gov_tab("التقارير المالية (Excel)", "EXCEL", tab_group)
+        self.tab_access = self._create_gov_tab("قواعد البيانات (Access)", "ACCESS", tab_group)
+        self.tab_pdf = self._create_gov_tab("الوثائق والتعاميم (PDF)", "PDF", tab_group)
 
-        self.chip_all = self._create_filter_chip("الكل", "ALL", filter_group, checked=True)
-        self.chip_word = self._create_filter_chip("Word", "WORD", filter_group)
-        self.chip_excel = self._create_filter_chip("Excel", "EXCEL", filter_group)
-        self.chip_access = self._create_filter_chip("Access", "ACCESS", filter_group)
-        self.chip_pdf = self._create_filter_chip("PDF", "PDF", filter_group)
+        tabs_layout.addWidget(self.tab_all)
+        tabs_layout.addWidget(self.tab_word)
+        tabs_layout.addWidget(self.tab_excel)
+        tabs_layout.addWidget(self.tab_access)
+        tabs_layout.addWidget(self.tab_pdf)
+        tabs_layout.addStretch()
 
-        filter_layout.addWidget(self.chip_all)
-        filter_layout.addWidget(self.chip_word)
-        filter_layout.addWidget(self.chip_excel)
-        filter_layout.addWidget(self.chip_access)
-        filter_layout.addWidget(self.chip_pdf)
+        main_layout.addLayout(tabs_layout)
 
-        filter_layout.addStretch()
-
-        self.btn_view_grid = QPushButton("بطاقات")
-        self.btn_view_grid.setObjectName("stitchChip")
-        self.btn_view_grid.setCheckable(True)
-        self.btn_view_grid.setChecked(True)
-        self.btn_view_grid.clicked.connect(lambda: self._set_view_mode("GRID"))
-        filter_layout.addWidget(self.btn_view_grid)
-
-        self.btn_view_table = QPushButton("جدول")
-        self.btn_view_table.setObjectName("stitchChip")
-        self.btn_view_table.setCheckable(True)
-        self.btn_view_table.clicked.connect(lambda: self._set_view_mode("TABLE"))
-        filter_layout.addWidget(self.btn_view_table)
-
-        main_layout.addLayout(filter_layout)
-
-        # 5. الحاوية الرئيسية (Cards Grid or Table or Empty State)
-        self.stack = QStackedWidget()
-
-        # صفحة 0: شبكة البطاقات النقية (Stitch Card Grid)
-        self.scroll_area = QScrollArea()
-        self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
-        
-        self.cards_container = QWidget()
-        self.cards_layout = QGridLayout(self.cards_container)
-        self.cards_layout.setContentsMargins(0, 0, 0, 0)
-        self.cards_layout.setSpacing(12)
-        self.scroll_area.setWidget(self.cards_container)
-        self.stack.addWidget(self.scroll_area)
-
-        # صفحة 1: جدول منظم وفسيح
-        self.table = QTableWidget(0, 5)
+        # ========================================================
+        # 4. جدول المستندات الحكومي الرصين
+        # ========================================================
+        self.table = QTableWidget()
+        self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels([
-            "المستند والملف المشترك", "البرنامج المقترن", "الحجم", "تاريخ آخر حفظ", "حالة المزامنة السحابية"
+            "المستند الرسمي", "البرنامج المقترن", "تاريخ الاعتماد", "الحجم", "الحالة السحابية"
         ])
-        self.table.setIconSize(QSize(40, 40))
-        self.table.verticalHeader().setDefaultSectionSize(60)
-        self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._show_context_menu)
         self.table.cellDoubleClicked.connect(self._open_selected_from_table)
-        self.stack.addWidget(self.table)
+        apply_gov_shadow(self.table, blur=12, offset_y=2, alpha=10)
 
-        # صفحة 2: حالة الفراغ المينيمالية (Clean Empty State)
-        empty_card = QFrame()
-        empty_card.setStyleSheet(f"""
-            QFrame {{
-                background-color: {BG_SURFACE};
-                border: 1px dashed {BORDER_SUBTLE};
-                border-radius: 14px;
-                padding: 40px;
-            }}
+        main_layout.addWidget(self.table, stretch=1)
+
+        # ========================================================
+        # 5. شريط الحالة السفلي الرصين
+        # ========================================================
+        statusbar = QFrame()
+        statusbar.setStyleSheet("""
+            QFrame {
+                background: #ffffff;
+                border-top: 1.5px solid #d5dfdb;
+                padding: 6px 14px;
+                border-radius: 6px;
+            }
         """)
-        empty_box = QVBoxLayout(empty_card)
-        empty_box.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        empty_box.setSpacing(10)
+        status_layout = QHBoxLayout(statusbar)
+        status_layout.setContentsMargins(4, 2, 4, 2)
 
-        empty_icon = QLabel("📂")
-        empty_icon.setFont(QFont("Segoe UI Emoji", 40))
-        empty_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        empty_box.addWidget(empty_icon)
+        self.lbl_total = QLabel("المستندات: 0 ملف")
+        self.lbl_total.setFont(QFont("Cairo", 10, QFont.Weight.Bold))
+        self.lbl_total.setStyleSheet(f"color: {GOV_GREEN};")
+        status_layout.addWidget(self.lbl_total)
 
-        empty_title = QLabel("لا توجد مستندات مطابقة للبحث أو المجلد فارغ")
-        empty_title.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
-        empty_title.setStyleSheet(f"color: {TEXT_TITLE}; font-weight: 800;")
-        empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        empty_box.addWidget(empty_title)
+        status_layout.addWidget(QLabel(" | "))
 
-        empty_desc = QLabel("أضف ملفات Word أو Excel أو قواعد بيانات Access في المجلد المشترك لتتم مزامنتها تلقائياً.")
-        empty_desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
-        empty_desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        empty_box.addWidget(empty_desc)
+        self.lbl_watcher = QLabel("⚡ المزامنة الفورية: نشطة عند الحفظ (Ctrl+S)")
+        self.lbl_watcher.setFont(QFont("Cairo", 10))
+        self.lbl_watcher.setStyleSheet("color: #4b635b;")
+        status_layout.addWidget(self.lbl_watcher)
 
-        btn_empty = QPushButton("＋ إضافة أول مستند")
-        btn_empty.setObjectName("btnStitchPrimary")
-        btn_empty.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        btn_empty.clicked.connect(self._upload_custom_file)
-        empty_box.addWidget(btn_empty, alignment=Qt.AlignmentFlag.AlignCenter)
+        status_layout.addWidget(QLabel(" | "))
 
-        self.stack.addWidget(empty_card)
+        self.lbl_cloud_info = QLabel("السعة السحابية: 1000 MB مجاناً")
+        self.lbl_cloud_info.setFont(QFont("Cairo", 10))
+        self.lbl_cloud_info.setStyleSheet("color: #4b635b;")
+        status_layout.addWidget(self.lbl_cloud_info)
 
-        main_layout.addWidget(self.stack, stretch=1)
+        status_layout.addStretch()
 
-        # 6. شريط التذييل الهادئ (Clean Footer)
-        footer = QFrame()
-        footer.setStyleSheet(f"""
-            QFrame {{
-                background-color: {BG_SURFACE};
-                border: 1px solid {BORDER_SUBTLE};
-                border-radius: 10px;
-                padding: 8px 16px;
-            }}
-        """)
-        footer_layout = QHBoxLayout(footer)
-        footer_layout.setContentsMargins(4, 2, 4, 2)
+        self.lbl_dept = QLabel("نسخة غرفة تجارة كربلاء المقدسة المعتمدة v2.0")
+        self.lbl_dept.setFont(QFont("Cairo", 10, QFont.Weight.DemiBold))
+        self.lbl_dept.setStyleSheet("color: #5c726a;")
+        status_layout.addWidget(self.lbl_dept)
 
-        self.footer_status = QLabel(f"📂 مسار مجلد التبادل: {self.sync_folder}")
-        self.footer_status.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px; font-weight: 500;")
-        footer_layout.addWidget(self.footer_status)
+        # زر إعدادات صامت للإدارة فقط
+        btn_settings = QPushButton("⚙️")
+        btn_settings.setObjectName("btnGovSettings")
+        btn_settings.setToolTip("إعدادات الربط السحابي المتقدمة (للإدارة)")
+        btn_settings.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn_settings.clicked.connect(self._open_cloud_settings)
+        status_layout.addWidget(btn_settings)
 
-        footer_layout.addStretch()
+        main_layout.addWidget(statusbar)
 
-        self.files_count_lbl = QLabel("0 ملفات نشطة")
-        self.files_count_lbl.setStyleSheet(f"color: {TEXT_TITLE}; font-size: 11px; font-weight: 700;")
-        footer_layout.addWidget(self.files_count_lbl)
-
-        main_layout.addWidget(footer)
-
-    def _create_metric_pill(self, label, value):
-        pill = QFrame()
-        pill.setStyleSheet(f"""
-            QFrame {{
-                background-color: {BG_SURFACE};
-                border: 1px solid {BORDER_SUBTLE};
-                border-radius: 8px;
-                padding: 6px 12px;
-            }}
-        """)
-        box = QHBoxLayout(pill)
-        box.setContentsMargins(4, 2, 4, 2)
-        box.setSpacing(6)
-
-        t_lbl = QLabel(label)
-        t_lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px; font-weight: 600;")
-        box.addWidget(t_lbl)
-
-        v_lbl = QLabel(value)
-        v_lbl.setObjectName("metricValue")
-        v_lbl.setStyleSheet(f"color: {TEXT_TITLE}; font-size: 11px; font-weight: 800;")
-        box.addWidget(v_lbl)
-
-        return pill
-
-    def _create_filter_chip(self, label, filter_id, group, checked=False):
+    def _create_gov_tab(self, label, tag, group, checked=False):
         btn = QPushButton(label)
-        btn.setObjectName("stitchChip")
+        btn.setObjectName("govTab")
         btn.setCheckable(True)
         btn.setChecked(checked)
         btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         group.addButton(btn)
-        btn.clicked.connect(lambda: self._set_filter(filter_id))
+        btn.clicked.connect(lambda: self._set_active_filter(tag))
         return btn
 
-    def _set_filter(self, filter_id):
-        self.active_filter = filter_id
-        self._refresh_file_list()
-
-    def _set_view_mode(self, mode):
-        self.current_view_mode = mode
-        if mode == "GRID":
-            self.btn_view_grid.setChecked(True)
-            self.btn_view_table.setChecked(False)
-        else:
-            self.btn_view_grid.setChecked(False)
-            self.btn_view_table.setChecked(True)
-        self._refresh_file_list()
-
-    def _setup_tray(self):
-        self.tray = QSystemTrayIcon(self)
-        self.tray.setToolTip("تبادل الملفات – قيد المراقبة بالخلفية")
-        menu = QMenu()
-        show_action = menu.addAction("إظهار الواجهة الرئيسية")
-        show_action.triggered.connect(self.showNormal)
-        open_f_action = menu.addAction("فتح مجلد التبادل")
-        open_f_action.triggered.connect(lambda: os.startfile(str(self.sync_folder)))
-        quit_action = menu.addAction("خروج نهائي")
-        quit_action.triggered.connect(self._quit_app)
-        self.tray.setContextMenu(menu)
-        self.tray.show()
-
-    def closeEvent(self, event):
-        event.ignore()
-        self.hide()
-        self.tray.showMessage(
-            "تبادل الملفات", 
-            "التطبيق مستمر في مراقبة وحفظ تعديلات Word و Excel و Access تلقائياً.", 
-            QSystemTrayIcon.MessageIcon.Information, 1500
-        )
-
-    def _quit_app(self):
-        if self.sync_engine:
-            self.sync_engine.stop()
-        QApplication.quit()
-
-    def handle_sync_update(self, data):
-        filename = data.get("file", "")
-        status = data.get("status", "")
-        self.footer_status.setText(f"آخر عملية حفظ فورية: {filename} – {status}")
-        self._refresh_file_list()
+    def _set_active_filter(self, tag):
+        self.active_filter = tag
+        self._filter_content()
 
     def _filter_content(self):
-        self._refresh_file_list()
-
-    def _refresh_file_list(self):
-        files = self.state_mgr.get_all_files()
-        search_text = self.search_box.text().strip().lower()
-
-        filtered_files = []
-        for f in files:
-            name = f['file_name']
-            ext = Path(name).suffix.lower()
+        query = self.search_box.text().strip().lower()
+        filtered = []
+        for f in self.all_files_cache:
+            name = f['file_name'].lower()
+            ext = Path(f['file_name']).suffix.lower()
 
             if self.active_filter == "WORD" and ext not in ['.docx', '.doc']:
                 continue
@@ -647,46 +318,21 @@ class FileExchangeMainWindow(QMainWindow):
             elif self.active_filter == "PDF" and ext != '.pdf':
                 continue
 
-            if search_text and search_text not in name.lower():
+            if query and query not in name:
                 continue
 
-            filtered_files.append(f)
+            filtered.append(f)
 
-        v_lbl = self.pill_total.findChild(QLabel, "metricValue")
-        if v_lbl:
-            v_lbl.setText(f"{len(filtered_files)} ملف")
+        self._render_table(filtered)
 
-        self.files_count_lbl.setText(f"إجمالي الملفات: {len(filtered_files)}")
-
-        if not filtered_files:
-            self.stack.setCurrentIndex(2)
-            return
-
-        if self.current_view_mode == "GRID":
-            self.stack.setCurrentIndex(0)
-            self._render_card_grid(filtered_files)
-        else:
-            self.stack.setCurrentIndex(1)
-            self._render_table(filtered_files)
-
-    def _render_card_grid(self, files):
-        while self.cards_layout.count():
-            item = self.cards_layout.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.deleteLater()
-
-        cols = 2
-        for idx, f in enumerate(files):
-            row = idx // cols
-            col = idx % cols
-            card = StitchFileCard(
-                file_data=f,
-                sync_folder=self.sync_folder,
-                on_open_callback=self._open_file_by_name,
-                on_delete_callback=self._delete_file_by_name
-            )
-            self.cards_layout.addWidget(card, row, col)
+    def _refresh_file_list(self):
+        try:
+            files = self.state_mgr.get_all_files()
+            self.all_files_cache = files
+            self.lbl_total.setText(f"المستندات: {len(files)} ملف")
+            self._filter_content()
+        except Exception as e:
+            print(f"[Refresh Error]: {e}")
 
     def _render_table(self, files):
         self.table.setRowCount(0)
@@ -695,25 +341,25 @@ class FileExchangeMainWindow(QMainWindow):
             row = self.table.rowCount()
             self.table.insertRow(row)
 
-            office_icon = get_file_office_icon(name, size=40)
+            office_icon = get_file_office_icon(name, size=38)
             ext = Path(name).suffix.lower()
             if ext in ['.docx', '.doc']:
                 app_name = "Microsoft Word"
-                type_tag = "مستند Word"
+                type_tag = "مستند رسمي"
             elif ext in ['.xlsx', '.xls', '.csv']:
                 app_name = "Microsoft Excel"
-                type_tag = "جدول بيانات Excel"
+                type_tag = "جدول بيانات مالي"
             elif ext in ['.accdb', '.mdb']:
                 app_name = "Microsoft Access"
-                type_tag = "قاعدة بيانات Access"
+                type_tag = "قاعدة بيانات الغرفة"
             elif ext == '.pdf':
-                app_name = "Adobe PDF"
-                type_tag = "ملف PDF"
+                app_name = "Adobe Acrobat"
+                type_tag = "وثيقة رسمية (PDF)"
             else:
-                app_name = "برنامج Windows الافتراضي"
-                type_tag = "ملف عام"
+                app_name = "ملف عام"
+                type_tag = "مستند"
 
-            size_bytes = f['file_size']
+            size_bytes = f.get('file_size', 0)
             if size_bytes < 1024:
                 size_str = f"{size_bytes} B"
             elif size_bytes < 1048576:
@@ -721,55 +367,100 @@ class FileExchangeMainWindow(QMainWindow):
             else:
                 size_str = f"{round(size_bytes / 1048576, 2)} MB"
 
+            date_raw = f.get('last_modified_local', '')
+            if date_raw:
+                date_str = date_raw[:19].replace('T', ' ')
+            else:
+                date_str = "محفوظ"
+
             status_map = {
-                'synced': '● متطابق في السحابة',
-                'syncing': '● جارٍ المزامنة...',
+                'synced': '● محفوظ ومؤمّن',
+                'syncing': '● جارٍ الرفع...',
                 'pending_upload': '● بانتظار الاتصال',
                 'conflict': '● تم احتواء تعارض',
                 'failed': '● فشل التحقق',
-                'locked': '🔒 محجوز ومؤمن'
+                'locked': '🔒 محجوزة للتعديل'
             }
-            status_text = status_map.get(f['sync_status'], f['sync_status'])
+            status_text = status_map.get(f.get('sync_status', 'synced'), '● محفوظ')
 
+            # الخلية 0: المستند الرسمي
             name_item = QTableWidgetItem(f"{name}\n({type_tag})")
             name_item.setIcon(office_icon)
-            name_item.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+            name_item.setFont(QFont("Cairo", 11, QFont.Weight.Bold))
             self.table.setItem(row, 0, name_item)
 
+            # الخلية 1: البرنامج المقترن
             app_item = QTableWidgetItem(app_name)
             app_item.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
-            app_item.setForeground(QColor("#334155"))
+            app_item.setForeground(QColor("#2d3d38"))
             self.table.setItem(row, 1, app_item)
 
-            size_item = QTableWidgetItem(size_str)
-            size_item.setFont(QFont("Segoe UI", 10))
-            size_item.setForeground(QColor(TEXT_MUTED))
-            self.table.setItem(row, 2, size_item)
-
-            date_str = f['last_modified_local'][:19].replace('T', ' ')
+            # الخلية 2: تاريخ الاعتماد
             date_item = QTableWidgetItem(date_str)
             date_item.setFont(QFont("Segoe UI", 10))
             date_item.setForeground(QColor(TEXT_MUTED))
-            self.table.setItem(row, 3, date_item)
+            self.table.setItem(row, 2, date_item)
 
+            # الخلية 3: الحجم
+            size_item = QTableWidgetItem(size_str)
+            size_item.setFont(QFont("Segoe UI", 10))
+            size_item.setForeground(QColor(TEXT_MUTED))
+            self.table.setItem(row, 3, size_item)
+
+            # الخلية 4: الحالة السحابية
             status_item = QTableWidgetItem(status_text)
-            if f['sync_status'] == 'synced':
+            status_item.setFont(QFont("Cairo", 10, QFont.Weight.Bold))
+            if f.get('sync_status') == 'synced':
                 status_item.setForeground(QColor(STATUS_SYNCED))
-                status_item.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
-            elif f['sync_status'] == 'conflict':
-                status_item.setForeground(QColor(STATUS_SYNCING))
-                status_item.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
-            elif f['sync_status'] == 'failed':
-                status_item.setForeground(QColor("#ef4444"))
-            elif f['sync_status'] == 'locked':
+            elif f.get('sync_status') == 'locked':
                 status_item.setForeground(QColor(STATUS_LOCKED))
-                status_item.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+            elif f.get('sync_status') == 'failed':
+                status_item.setForeground(QColor("#ef4444"))
+            else:
+                status_item.setForeground(QColor(STATUS_SYNCING))
             self.table.setItem(row, 4, status_item)
 
     def _open_selected_from_table(self, row, col):
         raw_text = self.table.item(row, 0).text()
         file_name = raw_text.split('\n')[0]
         self._open_file_by_name(file_name)
+
+    def _open_file_by_name(self, file_name):
+        file_path = (self.sync_folder / file_name).resolve()
+        if not file_path.exists():
+            QMessageBox.warning(
+                self, "تنبيه", 
+                f"الملف التالي غير موجود فعلياً في مجلد المشاركة:\n{file_path}"
+            )
+            return
+
+        # فحص قفل قواعد بيانات Access
+        if OfficeHandler.is_access_db(str(file_path)):
+            if self.client and self.client.is_configured():
+                try:
+                    is_locked, lock_info = self.client.check_file_lock(file_name)
+                    if is_locked and lock_info:
+                        user_locked = lock_info.get('locked_by_name', 'مستخدم آخر')
+                        dev_locked = lock_info.get('device_name', 'جهاز آخر')
+                        QMessageBox.critical(
+                            self, "قاعدة البيانات محجوزة!",
+                            f"قاعدة بيانات Access ({file_name}) مفتوحة حالياً بواسطة:\n"
+                            f"👤 المستخدم: {user_locked}\n"
+                            f"💻 الجهاز: {dev_locked}\n\n"
+                            f"⛔ تم منع فتحها تجنباً لتلف بيانات الغرفة.\n"
+                            f"يرجى الانتظار حتى ينتهي المستخدم الآخر ويغلقها."
+                        )
+                        return
+                except Exception as e:
+                    print(f"[Check lock skip]: {e}")
+
+        try:
+            OfficeHandler.open_native_file(str(file_path))
+        except Exception as e:
+            QMessageBox.critical(
+                self, "خطأ في فتح الملف", 
+                f"تعذر تشغيل البرنامج المقترن بالملف:\n{str(e)}"
+            )
 
     def _show_context_menu(self, pos):
         selected = self.table.selectedItems()
@@ -783,26 +474,27 @@ class FileExchangeMainWindow(QMainWindow):
         menu.setStyleSheet("""
             QMenu {
                 background-color: #ffffff;
-                color: #0f172a;
-                border: 1px solid #cbd5e1;
+                color: #162420;
+                border: 1.5px solid #d5dfdb;
                 border-radius: 8px;
                 padding: 4px;
             }
             QMenu::item {
-                padding: 6px 20px;
+                padding: 8px 24px;
                 border-radius: 4px;
                 font-size: 12px;
+                font-weight: 600;
             }
             QMenu::item:selected {
-                background-color: #f1f5f9;
-                color: #0f172a;
+                background-color: #f0f6f4;
+                color: #14372e;
                 font-weight: bold;
             }
         """)
-        open_action = menu.addAction("⚡ فتح الملف بالبرنامج الأصلي")
+        open_action = menu.addAction("⚡ فتح المستند بالبرنامج الأصلي")
         open_folder_action = menu.addAction("📂 استعراض في مجلد Windows")
         menu.addSeparator()
-        delete_action = menu.addAction("🗑️ حذف الملف")
+        delete_action = menu.addAction("🗑️ حذف المستند نهائياً")
 
         action = menu.exec(self.table.viewport().mapToGlobal(pos))
         if action == open_action:
@@ -813,49 +505,10 @@ class FileExchangeMainWindow(QMainWindow):
         elif action == delete_action:
             self._delete_file_by_name(file_name)
 
-    def _open_file_by_name(self, file_name):
-        file_path = (self.sync_folder / file_name).resolve()
-
-        if not file_path.exists():
-            QMessageBox.warning(
-                self, "الملف غير متوفر", 
-                f"الملف التالي غير موجود فعلياً في مجلد المشاركة:\n{file_path}\n\nيرجى تحديث القائمة."
-            )
-            return
-
-        if OfficeHandler.is_access_db(str(file_path)):
-            if self.client and self.client.is_configured():
-                try:
-                    is_locked, lock_info = self.client.check_file_lock(file_name)
-                    if is_locked and lock_info and lock_info.get('locked_by') != self.client.user_id:
-                        user_locked = lock_info.get('profiles', {}).get('full_name', 'مستخدم آخر')
-                        device_locked = lock_info.get('devices', {}).get('device_name', 'جهاز آخر')
-                        QMessageBox.critical(
-                            self, "قاعدة البيانات محجوزة!",
-                            f"قاعدة بيانات Access ({file_name}) مفتوحة حالياً بواسطة:\n"
-                            f"👤 المستخدم: {user_locked}\n"
-                            f"💻 على الجهاز: {device_locked}\n\n"
-                            f"⛔ تم منع فتحها تجنباً لتلف بيانات المؤسسة.\n"
-                            f"يرجى الانتظار حتى ينتهي المستخدم الآخر ويغلق قاعدة البيانات."
-                        )
-                        return
-                except Exception as e:
-                    print(f"تخطي فحص القفل السحابي: {e}")
-
-        try:
-            OfficeHandler.open_native_file(str(file_path))
-            self.footer_status.setText(f"تم إطلاق البرنامج الأصلي لفتح: {file_name}")
-        except Exception as e:
-            QMessageBox.critical(
-                self, "خطأ في فتح الملف", 
-                f"تعذر فتح الملف بالبرنامج الأصلي:\n{str(e)}\n\n"
-                f"تأكد من وجود برنامج مثبت على جهازك يدعم صيغة ({file_path.suffix}) مثل Word أو Excel أو Access."
-            )
-
     def _delete_file_by_name(self, file_name):
         reply = QMessageBox.question(
-            self, "تأكيد الحذف", 
-            f"هل أنت متأكد من رغبتك في حذف الملف التالي نهائياً؟\n{file_name}",
+            self, "تأكيد الحذف الرسمي", 
+            f"هل أنت متأكد من حذف المستند التالي نهائياً؟\n{file_name}",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         if reply == QMessageBox.StandardButton.Yes:
@@ -866,8 +519,8 @@ class FileExchangeMainWindow(QMainWindow):
 
     def _upload_custom_file(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "اختر ملفاً لإضافته إلى مجلد التبادل المشترك", "",
-            "ملفات Office والشائعة (*.docx *.xlsx *.accdb *.pdf *.txt);;كافة الملفات (*.*)"
+            self, "اختر مستنداً لإضافته إلى مجلد المشاركة الرسمي", "",
+            "ملفات Office والوثائق (*.docx *.xlsx *.accdb *.pdf *.doc *.xls);;كافة الملفات (*.*)"
         )
         if path:
             dest = self.sync_folder / Path(path).name
@@ -875,101 +528,91 @@ class FileExchangeMainWindow(QMainWindow):
             shutil.copy2(path, dest)
             self._refresh_file_list()
             QMessageBox.information(
-                self, "نجاح الإضافة", 
-                f"تمت إضافة '{Path(path).name}' إلى مجلد التبادل بنجاح وسيتم حفظه ومزامنته فورياً."
+                self, "تمت الإضافة", 
+                f"تمت إضافة '{Path(path).name}' بنجاح وسيتم حفظه ومزامنته سحابياً فورياً."
             )
 
-    def _toggle_autostart(self):
-        currently_enabled = is_windows_autostart_enabled()
-        new_state = not currently_enabled
-        success, msg = set_windows_autostart(new_state)
-        if success:
-            state_str = "مفعل" if new_state else "معطل"
-            QMessageBox.information(self, "إعدادات التشغيل التلقائي", f"{msg}\nالحالة الحالية: {state_str}")
-        else:
-            QMessageBox.warning(self, "خطأ", msg)
-
     def _open_cloud_settings(self):
-        """نافذة إعدادات التخزين السحابي المجاني (Supabase بدون كلمة مرور)"""
+        """نافذة إعدادات الربط السحابي (للإدارة فقط)"""
         dialog = QDialog(self)
-        dialog.setWindowTitle("إعدادات الربط السحابي – تبادل الملفات (بدون كلمة مرور)")
-        dialog.resize(500, 420)
+        dialog.setWindowTitle("إعدادات الربط السحابي (الإدارة)")
+        dialog.resize(480, 360)
         dialog.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         dialog.setStyleSheet("""
             QDialog { background-color: #f8fafc; font-family: 'Segoe UI', Tahoma; }
             QLabel { font-size: 12px; color: #0f172a; font-weight: 600; }
             QLineEdit {
                 background-color: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px;
-                padding: 9px 12px; font-size: 12px; color: #0f172a;
+                padding: 8px 12px; font-size: 12px; color: #0f172a;
             }
-            QLineEdit:focus { border: 1.5px solid #2563eb; }
             QPushButton {
-                background-color: #0f172a; color: white; border-radius: 8px;
+                background-color: #14372e; color: white; border-radius: 8px;
                 padding: 10px; font-weight: bold; font-size: 12px; border: none;
             }
-            QPushButton:hover { background-color: #1e293b; }
         """)
 
         layout = QVBoxLayout(dialog)
         layout.setSpacing(12)
 
-        header_lbl = QLabel("☁️ ربط السحابة المجانية (Supabase)")
-        header_lbl.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
-        layout.addWidget(header_lbl)
-
-        desc_lbl = QLabel("⚡ نظام يعمل بالكامل بدون كلمة مرور أو تسجيل دخول للموظفين عبر المفتاح العام (Anon Key).")
-        desc_lbl.setStyleSheet("color: #059669; font-size: 11px; font-weight: 600; background: #ecfdf5; padding: 8px 12px; border-radius: 6px; border: 1px solid #a7f3d0;")
-        desc_lbl.setWordWrap(True)
-        layout.addWidget(desc_lbl)
+        layout.addWidget(QLabel("إعدادات الربط السحابي لغرفة تجارة كربلاء المقدسة"))
 
         cur_url = self.state_mgr.get_setting("supabase_url", "https://bjcillpivgcntzbwmpsm.supabase.co")
         cur_key = self.state_mgr.get_setting("supabase_key", "sb_publishable_Bfk1klLDNsLWKHvdRhWqNg_XoDqqJ6X")
 
-        layout.addWidget(QLabel("عنوان الخادم السحابي (Supabase URL):"))
+        layout.addWidget(QLabel("رابط الخادم السحابي:"))
         txt_url = QLineEdit(cur_url)
-        txt_url.setPlaceholderText("https://xxxx.supabase.co")
         layout.addWidget(txt_url)
 
-        layout.addWidget(QLabel("المفتاح العام للمشروع (Anon Public Key):"))
+        layout.addWidget(QLabel("مفتاح المشروع العام (Publishable Key):"))
         txt_key = QLineEdit(cur_key)
-        txt_key.setPlaceholderText("انسخ المفتاح العام من إعدادات Supabase > API")
         layout.addWidget(txt_key)
 
-        info_lbl = QLabel("📌 للحصول على المفتاح العام (بدون أي باسورد):\nمن موقع Supabase اضغط ⚙️ Project Settings > ثم API > وانسخ المفتاح من خانة anon public.")
-        info_lbl.setStyleSheet("color: #64748b; font-size: 11px; line-height: 1.4;")
-        info_lbl.setWordWrap(True)
-        layout.addWidget(info_lbl)
-
-        btn_save = QPushButton("اختبار الاتصال وحفظ الإعدادات السحابية")
-        def save_and_test():
-            url = txt_url.text().strip()
-            key = txt_key.text().strip()
-
-            if not url or not key:
-                QMessageBox.warning(dialog, "تنبيه", "يرجى إدخال رابط السحابة والمفتاح العام.")
-                return
-
-            from supabase_client import SupabaseClient
-            client = SupabaseClient(url, key)
-            files = client.list_files()
-            
-            self.state_mgr.set_setting("supabase_url", url)
-            self.state_mgr.set_setting("supabase_key", key)
-
-            self.client = client
-            if self.sync_engine:
-                self.sync_engine.client = client
-                self.sync_engine.pull_remote_changes()
-
-            self.cloud_badge.setText("● متصل بـ Supabase (بدون باسورد)")
-            self.cloud_badge.setStyleSheet("""
-                background-color: #ecfdf5; color: #10b981; font-weight: 700;
-                padding: 6px 14px; border-radius: 16px; border: 1px solid #a7f3d0; font-size: 11px;
-            """)
-            QMessageBox.information(dialog, "نجاح الاتصال", "تم الاتصال بالسحابة بنجاح وبدون أي كلمة مرور!\nسيبدأ المزامنة التلقائية لجميع الملفات فوراً.")
+        btn_save = QPushButton("حفظ الإعدادات")
+        def save():
+            self.state_mgr.set_setting("supabase_url", txt_url.text().strip())
+            self.state_mgr.set_setting("supabase_key", txt_key.text().strip())
+            QMessageBox.information(dialog, "تم الحفظ", "تم حفظ الإعدادات السحابية بنجاح.")
             dialog.accept()
 
-        btn_save.clicked.connect(save_and_test)
+        btn_save.clicked.connect(save)
         layout.addWidget(btn_save)
-
         dialog.exec()
+
+    def handle_sync_update(self, data):
+        self._refresh_file_list()
+
+    def _setup_tray(self):
+        """أيقونة شريط المهام بجانب الساعة في ويندوز"""
+        self.tray = QSystemTrayIcon(self)
+        if self.logo_path.exists():
+            self.tray.setIcon(QIcon(str(self.logo_path)))
+        else:
+            self.tray.setIcon(self.windowIcon())
+
+        menu = QMenu()
+        open_action = menu.addAction("عرض النافذة الرئيسية")
+        open_action.triggered.connect(self.showNormal)
+
+        open_folder_action = menu.addAction("فتح المجلد المشترك")
+        open_folder_action.triggered.connect(lambda: os.startfile(str(self.sync_folder)))
+
+        menu.addSeparator()
+        quit_action = menu.addAction("إغلاق البرنامج")
+        quit_action.triggered.connect(QApplication.instance().quit)
+
+        self.tray.setContextMenu(menu)
+        self.tray.show()
+
+    def closeEvent(self, event):
+        """تصغير إلى شريط المهام بدلاً من الإغلاق الكامل"""
+        if self.tray.isVisible():
+            self.hide()
+            self.tray.showMessage(
+                "غرفة تجارة كربلاء المقدسة",
+                "المنظومة تعمل في الخلفية وتراقب التعديلات عند الضغط على Ctrl+S.",
+                QSystemTrayIcon.MessageIcon.Information,
+                2000
+            )
+            event.ignore()
+        else:
+            event.accept()

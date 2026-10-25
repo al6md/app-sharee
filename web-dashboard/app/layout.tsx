@@ -13,8 +13,8 @@ import {
 } from 'lucide-react';
 
 export const metadata = {
-  title: 'تبادل الملفات – لوحة التحكم المنظمة',
-  description: 'إدارة مشاركة الملفات والأجهزة وقواعد بيانات Office',
+  title: 'غرفة تجارة كربلاء المقدسة – منظومة التبادل السحابي للمستندات',
+  description: 'إدارة أرشفة ومشاركة المستندات الرسمية وقواعد بيانات Office 365',
 };
 
 export default function RootLayout({
@@ -28,14 +28,12 @@ export default function RootLayout({
         {/* شريط جانبي نظيف ومنظم بنمط Microsoft 365 */}
         <aside className="w-64 bg-white border-l border-slate-200 flex flex-col justify-between shrink-0 shadow-sm">
           <div>
-            {/* الشعار والترويسة */}
-            <div className="p-5 border-b border-slate-200 flex items-center gap-3 bg-slate-50/50">
-              <div className="w-9 h-9 rounded-lg bg-[#0f6cbd] text-white flex items-center justify-center font-bold text-lg shadow-sm">
-                📁
-              </div>
+            {/* الشعار والترويسة الرسمية لغرفة تجارة كربلاء المقدسة */}
+            <div className="p-4 border-b border-slate-200 flex items-center gap-3 bg-[#0e2720] text-white">
+              <img src="/logo.png" alt="شعار الغرفة" className="w-11 h-11 rounded-full border-2 border-[#c59b27] object-cover bg-white shadow-sm" />
               <div>
-                <h1 className="font-bold text-sm text-slate-900 leading-tight">تبادل الملفات</h1>
-                <p className="text-[11px] text-[#0f6cbd] font-semibold">Microsoft 365 Integration</p>
+                <h1 className="font-bold text-sm text-white leading-tight">غرفة تجارة كربلاء</h1>
+                <p className="text-[10px] text-[#ecd58a] font-semibold">منظومة المستندات الرسمية</p>
               </div>
             </div>
 

@@ -18,10 +18,10 @@ export default function OverviewPage() {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
         <div>
           <h2 className="text-xl font-bold text-slate-900">
-            لوحة معلومات تبادل الملفات (Office 365 Integration)
+            غرفة تجارة كربلاء المقدسة – منظومة التبادل السحابي
           </h2>
           <p className="text-slate-500 text-xs mt-1">
-            متابعة التزامن اللحظي لملفات Word و Excel و Access بين 10 أجهزة حاسوب
+            متابعة الأرشفة والتزامن اللحظي لملفات Word و Excel و Access بين أجهزة موظفي الغرفة
           </p>
         </div>
 

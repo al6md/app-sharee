@@ -127,7 +127,17 @@ class LoginDialog(QDialog):
 
 def main():
     app = QApplication(sys.argv)
-    app.setApplicationName("FileExchangeSystem")
+    app.setApplicationName("KarbalaChamberFileExchange")
+    app.setOrganizationName("KarbalaChamberOfCommerce")
+
+    if getattr(sys, 'frozen', False):
+        base_dir = Path(sys._MEIPASS)
+    else:
+        base_dir = Path(__file__).parent.parent
+    logo_path = base_dir / "assets" / "logo.png"
+    if logo_path.exists():
+        from PyQt6.QtGui import QIcon
+        app.setWindowIcon(QIcon(str(logo_path)))
 
     # مجلد المزامنة المحلي على جهاز المستخدم
     sync_folder = Path(os.environ.get('USERPROFILE', 'C:')) / "FileExchangeShared"
