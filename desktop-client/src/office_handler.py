@@ -47,6 +47,29 @@ class OfficeHandler:
         return OfficeHandler.is_file_locked_by_os(filepath)
 
     @staticmethod
+    def cleanup_orphaned_office_locks(filepath):
+        """
+        تنظيف ملفات القفل المؤقتة العالقة (Orphaned Lock Files مثل ~$filename.docx)
+        التي قد تتبقى عند إغلاق البرنامج بشكل غير طبيعي وتمنع التحرير مسببة رسالة "الملف مؤمن للتحرير"
+        """
+        try:
+            path = Path(filepath).resolve()
+            parent = path.parent
+
+            # فحص ملفات القفل الخاصة ببرامج Office
+            for lock in parent.glob("~$*"):
+                if lock.exists():
+                    # إذا كان الملف الأصلي غير مقفول فعلياً بنظام التشغيل، فالقفل عالق ويجب حذفه
+                    if not OfficeHandler.is_file_locked_by_os(str(path)):
+                        try:
+                            lock.unlink(missing_ok=True)
+                            print(f"[OfficeHandler] تم حذف قفل أوفيس العالق تلقائياً: {lock.name}")
+                        except Exception:
+                            pass
+        except Exception as e:
+            print(f"[OfficeHandler] خطأ أثناء فحص أقفال أوفيس: {e}")
+
+    @staticmethod
     def open_native_file(filepath):
         """
         فتح الملف باستخدام البرنامج الافتراضي الأصلي المثبت على جهاز Windows:
@@ -57,6 +80,9 @@ class OfficeHandler:
         path = Path(filepath).resolve()
         if not path.exists():
             raise FileNotFoundError(f"الملف غير موجود في المسار: {path}")
+
+        # تنظيف أي أقفال عالقة لـ Office قبل التشغيل
+        OfficeHandler.cleanup_orphaned_office_locks(str(path))
 
         path_str = str(path)
 

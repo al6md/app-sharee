@@ -80,6 +80,19 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"success": False, "error": str(e)}, ensure_ascii=False).encode('utf-8'))
             return
 
+        if path == '/unlock':
+            file_name = params.get('file', [''])[0].strip()
+            folder_name = params.get('folder', [''])[0].strip()
+            target_path = self._find_or_download_file(file_name, folder_name)
+            if target_path and target_path.exists():
+                OfficeHandler.cleanup_orphaned_office_locks(str(target_path))
+                self._set_headers(200)
+                self.wfile.write(json.dumps({"success": True, "message": "تم فك قفل المستند بنجاح."}).encode('utf-8'))
+            else:
+                self._set_headers(404)
+                self.wfile.write(json.dumps({"success": False, "error": "file not found"}).encode('utf-8'))
+            return
+
         if path == '/reveal':
             file_name = params.get('file', [''])[0].strip()
             folder_name = params.get('folder', [''])[0].strip()
