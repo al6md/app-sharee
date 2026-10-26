@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller Spec File for FileExchangeSetup.exe
+PyInstaller Spec File for FileExchangeSetup.exe / share coc.exe
 """
 block_cipher = None
 
@@ -8,7 +8,10 @@ a = Analysis(
     ['src/main.py'],
     pathex=['src'],
     binaries=[],
-    datas=[('assets', 'assets')],
+    datas=[
+        ('assets', 'assets'),
+        ('gdrive_credentials.json', '.')
+    ],
     hiddenimports=[
         'PyQt6',
         'PyQt6.QtCore',
@@ -32,7 +35,16 @@ a = Analysis(
         'office_handler',
         'gui',
         'conflict_manager',
-        'autostart'
+        'autostart',
+        'gdrive_client',
+        'gdrive_sync_service',
+        'google.oauth2.credentials',
+        'googleapiclient',
+        'googleapiclient.discovery',
+        'googleapiclient.http',
+        'googleapiclient.model',
+        'google_auth_httplib2',
+        'httplib2'
     ],
     hookspath=[],
     hooksconfig={},
@@ -60,7 +72,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False, # نافذة تطبيق Windows دون ظهور شاشة موجه الأوامر السوداء
+    console=False,
     icon='assets/logo.ico',
     disable_windowed_traceback=False,
     argv_emulation=False,

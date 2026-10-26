@@ -2,6 +2,7 @@
 """
 Google Drive Client for Desktop App
 كامل الصلاحيات مع Google Drive API v3 (15GB)
+متوافق بنسبة 100% مع sync_engine.py و gui.py و local_bridge.py
 """
 import os
 import io
@@ -15,8 +16,28 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
 def load_gdrive_config():
-    """Load Google Drive OAuth credentials from local storage locations or environment"""
-    # 1. Environment variables
+    """Load Google Drive OAuth credentials from bundle, environment, or local paths"""
+    # 1. Check frozen PyInstaller bundle (_MEIPASS)
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        meipass_p = Path(sys._MEIPASS) / "gdrive_credentials.json"
+        if meipass_p.exists():
+            try:
+                with open(meipass_p, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+
+    # 2. Check next to executable
+    if getattr(sys, 'frozen', False):
+        exe_dir_p = Path(sys.executable).parent / "gdrive_credentials.json"
+        if exe_dir_p.exists():
+            try:
+                with open(exe_dir_p, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+
+    # 3. Environment variables
     if os.environ.get("GDRIVE_REFRESH_TOKEN"):
         return {
             "client_id": os.environ.get("GDRIVE_CLIENT_ID", ""),
@@ -25,10 +46,10 @@ def load_gdrive_config():
             "folder_id": os.environ.get("GDRIVE_FOLDER_ID", "1r984fj4btDKUnSfqfJlW2jzrRhVWaROB")
         }
 
-    # 2. Candidate file locations
+    # 4. Standard local storage paths
     candidates = [
-        Path.home() / "FileExchangeShared" / ".gdrive_credentials.json",
         Path(os.environ.get("APPDATA", "C:")) / "FileExchange" / "gdrive_credentials.json",
+        Path.home() / "FileExchangeShared" / ".gdrive_credentials.json",
         Path(__file__).parent.parent / "gdrive_credentials.json",
         Path(__file__).parent / "gdrive_credentials.json",
     ]
@@ -67,7 +88,7 @@ class GoogleDriveClient:
                 "token_uri": "https://oauth2.googleapis.com/token"
             }
             creds = Credentials.from_authorized_user_info(creds_data)
-            self.service = build('drive', 'v3', credentials=creds)
+            self.service = build('drive', 'v3', credentials=creds, cache_discovery=False)
             print("[GDRIVE] Connected successfully to Google Drive (15GB)")
             self.refresh_folders()
         except Exception as e:
@@ -97,10 +118,20 @@ class GoogleDriveClient:
 
     def create_folder(self, folder_name):
         if not self.service or not folder_name:
-            return None
+            return self.root_folder_id
         if folder_name in self.folder_cache:
             return self.folder_cache[folder_name]
         try:
+            safe_name = folder_name.replace("'", "\\'")
+            res = self.service.files().list(
+                q=f"'{self.root_folder_id}' in parents and name = '{safe_name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false",
+                fields="files(id, name)"
+            ).execute()
+            existing = res.get('files', [])
+            if existing:
+                self.folder_cache[folder_name] = existing[0]['id']
+                return existing[0]['id']
+
             meta = {
                 'name': folder_name,
                 'mimeType': 'application/vnd.google-apps.folder',
@@ -108,10 +139,11 @@ class GoogleDriveClient:
             }
             fld = self.service.files().create(body=meta, fields='id, name').execute()
             self.folder_cache[folder_name] = fld['id']
+            print(f"[GDRIVE] Created folder: {folder_name} ({fld['id']})")
             return fld['id']
         except Exception as e:
             print(f"[GDRIVE] Failed to create folder {folder_name}: {e}")
-            return None
+            return self.root_folder_id
 
     def delete_folder(self, folder_name):
         if not self.service or not folder_name:
@@ -127,9 +159,31 @@ class GoogleDriveClient:
             if folder_id:
                 self.service.files().update(fileId=folder_id, body={'trashed': True}).execute()
                 self.folder_cache.pop(folder_name, None)
+                print(f"[GDRIVE] Trashed folder: {folder_name}")
                 return True
         except Exception as e:
             print(f"[GDRIVE] Error deleting folder {folder_name}: {e}")
+        return False
+
+    def rename_folder(self, old_name, new_name):
+        if not self.service or not old_name or not new_name:
+            return False
+        try:
+            folder_id = self.folder_cache.get(old_name)
+            if not folder_id:
+                folders = self.refresh_folders()
+                for f in folders:
+                    if f['name'] == old_name:
+                        folder_id = f['id']
+                        break
+            if folder_id:
+                self.service.files().update(fileId=folder_id, body={'name': new_name}).execute()
+                self.folder_cache.pop(old_name, None)
+                self.folder_cache[new_name] = folder_id
+                print(f"[GDRIVE] Renamed folder {old_name} -> {new_name}")
+                return True
+        except Exception as e:
+            print(f"[GDRIVE] Error renaming folder: {e}")
         return False
 
     def list_files(self):
@@ -152,13 +206,15 @@ class GoogleDriveClient:
 
             files_list = []
             for item in res.get('files', []):
-                pid = item.get('parents', [''])[0]
+                pid = item.get('parents', [''])[0] if item.get('parents') else ''
                 dept = id_to_name.get(pid, "القسم العام")
-                rel_path = f"{dept}/{item['name']}" if dept != "القسم العام" else item['name']
+                rel_path = f"{dept}/{item['name']}"
                 files_list.append({
                     'id': item['id'],
                     'file_name': item['name'],
                     'file_path': rel_path,
+                    'department': dept,
+                    'folder': dept,
                     'storage_path': item['id'],
                     'file_size': int(item.get('size', 0)),
                     'updated_at': item.get('modifiedTime', ''),
@@ -174,32 +230,96 @@ class GoogleDriveClient:
         return self.list_files()
 
     def list_deleted_files(self):
-        return []
+        if not self.service:
+            return []
+        try:
+            # جلب أسماء الملفات النشطة أولاً لمنع اعتبار أي ملف نشط كمحذوف نهائياً
+            active_files = self.list_files()
+            active_names = {f['file_name'].strip().lower() for f in active_files}
+
+            res = self.service.files().list(
+                q="trashed = true and mimeType != 'application/vnd.google-apps.folder'",
+                fields="files(id, name, size, modifiedTime, parents)",
+                pageSize=100
+            ).execute()
+            deleted = []
+            folders = self.folder_cache or {}
+            id_to_name = {v: k for k, v in folders.items()}
+            for item in res.get('files', []):
+                # إذا كان الملف نشطاً في السحابة لا نعتبره محذوفاً إطلاقاً
+                if item['name'].strip().lower() in active_names:
+                    continue
+                pid = item.get('parents', [''])[0] if item.get('parents') else ''
+                dept = id_to_name.get(pid, '')
+                rel_path = f"{dept}/{item['name']}" if dept else item['name']
+                deleted.append({
+                    'id': item['id'],
+                    'file_name': item['name'],
+                    'file_path': rel_path,
+                    'storage_path': item['id'],
+                    'file_size': int(item.get('size', 0)),
+                    'updated_at': item.get('modifiedTime', '')
+                })
+            return deleted
+        except Exception as e:
+            print(f"[GDRIVE] Error listing deleted files: {e}")
+            return []
 
     def get_folder_permissions(self):
         return {}
 
-    def upload_file(self, local_path, file_name=None, file_path=None, user_name="تطبيق الحاسوب"):
+    def check_file_lock(self, file_name):
+        return False, None
+
+    def get_file_by_name(self, file_name):
+        if not self.service or not file_name:
+            return None
+        try:
+            safe_name = file_name.replace("'", "\\'")
+            res = self.service.files().list(
+                q=f"name = '{safe_name}' and trashed = false",
+                fields="files(id, name, size, modifiedTime, parents)"
+            ).execute()
+            files = res.get('files', [])
+            if files:
+                f = files[0]
+                return {
+                    'id': f['id'],
+                    'file_name': f['name'],
+                    'storage_path': f['id'],
+                    'file_size': int(f.get('size', 0))
+                }
+        except Exception as e:
+            print(f"[GDRIVE] Error get_file_by_name: {e}")
+        return None
+
+    def upload_file(self, local_path, file_name=None, file_path=None, rel_path=None, user_name="تطبيق الحاسوب", device_name=None, **kwargs):
+        """رفع أو تحديث ملف على Google Drive مع تحديد المجلد المناسب بدقة"""
         if not self.service:
             return False, "Service not initialized"
         p = Path(local_path)
         if not p.exists():
             return False, f"File not found: {local_path}"
 
-        fname = file_name or p.name
+        r_path = rel_path or file_path or ""
+        fname = file_name or (os.path.basename(r_path) if r_path else p.name)
+
+        # تحديد اسم القسم من المسار النسبي أو مجلد الملف
         dept_name = "القسم العام"
-        if file_path and "/" in file_path:
-            dept_name = file_path.split("/")[0]
+        clean_rel = r_path.replace("\\", "/").strip("/")
+        if "/" in clean_rel:
+            parts = clean_rel.split("/")
+            if len(parts) > 1 and parts[0] != "FileExchangeShared":
+                dept_name = parts[0]
         else:
             try:
-                sync_folder = p.parent
-                if sync_folder.name and sync_folder.name != "FileExchangeShared":
-                    dept_name = sync_folder.name
+                parent_name = p.parent.name
+                if parent_name and parent_name != "FileExchangeShared":
+                    dept_name = parent_name
             except Exception:
                 pass
 
-        target_parent = self.create_folder(dept_name) if dept_name != "القسم العام" else self.root_folder_id
-
+        target_parent = self.create_folder(dept_name)
         mime = mimetypes.guess_type(str(p))[0] or 'application/octet-stream'
 
         try:
@@ -214,11 +334,11 @@ class GoogleDriveClient:
             if existing:
                 fid = existing[0]['id']
                 self.service.files().update(fileId=fid, media_body=media, fields='id, name').execute()
-                print(f"[GDRIVE] Updated: {fname} in {dept_name}")
+                print(f"[GDRIVE] Updated existing file: {fname} in {dept_name}")
             else:
                 meta = {'name': fname, 'parents': [target_parent]}
                 self.service.files().create(body=meta, media_body=media, fields='id, name').execute()
-                print(f"[GDRIVE] Uploaded new: {fname} in {dept_name}")
+                print(f"[GDRIVE] Uploaded new file: {fname} in {dept_name}")
             return True, "تم الرفع بنجاح"
         except Exception as e:
             print(f"[GDRIVE UPLOAD ERROR]: {e}")
@@ -226,7 +346,7 @@ class GoogleDriveClient:
 
     def upload_file_to_storage(self, local_path, storage_dest):
         p = Path(local_path)
-        return self.upload_file(local_path, file_name=p.name)[0]
+        return self.upload_file(local_path, file_name=p.name, rel_path=storage_dest)[0]
 
     def download_file(self, file_name, local_dest_path, storage_path=None):
         if not self.service:
@@ -255,6 +375,7 @@ class GoogleDriveClient:
                 done = False
                 while not done:
                     _, done = downloader.next_chunk()
+            print(f"[GDRIVE] Downloaded: {file_name} -> {local_dest_path}")
             return True, "Downloaded successfully"
         except Exception as e:
             print(f"[GDRIVE DOWNLOAD ERROR]: {e}")
@@ -264,7 +385,7 @@ class GoogleDriveClient:
         p = Path(local_dest_path)
         return self.download_file(p.name, local_dest_path, storage_path=storage_path)[0]
 
-    def delete_file(self, file_path):
+    def delete_file(self, file_path, **kwargs):
         if not self.service or not file_path:
             return False
         try:
@@ -277,10 +398,27 @@ class GoogleDriveClient:
             files = res.get('files', [])
             for f in files:
                 self.service.files().update(fileId=f['id'], body={'trashed': True}).execute()
+                print(f"[GDRIVE] Moved to trash: {fname} ({f['id']})")
             return True
         except Exception as e:
             print(f"[GDRIVE DELETE ERROR]: {e}")
             return False
 
-    def check_file_lock(self, file_name):
-        return False, None
+    def rename_file(self, old_file_path, new_name):
+        if not self.service or not old_file_path or not new_name:
+            return False
+        try:
+            fname = os.path.basename(old_file_path)
+            safe_name = fname.replace("'", "\\'")
+            res = self.service.files().list(
+                q=f"name = '{safe_name}' and trashed = false",
+                fields="files(id)"
+            ).execute()
+            files = res.get('files', [])
+            for f in files:
+                self.service.files().update(fileId=f['id'], body={'name': new_name}).execute()
+                print(f"[GDRIVE] Renamed {fname} -> {new_name}")
+            return True
+        except Exception as e:
+            print(f"[GDRIVE RENAME ERROR]: {e}")
+            return False

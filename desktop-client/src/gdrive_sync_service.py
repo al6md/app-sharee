@@ -41,7 +41,7 @@ class GoogleDriveSyncDaemon:
                 "refresh_token": refresh_token,
                 "token_uri": "https://oauth2.googleapis.com/token"
             })
-            self.service = build('drive', 'v3', credentials=creds)
+            self.service = build('drive', 'v3', credentials=creds, cache_discovery=False)
             print("[GDRIVE] Connected successfully to Google Drive (15GB)")
         except Exception as e:
             print(f"[GDRIVE ERROR] Init failed: {e}")
