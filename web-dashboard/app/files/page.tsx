@@ -133,9 +133,20 @@ export default function FilesPage() {
 
   // مراجع رفع الملفات والكاميرا وتحديث المستندات المعدلة
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const updateFileInputRef = useRef<HTMLInputElement>(null);
   const [fileToUpdate, setFileToUpdate] = useState<FileItem | null>(null);
+
+  // حالة شريط تقدم الرفع المباشر
+  const [uploadProgress, setUploadProgress] = useState<{
+    show: boolean;
+    total: number;
+    current: number;
+    currentFileName: string;
+    percentage: number;
+    completed: boolean;
+  } | null>(null);
 
   // تشغيل نافذة اختيار الملف لتحديث مستند موجود بنسخة معدلة
   const triggerUpdateFile = (file: FileItem) => {
@@ -271,13 +282,30 @@ export default function FilesPage() {
     }
   };
 
-  // رفع ملف من الجوال أو من الكاميرا
+  // رفع ملفات متعددة مع شريط تقدم مباشر
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>, isCameraCapture = false) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
+    const fileList = event.target.files;
+    if (!fileList || fileList.length === 0) return;
 
-    try {
-      setActionLoading(true);
+    const filesToUpload = Array.from(fileList);
+    const total = filesToUpload.length;
+
+    const activeUploadDept = selectedDept !== '__ALL__' ? selectedDept : (currentFolder || 'القسم العام');
+    const targetFolderId = folderMap[activeUploadDept] || '';
+
+    setUploadProgress({
+      show: true,
+      total,
+      current: 0,
+      currentFileName: filesToUpload[0].name,
+      percentage: 0,
+      completed: false,
+    });
+
+    let successCount = 0;
+
+    for (let i = 0; i < total; i++) {
+      const file = filesToUpload[i];
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       let fileName = cleanFileNameString(file.name);
 
@@ -285,32 +313,154 @@ export default function FilesPage() {
         fileName = `كتاب_رسمي_مصور_${timestamp}.jpg`;
       }
 
-      const activeUploadDept = selectedDept !== '__ALL__' ? selectedDept : (currentFolder || 'القسم العام');
-      const targetFolderId = folderMap[activeUploadDept] || '';
-
-      const formData = new FormData();
-      formData.append('file', file, fileName);
-      if (targetFolderId) {
-        formData.append('folderId', targetFolderId);
-      }
-
-      const res = await fetch('/api/drive/files', {
-        method: 'POST',
-        body: formData,
+      setUploadProgress({
+        show: true,
+        total,
+        current: i + 1,
+        currentFileName: fileName,
+        percentage: Math.round((i / total) * 100),
+        completed: false,
       });
-      const data = await res.json();
-      if (!data.success) {
-        throw new Error(data.error || 'فشل الرفع إلى Google Drive');
+
+      try {
+        const formData = new FormData();
+        formData.append('file', file, fileName);
+        if (targetFolderId) {
+          formData.append('folderId', targetFolderId);
+        }
+
+        const res = await fetch('/api/drive/files', {
+          method: 'POST',
+          body: formData,
+        });
+        const data = await res.json();
+        if (data.success) {
+          successCount++;
+        }
+      } catch (err) {
+        console.error('Error uploading file:', fileName, err);
       }
 
-      await loadData();
-      alert(`✅ تم رفع المستند "${fileName}" بنجاح إلى سحابة Google Drive وستتم مزامنته مع تطبيق الحاسوب فوراً.`);
-    } catch (e: any) {
-      alert(`تعذر رفع المستند: ${e.message || e}`);
-    } finally {
-      setActionLoading(false);
-      if (event.target) event.target.value = '';
+      setUploadProgress({
+        show: true,
+        total,
+        current: i + 1,
+        currentFileName: fileName,
+        percentage: Math.round(((i + 1) / total) * 100),
+        completed: i + 1 === total,
+      });
     }
+
+    await loadData();
+    setTimeout(() => {
+      setUploadProgress(null);
+    }, 2200);
+
+    if (event.target) event.target.value = '';
+  };
+
+  // رفع مجلد كامل مع الحفاظ على هيكلية المجلدات الفرعية
+  const handleFolderUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const fileList = event.target.files;
+    if (!fileList || fileList.length === 0) return;
+
+    const filesToUpload = Array.from(fileList);
+    const total = filesToUpload.length;
+
+    const activeUploadDept = selectedDept !== '__ALL__' ? selectedDept : (currentFolder || 'القسم العام');
+    const baseParentId = folderMap[activeUploadDept] || '';
+
+    setUploadProgress({
+      show: true,
+      total,
+      current: 0,
+      currentFileName: 'جاري إنشاء المجلدات الفرعية...',
+      percentage: 0,
+      completed: false,
+    });
+
+    const createdFolderIds: Record<string, string> = {};
+    let successCount = 0;
+
+    for (let i = 0; i < total; i++) {
+      const file = filesToUpload[i];
+      const relPath = (file as any).webkitRelativePath || file.name;
+      const parts = relPath.split('/');
+      const fileName = cleanFileNameString(parts.pop() || file.name);
+
+      setUploadProgress({
+        show: true,
+        total,
+        current: i + 1,
+        currentFileName: `${parts.length > 0 ? parts.join('/') + ' / ' : ''}${fileName}`,
+        percentage: Math.round((i / total) * 100),
+        completed: false,
+      });
+
+      let currentParentId = baseParentId;
+      let pathAcc = '';
+
+      for (const seg of parts) {
+        pathAcc = pathAcc ? `${pathAcc}/${seg}` : seg;
+        if (!createdFolderIds[pathAcc]) {
+          try {
+            const createRes = await fetch('/api/drive/files', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                action: 'CREATE_FOLDER',
+                name: seg,
+                parentId: currentParentId || undefined,
+              }),
+            });
+            const createData = await createRes.json();
+            if (createData.success && createData.folder) {
+              createdFolderIds[pathAcc] = createData.folder.id;
+            }
+          } catch (createErr) {
+            console.error('Error creating folder:', seg, createErr);
+          }
+        }
+        if (createdFolderIds[pathAcc]) {
+          currentParentId = createdFolderIds[pathAcc];
+        }
+      }
+
+      try {
+        const formData = new FormData();
+        formData.append('file', file, fileName);
+        if (currentParentId) {
+          formData.append('folderId', currentParentId);
+        }
+
+        const res = await fetch('/api/drive/files', {
+          method: 'POST',
+          body: formData,
+        });
+        const data = await res.json();
+        if (data.success) {
+          successCount++;
+        }
+      } catch (err) {
+        console.error('Error uploading file in folder:', fileName, err);
+      }
+
+      setUploadProgress({
+        show: true,
+        total,
+        current: i + 1,
+        currentFileName: fileName,
+        percentage: Math.round(((i + 1) / total) * 100),
+        completed: i + 1 === total,
+      });
+    }
+
+    await loadData();
+    setTimeout(() => {
+      setUploadProgress(null);
+    }, 2200);
+
+    if (event.target) event.target.value = '';
   };
   // نقل الملف لسلة المحذوفات
   const handleMoveToTrash = async (file: FileItem) => {
@@ -784,21 +934,41 @@ export default function FilesPage() {
             onChange={(e) => handleFileUpload(e, true)} 
           />
 
-          {/* زر رفع ملف من ذاكرة الجوال */}
+          {/* زر رفع ملفات متعددة */}
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={actionLoading}
             className="flex items-center gap-1.5 bg-[#14372e] hover:bg-[#1b4b3e] text-white text-xs font-bold px-3 py-2 rounded-xl transition shadow-sm active:scale-95 shrink-0"
-            title="رفع مستند من الهاتف"
+            title="رفع ملفات متعددة دفعة واحدة"
           >
             <Upload className="w-4 h-4" />
-            <span>رفع ملف</span>
+            <span>رفع ملفات</span>
           </button>
           <input 
             type="file" 
             ref={fileInputRef} 
+            multiple
             className="hidden" 
             onChange={(e) => handleFileUpload(e, false)} 
+          />
+
+          {/* زر رفع مجلد كامل */}
+          <button
+            onClick={() => folderInputRef.current?.click()}
+            disabled={actionLoading}
+            className="flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-bold px-3 py-2 rounded-xl transition border border-emerald-200 active:scale-95 shrink-0"
+            title="رفع مجلد كامل بمحتوياته"
+          >
+            <FolderOpen className="w-4 h-4 text-emerald-700" />
+            <span>رفع مجلد</span>
+          </button>
+          <input 
+            type="file" 
+            ref={folderInputRef} 
+            {...({ webkitdirectory: '', directory: '' } as any)}
+            multiple
+            className="hidden" 
+            onChange={handleFolderUpload} 
           />
 
           {/* مدخل رفع تحديث المستند بنسخة معدلة */}
@@ -1258,6 +1428,50 @@ export default function FilesPage() {
             </table>
           </div>
         </>
+      )}
+
+      {/* شريط تقدم الرفع التفاعلي (Upload Progress Dialog) */}
+      {uploadProgress && uploadProgress.show && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4 animate-in fade-in">
+          <div className="bg-white rounded-3xl shadow-2xl border border-slate-100 max-w-md w-full p-6 text-center space-y-4">
+            <div className="flex items-center justify-center w-16 h-16 mx-auto rounded-2xl bg-emerald-50 text-emerald-600 shadow-inner">
+              {uploadProgress.completed ? (
+                <CheckCircle2 className="w-9 h-9 text-emerald-600 animate-bounce" />
+              ) : (
+                <UploadCloud className="w-9 h-9 text-emerald-600 animate-pulse" />
+              )}
+            </div>
+
+            <div className="space-y-1">
+              <h3 className="text-base font-black text-slate-800">
+                {uploadProgress.completed ? '✅ اكتمل الرفع بنجاح!' : 'جاري رفع المستندات إلى السحابة...'}
+              </h3>
+              <p className="text-xs text-slate-500 font-semibold truncate max-w-xs mx-auto" dir="ltr">
+                {uploadProgress.currentFileName}
+              </p>
+            </div>
+
+            {/* شريط التحميل المباشر */}
+            <div className="space-y-1.5 pt-1">
+              <div className="w-full bg-slate-100 rounded-full h-3.5 overflow-hidden p-0.5 border border-slate-200">
+                <div 
+                  className="bg-gradient-to-r from-emerald-500 to-teal-500 h-full rounded-full transition-all duration-300 ease-out shadow-sm"
+                  style={{ width: `${uploadProgress.percentage}%` }}
+                />
+              </div>
+              <div className="flex justify-between items-center text-[11px] font-bold text-slate-500 px-1">
+                <span className="text-emerald-700 font-black">{uploadProgress.percentage}% مكتمل</span>
+                <span>{uploadProgress.current} من {uploadProgress.total} ملفات</span>
+              </div>
+            </div>
+
+            {uploadProgress.completed && (
+              <p className="text-xs text-emerald-700 font-bold bg-emerald-50 py-2.5 px-3 rounded-xl border border-emerald-100 animate-in fade-in">
+                تمت مزامنة جميع المستندات مع سحابة Google Drive بنجاح
+              </p>
+            )}
+          </div>
+        </div>
       )}
 
       {/* 6. نافذة إنشاء مجلد جديد (New Folder Modal) */}

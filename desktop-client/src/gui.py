@@ -17,7 +17,8 @@ from PyQt6.QtWidgets import (
     QHeaderView, QLineEdit, QSystemTrayIcon, QMenu, QMessageBox, QFileDialog, 
     QFrame, QButtonGroup, QDialog, QApplication,
     QStackedWidget, QScrollArea, QGridLayout,
-    QListWidget, QListWidgetItem, QAbstractItemView
+    QListWidget, QListWidgetItem, QAbstractItemView,
+    QProgressBar, QProgressDialog
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QMetaObject, QItemSelectionModel
 from PyQt6.QtGui import QIcon, QFont, QColor, QPixmap, QCursor
@@ -506,11 +507,21 @@ class FileExchangeMainWindow(QMainWindow):
         toolbar.addWidget(self.btn_open_folder)
 
         # زر إضافة مستند جديد
-        self.btn_upload = QPushButton("➕ إضافة مستند")
+        # زر إضافة ملفات متعددة دفعة واحدة
+        self.btn_upload = QPushButton("➕ إضافة ملفات")
         self.btn_upload.setObjectName("btnGovSecondary")
         self.btn_upload.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_upload.setToolTip("تحديد وإضافة عدة مستندات دفعة واحدة إلى المجلد الحالي")
         self.btn_upload.clicked.connect(self._upload_custom_file)
         toolbar.addWidget(self.btn_upload)
+
+        # زر إضافة مجلد كامل بمحتوياته
+        self.btn_upload_folder = QPushButton("📁 رفع مجلد كامل")
+        self.btn_upload_folder.setObjectName("btnGovSecondary")
+        self.btn_upload_folder.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_upload_folder.setToolTip("رفع مجلد كامل بكافة ملفاته ومجلداته الفرعية إلى السحابة")
+        self.btn_upload_folder.clicked.connect(self._upload_custom_folder)
+        toolbar.addWidget(self.btn_upload_folder)
 
         # زر إنشاء مجلد جديد (قسم إنشاء مجلدات)
         self.btn_new_folder = QPushButton("📂 مجلد جديد")
@@ -3077,23 +3088,153 @@ class FileExchangeMainWindow(QMainWindow):
             self._move_file_to_trash(file_name)
 
     def _upload_custom_file(self):
+        """إضافة مستندات متعددة من أي مكان في الحاسوب إلى مجلد المزامنة مع شريط تقدم مباشر"""
         if not self._check_department_permission(self.active_dept_name, action='write'):
             return
-        path, _ = QFileDialog.getOpenFileName(
-            self, "اختر مستنداً لإضافته إلى مجلد المشاركة الرسمي", "",
-            "ملفات Office والوثائق (*.docx *.xlsx *.accdb *.pdf *.doc *.xls);;كافة الملفات (*.*)"
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "اختر مستندات لإضافتها إلى مجلد المشاركة (يمكنك تحديد عدة ملفات معاً)", "",
+            "ملفات Office والوثائق (*.docx *.xlsx *.accdb *.pdf *.doc *.xls *.jpg *.png *.zip *.rar);;كافة الملفات (*.*)"
         )
-        if path:
-            dest = self._get_current_abs_folder() / Path(path).name
-            import shutil
-            shutil.copy2(path, dest)
-            if hasattr(self, 'sync_engine') and self.sync_engine:
-                self.sync_engine.on_local_file_saved(str(dest))
+        if not paths:
+            return
+
+        total = len(paths)
+        target_dir = self._get_current_abs_folder()
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        progress = QProgressDialog("جاري تحضير الملفات للرفع...", "إلغاء", 0, total, self)
+        progress.setWindowTitle("رفع المستندات إلى السحابة")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        progress.setStyleSheet("""
+            QProgressDialog { background-color: #ffffff; font-family: 'Segoe UI', Tahoma; border-radius: 12px; }
+            QLabel { font-size: 13px; font-weight: bold; color: #14372e; padding: 4px; }
+            QProgressBar {
+                border: 1.5px solid #d1d5db; border-radius: 8px; text-align: center;
+                background-color: #f3f4f6; height: 22px; font-weight: bold; color: #111827;
+            }
+            QProgressBar::chunk {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #10b981, stop:1 #059669);
+                border-radius: 7px;
+            }
+            QPushButton {
+                background-color: #ef4444; color: white; border-radius: 6px; padding: 6px 16px; font-weight: bold;
+            }
+        """)
+
+        success_count = 0
+        for i, path in enumerate(paths):
+            if progress.wasCanceled():
+                break
+
+            p = Path(path)
+            progress.setLabelText(f"جاري رفع ({i + 1} من {total}):\n{p.name}")
+            progress.setValue(i)
+            QApplication.processEvents()
+
+            dest = target_dir / p.name
+            try:
+                shutil.copy2(path, dest)
+                if hasattr(self, 'client') and self.client and self.client.is_configured():
+                    rel = str(dest.relative_to(self.sync_folder)).replace("\\", "/")
+                    self.client.upload_file(str(dest), file_name=p.name, rel_path=rel)
+
+                if hasattr(self, 'sync_engine') and self.sync_engine:
+                    self.sync_engine.on_local_file_saved(str(dest))
+                success_count += 1
+            except Exception as e:
+                print(f"[Upload Error]: {p.name}: {e}")
+
+            progress.setValue(i + 1)
+            QApplication.processEvents()
+
+        progress.close()
+        self._refresh_file_list()
+        QMessageBox.information(
+            self, "اكتمل الرفع بنجاح", 
+            f"✅ تم رفع {success_count} من أصل {total} مستند بنجاح ومزامنتها فورياً مع السحابة."
+        )
+
+    def _upload_custom_folder(self):
+        """إضافة مجلد كامل بمحتوياته من الحاسوب إلى السحابة مع شريط تقدم مباشر"""
+        if not self._check_department_permission(self.active_dept_name, action='write'):
+            return
+        folder_path = QFileDialog.getExistingDirectory(
+            self, "اختر مجلداً بالكامل لرفعه إلى السحابة", ""
+        )
+        if not folder_path:
+            return
+
+        src_dir = Path(folder_path)
+        target_base = self._get_current_abs_folder() / src_dir.name
+
+        all_files = [p for p in src_dir.rglob("*") if p.is_file() and not p.name.startswith(('~', '.', '$'))]
+        total = len(all_files)
+        if total == 0:
+            target_base.mkdir(parents=True, exist_ok=True)
             self._refresh_file_list()
-            QMessageBox.information(
-                self, "تمت الإضافة", 
-                f"تمت إضافة '{Path(path).name}' بنجاح وسيتم حفظه ومزامنته سحابياً فورياً."
-            )
+            QMessageBox.information(self, "مجلد فارغ", f"تم إنشاء المجلد '{src_dir.name}' بنجاح.")
+            return
+
+        progress = QProgressDialog(f"جاري نسخ ورفع مجلد '{src_dir.name}'...", "إلغاء", 0, total, self)
+        progress.setWindowTitle(f"رفع مجلد: {src_dir.name}")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        progress.setStyleSheet("""
+            QProgressDialog { background-color: #ffffff; font-family: 'Segoe UI', Tahoma; border-radius: 12px; }
+            QLabel { font-size: 13px; font-weight: bold; color: #14372e; padding: 4px; }
+            QProgressBar {
+                border: 1.5px solid #d1d5db; border-radius: 8px; text-align: center;
+                background-color: #f3f4f6; height: 22px; font-weight: bold; color: #111827;
+            }
+            QProgressBar::chunk {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #10b981, stop:1 #059669);
+                border-radius: 7px;
+            }
+            QPushButton {
+                background-color: #ef4444; color: white; border-radius: 6px; padding: 6px 16px; font-weight: bold;
+            }
+        """)
+
+        success_count = 0
+        for i, src_file in enumerate(all_files):
+            if progress.wasCanceled():
+                break
+
+            rel_sub = src_file.relative_to(src_dir)
+            dest_file = target_base / rel_sub
+            dest_file.parent.mkdir(parents=True, exist_ok=True)
+
+            progress.setLabelText(f"جاري رفع ({i + 1} من {total}):\n{rel_sub}")
+            progress.setValue(i)
+            QApplication.processEvents()
+
+            try:
+                shutil.copy2(src_file, dest_file)
+                if hasattr(self, 'client') and self.client and self.client.is_configured():
+                    rel = str(dest_file.relative_to(self.sync_folder)).replace("\\", "/")
+                    self.client.upload_file(str(dest_file), file_name=dest_file.name, rel_path=rel)
+
+                if hasattr(self, 'sync_engine') and self.sync_engine:
+                    self.sync_engine.on_local_file_saved(str(dest_file))
+                success_count += 1
+            except Exception as e:
+                print(f"[Folder Upload Error]: {src_file}: {e}")
+
+            progress.setValue(i + 1)
+            QApplication.processEvents()
+
+        progress.close()
+        self._refresh_file_list()
+        self._refresh_departments_sidebar()
+        QMessageBox.information(
+            self, "اكتمل رفع المجلد بنجاح", 
+            f"✅ تم رفع مجلد '{src_dir.name}' بالكامل ({success_count} مستند) بنجاح إلى السحابة."
+        )
 
     def _open_cloud_settings(self):
         """نافذة إعدادات الربط السحابي (للإدارة فقط)"""
