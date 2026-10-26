@@ -317,8 +317,9 @@ def main():
         from PyQt6.QtGui import QIcon
         app.setWindowIcon(QIcon(str(logo_path)))
 
-    # تأكيد وجود اختصار البرنامج على سطح المكتب بشعاره المعتمد
-    ensure_desktop_shortcut()
+    # تأكيد وجود اختصار البرنامج على سطح المكتب في خيط خلفي دون تأخير ظهور الواجهة
+    import threading
+    threading.Thread(target=ensure_desktop_shortcut, daemon=True).start()
 
     # مجلد المزامنة المحلي على جهاز المستخدم
     sync_folder = Path(os.environ.get('USERPROFILE', 'C:')) / "FileExchangeShared"
@@ -348,6 +349,7 @@ def main():
 
     window = FileExchangeMainWindow(sync_engine, cloud_client, state_mgr, sync_folder)
     window.show()
+    app.processEvents()
 
     sys.exit(app.exec())
 

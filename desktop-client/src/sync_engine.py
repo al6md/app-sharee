@@ -108,6 +108,8 @@ class SyncEngine:
                         continue
                     file_size = item.stat().st_size
                     existing = self.state_mgr.get_file_state(rel_path)
+                    if existing and existing.get('sync_status') == 'synced' and existing.get('file_size') == file_size:
+                        continue
                     file_hash = self.calculate_hash(str(item))
                     if not existing:
                         self.state_mgr.enqueue_upload(rel_path, str(item), file_hash)
@@ -127,8 +129,6 @@ class SyncEngine:
             return
         self.is_running = True
         
-        self.scan_initial_local_files()
-
         handler = LocalFolderWatcher(self)
         self.observer.schedule(handler, str(self.sync_folder), recursive=True)
         self.observer.start()
@@ -400,7 +400,10 @@ class SyncEngine:
 
     def _background_sync_loop(self):
         while self.is_running:
-            self.scan_initial_local_files()
-            self.process_upload_queue()
-            self.pull_remote_changes()
-            time.sleep(4)
+            try:
+                self.scan_initial_local_files()
+                self.process_upload_queue()
+                self.pull_remote_changes()
+            except Exception as e:
+                print(f'[Background Sync Error]: {e}')
+            time.sleep(12)

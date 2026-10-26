@@ -398,10 +398,16 @@ class FileExchangeMainWindow(QMainWindow):
         self._setup_tray()
         self._refresh_file_list()
 
-        # فحص دوري هادئ للتحديثات
+        # فحص دوري هادئ للتحديثات المحلية
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._refresh_file_list)
         self.timer.start(5000)
+
+        # فحص دوري للأقسام السحابية في الخلفية كل 25 ثانية دون أي تأثير على الواجهة
+        self.dept_cloud_timer = QTimer(self)
+        self.dept_cloud_timer.timeout.connect(self.trigger_async_departments_sync)
+        self.dept_cloud_timer.start(25000)
+        QTimer.singleShot(1500, self.trigger_async_departments_sync)
 
     def _setup_ui(self):
         central = QWidget()
@@ -1025,50 +1031,72 @@ class FileExchangeMainWindow(QMainWindow):
         return (self.sync_folder / self.current_subpath).resolve()
 
     def _load_departments(self):
-        """تحميل قائمة الأقسام المعتمدة من السحابة والقرص الفعلي بدون أي أقسام وهمية أو افتراضية"""
-        self.departments_list = []
-        self._sync_departments_from_remote_and_disk(force=True)
-
-    def _sync_departments_from_remote_and_disk(self, force=False):
-        """مزامنة الأقسام والمجلدات الرسمية من لوحة تحكم الأدمن بالسحابة فورياً وبدون أي أقسام ثابتة وهمية"""
-        import time
-        now = time.time()
-        should_check_cloud = force or (now - getattr(self, '_last_dept_cloud_check', 0) > 3)
-        has_changes = False
-
-        # 1. جلب الأقسام من سحابة Supabase (shared_folders)
-        if should_check_cloud and hasattr(self, 'client') and self.client and self.client.is_configured():
-            self._last_dept_cloud_check = now
+        """تحميل قائمة الأقسام المعتمدة من القرص وقاعدة البيانات أولاً فورياً"""
+        saved = self.state_mgr.get_departments()
+        if saved:
+            self.departments_list = saved
+        else:
+            local_names = []
             try:
-                if hasattr(self.client, 'list_folders'):
-                    cloud_folders = self.client.list_folders() or []
-                    cloud_names = []
-                    for cf in cloud_folders:
-                        cf_name = str(cf.get('name', '')).strip()
-                        if cf_name and not cf_name.startswith('.'):
-                            cloud_names.append(cf_name)
-                            dept_dir = (self.sync_folder / cf_name).resolve()
-                            dept_dir.mkdir(parents=True, exist_ok=True)
-
-                    current_names = [d['name'] for d in self.departments_list]
-                    if set(cloud_names) != set(current_names) or len(cloud_names) != len(current_names):
-                        self.departments_list = [{"name": name, "icon": "📁"} for name in cloud_names]
-                        has_changes = True
-            except Exception as e:
-                print(f"[Supabase dept sync error]: {e}")
-
-        # 2. في حالة عدم وجود اتصال سحابي، فحص المجلدات الفعلية الموجودة على القرص
-        if not self.departments_list:
-            try:
-                local_names = []
                 for item in self.sync_folder.iterdir():
                     if item.is_dir() and not item.name.startswith(".") and item.name != ".trash":
                         local_names.append(item.name)
-                if local_names:
-                    self.departments_list = [{"name": name, "icon": "📁"} for name in sorted(local_names)]
-                    has_changes = True
             except Exception:
                 pass
+            if local_names:
+                self.departments_list = [{"name": name, "icon": "📁"} for name in sorted(local_names)]
+            else:
+                self.departments_list = [
+                    {"name": "السجل التجاري", "icon": "📁"},
+                    {"name": "أمانة السر والإدارة العامة", "icon": "📁"},
+                    {"name": "الاشتراكات", "icon": "📁"},
+                    {"name": "القسم العام", "icon": "📁"}
+                ]
+            self.state_mgr.set_departments(self.departments_list)
+
+    def trigger_async_departments_sync(self):
+        """بدء مزامنة الأقسام السحابية في خيط خلفي هادئ لمنع تجميد الواجهة"""
+        import threading
+        threading.Thread(target=self._async_sync_departments, daemon=True).start()
+
+    def _async_sync_departments(self):
+        """مزامنة الأقسام السحابية بالخلفية بأمان تام وبدون أي قفل للواجهة"""
+        if not hasattr(self, 'client') or not self.client or not self.client.is_configured():
+            return
+        try:
+            cloud_folders = self.client.list_folders() or []
+            cloud_names = []
+            for cf in cloud_folders:
+                cf_name = str(cf.get('name', '')).strip()
+                if cf_name and not cf_name.startswith('.'):
+                    cloud_names.append(cf_name)
+                    dept_dir = (self.sync_folder / cf_name).resolve()
+                    dept_dir.mkdir(parents=True, exist_ok=True)
+
+            if cloud_names:
+                current_names = [d['name'] for d in self.departments_list]
+                if set(cloud_names) != set(current_names) or len(cloud_names) != len(current_names):
+                    self.departments_list = [{"name": name, "icon": "📁"} for name in cloud_names]
+                    self.state_mgr.set_departments(self.departments_list)
+                    QTimer.singleShot(0, lambda: self._refresh_departments_sidebar(force_rebuild=True) if hasattr(self, 'dept_list') else None)
+        except Exception as e:
+            print(f"[Async dept sync error]: {e}")
+
+    def _sync_departments_from_remote_and_disk(self, force=False):
+        """مزامنة سريعة من المجلدات المحلية على القرص دون إجراء أي طلبات شبكة على الخيط الرئيسي"""
+        has_changes = False
+        try:
+            local_names = []
+            for item in self.sync_folder.iterdir():
+                if item.is_dir() and not item.name.startswith(".") and item.name != ".trash":
+                    local_names.append(item.name)
+            current_names = [d['name'] for d in self.departments_list]
+            for l_name in local_names:
+                if l_name not in current_names:
+                    self.departments_list.append({"name": l_name, "icon": "📁"})
+                    has_changes = True
+        except Exception:
+            pass
 
         if has_changes:
             self.state_mgr.set_departments(self.departments_list)
