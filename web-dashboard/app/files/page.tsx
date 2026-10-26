@@ -1281,39 +1281,44 @@ export default function FilesPage() {
           </div>
 
           {/* نمط الجدول للشاشات الكبيرة (Desktop Table View) */}
-          <div className="hidden lg:block bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-            <table className="w-full text-right text-sm">
+          <div className="hidden lg:block bg-white rounded-2xl border border-slate-200 shadow-sm overflow-x-auto relative">
+            <table className="w-full text-right text-sm min-w-[950px]">
               <thead className="bg-[#f8fafc] text-slate-600 text-xs font-bold border-b border-slate-200">
                 <tr>
-                  <th className="p-4">اسم المستند</th>
-                  <th className="p-4">القسم / المجلد</th>
-                  <th className="p-4">النوع</th>
-                  <th className="p-4">الحجم</th>
-                  <th className="p-4">تاريخ الاعتماد</th>
-                  <th className="p-4">المصدر</th>
-                  <th className="p-4 text-center">الإجراءات</th>
+                  <th className="p-4 whitespace-nowrap min-w-[200px]">اسم المستند</th>
+                  <th className="p-4 whitespace-nowrap">القسم / المجلد</th>
+                  <th className="p-4 whitespace-nowrap">النوع</th>
+                  <th className="p-4 whitespace-nowrap">الحجم</th>
+                  <th className="p-4 whitespace-nowrap">تاريخ الاعتماد</th>
+                  <th className="p-4 whitespace-nowrap">المصدر</th>
+                  <th className="p-4 text-center sticky left-0 bg-[#f8fafc] z-20 shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.06)] min-w-[270px] whitespace-nowrap">الإجراءات</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {displayedList.map((file) => (
-                  <tr key={file.id} className="hover:bg-slate-50/80 transition">
-                    <td className="p-4">
-                      <div className="flex items-center gap-3">
-                        {getFileIcon(file.type)}
-                        <span className="font-bold text-slate-800 text-xs">{file.name}</span>
+                  <tr key={file.id} className="group hover:bg-slate-50/80 transition">
+                    <td className="p-4 max-w-[260px] xl:max-w-[360px]">
+                      <div className="flex items-center gap-2.5">
+                        <span className="shrink-0">{getFileIcon(file.type)}</span>
+                        <span 
+                          className="font-bold text-slate-800 text-xs truncate block"
+                          title={file.name}
+                        >
+                          {file.name}
+                        </span>
                       </div>
                     </td>
-                    <td className="p-4 text-xs text-slate-600">{file.folder}</td>
-                    <td className="p-4">{getFileBadge(file.type)}</td>
-                    <td className="p-4 text-xs font-mono text-slate-600">{file.size}</td>
-                    <td className="p-4 text-xs text-slate-500 font-mono">{file.lastModifiedAt}</td>
-                    <td className="p-4 text-xs">
+                    <td className="p-4 text-xs text-slate-600 whitespace-nowrap">{file.folder}</td>
+                    <td className="p-4 whitespace-nowrap">{getFileBadge(file.type)}</td>
+                    <td className="p-4 text-xs font-mono text-slate-600 whitespace-nowrap">{file.size}</td>
+                    <td className="p-4 text-xs text-slate-500 font-mono whitespace-nowrap">{file.lastModifiedAt}</td>
+                    <td className="p-4 text-xs whitespace-nowrap">
                       <span className="bg-slate-100 text-slate-700 font-bold px-2 py-0.5 rounded text-[10px]">
                         {file.lastModifiedBy}
                       </span>
                     </td>
-                    <td className="p-4 text-center">
-                      <div className="inline-flex items-center gap-1.5">
+                    <td className="p-4 text-center sticky left-0 bg-white group-hover:bg-slate-50 transition z-10 shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.06)] min-w-[270px] whitespace-nowrap">
+                      <div className="inline-flex items-center gap-1.5 justify-center">
                         {/* زر الفتح بالبرنامج الأصلي (Word / Excel / Access) */}
                         <button
                           onClick={() => handleOpenFile(file)}

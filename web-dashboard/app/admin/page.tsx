@@ -667,8 +667,8 @@ export default function AdminControlPage() {
             </span>
           </div>
 
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-            <table className="w-full text-right text-sm">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-x-auto">
+            <table className="w-full text-right text-sm min-w-[750px]">
               <thead className="bg-slate-50 text-slate-600 text-xs font-black border-b border-slate-200">
                 <tr>
                   <th className="p-4">القسم الإداري</th>
@@ -796,30 +796,30 @@ export default function AdminControlPage() {
             </div>
           </div>
 
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-            <table className="w-full text-right text-sm">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-x-auto relative">
+            <table className="w-full text-right text-sm min-w-[850px]">
               <thead className="bg-slate-50 text-slate-600 text-xs font-black border-b border-slate-200">
                 <tr>
-                  <th className="p-4">اسم المستند</th>
-                  <th className="p-4">القسم</th>
-                  <th className="p-4">الإصدار</th>
-                  <th className="p-4">الحجم</th>
-                  <th className="p-4">آخر تعديل بواسطة</th>
-                  <th className="p-4">الحالة</th>
-                  <th className="p-4 text-center">الإجراءات الإدارية</th>
+                  <th className="p-4 whitespace-nowrap min-w-[200px]">اسم المستند</th>
+                  <th className="p-4 whitespace-nowrap">القسم</th>
+                  <th className="p-4 whitespace-nowrap">الإصدار</th>
+                  <th className="p-4 whitespace-nowrap">الحجم</th>
+                  <th className="p-4 whitespace-nowrap">آخر تعديل بواسطة</th>
+                  <th className="p-4 whitespace-nowrap">الحالة</th>
+                  <th className="p-4 text-center sticky left-0 bg-slate-50 z-20 shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.06)] min-w-[130px] whitespace-nowrap">الإجراءات الإدارية</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filteredFiles.map((file) => (
-                  <tr key={file.id} className="hover:bg-slate-50/70 transition">
-                    <td className="p-4">
-                      <span className="font-bold text-slate-800 text-xs">{file.name}</span>
+                  <tr key={file.id} className="group hover:bg-slate-50/70 transition">
+                    <td className="p-4 max-w-[240px] xl:max-w-[340px]">
+                      <span className="font-bold text-slate-800 text-xs truncate block" title={file.name}>{file.name}</span>
                     </td>
-                    <td className="p-4 text-xs text-slate-600">{file.folder}</td>
-                    <td className="p-4 text-xs font-mono font-bold text-emerald-800">V{file.version}</td>
-                    <td className="p-4 text-xs font-mono text-slate-500">{file.size}</td>
-                    <td className="p-4 text-xs text-slate-500">{file.lastModifiedBy}</td>
-                    <td className="p-4">
+                    <td className="p-4 text-xs text-slate-600 whitespace-nowrap">{file.folder}</td>
+                    <td className="p-4 text-xs font-mono font-bold text-emerald-800 whitespace-nowrap">V{file.version}</td>
+                    <td className="p-4 text-xs font-mono text-slate-500 whitespace-nowrap">{file.size}</td>
+                    <td className="p-4 text-xs text-slate-500 whitespace-nowrap">{file.lastModifiedBy}</td>
+                    <td className="p-4 whitespace-nowrap">
                       {file.isDeleted ? (
                         <span className="text-[10px] bg-rose-50 text-rose-700 font-bold px-2 py-0.5 rounded border border-rose-200">
                           محذوف مؤقتاً
@@ -830,7 +830,7 @@ export default function AdminControlPage() {
                         </span>
                       )}
                     </td>
-                    <td className="p-4 text-center">
+                    <td className="p-4 text-center sticky left-0 bg-white group-hover:bg-slate-50 transition z-10 shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.06)] min-w-[130px] whitespace-nowrap">
                       <div className="inline-flex items-center gap-1.5">
                         <button
                           onClick={() => {
