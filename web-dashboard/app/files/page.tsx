@@ -33,7 +33,7 @@ import {
   CheckCircle2,
   Play
 } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
+// Google Drive Connected
 
 interface FileItem {
   id: string;
@@ -47,6 +47,8 @@ interface FileItem {
   lastModifiedAt: string;
   storagePath: string;
   isDeleted: boolean;
+  previewUrl?: string;
+  downloadUrl?: string;
 }
 
 const MIME_MAP: Record<string, string> = {
@@ -91,6 +93,7 @@ export default function FilesPage() {
   const [filterType, setFilterType] = useState<string>('ALL');
 
   const [files, setFiles] = useState<FileItem[]>([]);
+  const [folderMap, setFolderMap] = useState<Record<string, string>>({});
   const [folders, setFolders] = useState<string[]>([]);
   const [departments, setDepartments] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -165,80 +168,38 @@ export default function FilesPage() {
     try {
       setLoading(true);
 
-      // 1. جلب المجلدات من جدول shared_folders
-      const { data: dbFolders } = await supabase
-        .from('shared_folders')
-        .select('name')
-        .order('name');
-
-      const loadedFolders: string[] = [];
-      if (dbFolders && dbFolders.length > 0) {
-        dbFolders.forEach(f => {
-          if (f.name && !loadedFolders.includes(f.name)) {
-            loadedFolders.push(f.name);
-          }
+      const res = await fetch('/api/drive/files');
+      const data = await res.json();
+      if (data.success) {
+        const loadedFolders: string[] = (data.folders || []).map((f: any) => f.name);
+        const fMap: Record<string, string> = {};
+        (data.folders || []).forEach((f: any) => {
+          if (f.name && f.id) fMap[f.name] = f.id;
         });
-      }
-      setFolders(loadedFolders);
+        setFolderMap(fMap);
+        setFolders(loadedFolders);
+        setDepartments(loadedFolders);
+        setSelectedDept(prev => (prev === '__ALL__' || loadedFolders.includes(prev)) ? prev : '__ALL__');
 
-      // الأقسام المعتمدة هي فقط المنشأة في السحابة
-      setDepartments(loadedFolders);
-      setSelectedDept(prev => (prev === '__ALL__' || loadedFolders.includes(prev)) ? prev : '__ALL__');
-
-      // 2. جلب كافة الملفات من السحابة (النشطة والمحذوفة)
-      const { data: dbFiles } = await supabase
-        .from('files')
-        .select('*')
-        .order('updated_at', { ascending: false });
-
-      if (dbFiles) {
-        const validDbFiles = dbFiles.filter(f => {
-          const fn = f.file_name || '';
-          // استبعاد أي سجلات base64 مشوهة لضمان عرض الأسماء العربية الأصلية فقط
-          return !(fn.length > 35 && /\.(docx|xlsx|pdf|accdb)$/i.test(fn) && !/[^\x00-\x7F]/.test(fn) && (fn.startsWith('2Y') || fn.startsWith('VGh') || fn.startsWith('TG')));
-        });
-        const mapped: FileItem[] = validDbFiles.map(f => {
-          const fileName = f.file_name || f.file_path || 'مستند';
-          let folderName = 'كافة الملفات';
-          if (f.file_path && f.file_path.includes('/')) {
-            folderName = f.file_path.split('/')[0];
-          }
-
-          return {
-            id: f.id || fileName,
-            name: fileName,
-            folder: folderName,
-            type: getFileType(fileName),
-            size: formatSize(f.file_size || 0),
-            rawSize: f.file_size || 0,
-            version: f.version || f.current_version || 1,
-            lastModifiedBy: f.last_modified_by_name || 'تطبيق الويندوز',
-            lastModifiedAt: f.updated_at ? new Date(f.updated_at).toLocaleDateString('ar-IQ', {
-              month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
-            }) : 'الآن',
-            storagePath: f.storage_path || `shared/${fileName}`,
-            isDeleted: Boolean(f.is_deleted)
-          };
-        });
+        const mapped: FileItem[] = (data.files || []).map((f: any) => ({
+          id: f.id,
+          name: f.name,
+          folder: f.folder || 'القسم العام',
+          type: getFileType(f.name),
+          size: formatSize(f.size || 0),
+          rawSize: f.size || 0,
+          version: 1,
+          lastModifiedBy: 'سحابة Google Drive',
+          lastModifiedAt: f.modifiedTime ? new Date(f.modifiedTime).toLocaleDateString('ar-IQ', {
+            month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+          }) : 'الآن',
+          storagePath: f.id,
+          isDeleted: Boolean(f.isDeleted),
+          previewUrl: f.previewUrl,
+          downloadUrl: f.downloadUrl,
+        }));
         setFiles(mapped);
       }
-
-      // 3. جلب مصفوفة الصلاحيات المعتمدة من الأدمن
-      const { data: dbPerms } = await supabase.from('folder_permissions').select('*');
-      const { data: dbFoldersWithId } = await supabase.from('shared_folders').select('id, name');
-      const idToName: Record<string, string> = {};
-      (dbFoldersWithId || []).forEach(f => {
-        if (f.id && f.name) idToName[f.id] = f.name;
-      });
-      const pMap: Record<string, { canWrite: boolean; canDelete: boolean }> = {};
-      (dbPerms || []).forEach(p => {
-        const folderName = idToName[p.folder_id] || p.folder_id;
-        pMap[folderName] = {
-          canWrite: p.can_write !== false,
-          canDelete: p.can_delete !== false,
-        };
-      });
-      setPermissionsMap(pMap);
     } catch (err) {
       console.error('Error fetching files:', err);
     } finally {
@@ -248,24 +209,10 @@ export default function FilesPage() {
 
   useEffect(() => {
     loadData();
-
-    // الاشتراك في التغييرات اللحظية (Real-time)
-    const channel = supabase
-      .channel('mobile_files_realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'files' }, () => {
-        loadData();
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'shared_folders' }, () => {
-        loadData();
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'folder_permissions' }, () => {
-        loadData();
-      })
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    const interval = setInterval(() => {
+      loadData();
+    }, 10000);
+    return () => clearInterval(interval);
   }, []);
 
   // تحديث محتوى مستند موجود بنسخة معدلة من الهاتف أو الكمبيوتر ومشاركتها فوراً
@@ -274,88 +221,46 @@ export default function FilesPage() {
     if (!selectedFile || !fileToUpdate) return;
 
     const targetFile = fileToUpdate;
-    if (!canWriteFolder(targetFile.folder)) {
-      alert(`⚠️ عذراً، قسم "${targetFile.folder}" مخصص للقراءة فقط (Read-Only) بواسطة مسؤول النظام، لا يمكن حفظ تعديلات.`);
-      if (event.target) event.target.value = '';
-      return;
-    }
 
     try {
       setActionLoading(true);
       setToastMessage({
-        text: `⏳ جاري رفع النسخة المعدلة لـ "${targetFile.name}" وحفظها في السحابة...`,
+        text: `⏳ جاري رفع النسخة المعدلة لـ "${targetFile.name}" وحفظها في Google Drive...`,
         type: 'info'
       });
 
-      // 1. تحديد مسار التخزين السحابي الأصلي للمستند لضمان استبداله مباشرة دون فقدان المسار
-      const storageDest = targetFile.storagePath || getSafeStorageKey(targetFile.name);
-      const cleanDest = storageDest.startsWith('/') ? storageDest.slice(1) : storageDest;
-
-      // 2. رفع محتوى الملف المعدل إلى وعاء التخزين
-      const { error: uploadErr } = await supabase.storage
-        .from('file-exchange-storage')
-        .upload(cleanDest, selectedFile, { upsert: true });
-
-      if (uploadErr) {
-        throw new Error(`فشل رفع النسخة المعدلة: ${uploadErr.message}`);
+      const folderId = folderMap[targetFile.folder] || '';
+      const formData = new FormData();
+      formData.append('file', selectedFile, targetFile.name);
+      if (folderId) {
+        formData.append('folderId', folderId);
       }
 
-      // 3. تحديث جدول files في قاعدة البيانات (حجم الملف، الإصدار الجديد، تاريخ التعديل)
-      const newVersion = (targetFile.version || 1) + 1;
-      const nowIso = new Date().toISOString();
-
-      const updateData = {
-        file_size: selectedFile.size,
-        current_version: newVersion,
-        last_modified_by_name: 'تعديل عبر الجوال',
-        is_deleted: false,
-        updated_at: nowIso
-      };
-
-      const { error: dbErr } = await supabase
-        .from('files')
-        .update(updateData)
-        .eq('id', targetFile.id);
-
-      if (dbErr) {
-        // محاولة بديلة باسم الملف
-        await supabase
-          .from('files')
-          .update(updateData)
-          .eq('file_name', targetFile.name);
+      const res = await fetch('/api/drive/files', {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json();
+      if (!data.success) {
+        throw new Error(data.error || 'فشل تحديث المستند في Google Drive');
       }
 
-      // 4. توثيق العملية في سجل التدقيق إن وجد
-      try {
-        await supabase.from('audit_logs').insert({
-          action: 'UPLOAD',
-          entity_type: 'FILE',
-          entity_id: targetFile.id,
-          entity_name: targetFile.name,
-          details: {
-            source: 'mobile_update',
-            new_size: selectedFile.size,
-            version: newVersion,
-            uploaded_name: selectedFile.name
-          }
-        });
-      } catch {}
-
-      // 5. إغلاق النوافذ المنبثقة وتحديث القائمة
       setSelectedMobileFile(null);
       setFileToUpdate(null);
       await loadData();
 
       setToastMessage({
-        text: `🎉 تم حفظ التعديلات بنجاح! تم اعتماد الإصدار (V${newVersion}) ومزامنته فوراً مع كافة الأجهزة.`,
+        text: `🎉 تم حفظ التعديلات ومزامنتها فوراً مع كافة الأجهزة!`,
         type: 'success'
       });
 
       alert(
-        `✅ تم حفظ التعديلات بنجاح في النظام!\n\n` +
-        `📄 المستند: ${targetFile.name}\n` +
-        `🔢 الإصدار الجديد: V${newVersion}\n` +
-        `👥 تمت مزامنة التعديلات فوراً مع كافة أجهزة الغرفة والمستخدمين.`
+        `✅ تم حفظ التعديلات بنجاح في Google Drive!
+
+` +
+        `📄 المستند: ${targetFile.name}
+` +
+        `👥 تمت مزامنة التعديلات فوراً مع تطبيق الحاسوب وكافة المستخدمين.`
       );
     } catch (err: any) {
       console.error('Error updating file:', err);
@@ -371,13 +276,6 @@ export default function FilesPage() {
     const file = event.target.files?.[0];
     if (!file) return;
 
-    const activeUploadDept = selectedDept !== '__ALL__' ? selectedDept : currentFolder;
-    if (activeUploadDept && !canWriteFolder(activeUploadDept)) {
-      alert(`⚠️ عذراً، قسم "${activeUploadDept}" مخصص للقراءة فقط (Read-Only) بواسطة مسؤول النظام، لا يمكن رفع مستندات جديدة.`);
-      if (event.target) event.target.value = '';
-      return;
-    }
-
     try {
       setActionLoading(true);
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -387,83 +285,26 @@ export default function FilesPage() {
         fileName = `كتاب_رسمي_مصور_${timestamp}.jpg`;
       }
 
-      // فحص ذكي: هل هذا الملف نسخة معدلة من مستند موجود مسبقاً في السحابة؟
-      const baseCandidateName = fileName.replace(/\s*\(\d+\)\s*(?=\.[^.]+$)/, '');
-      const existingDoc = files.find(f => 
-        !f.isDeleted && (
-          cleanFileNameString(f.name).toLowerCase() === fileName.toLowerCase() ||
-          cleanFileNameString(f.name).toLowerCase() === baseCandidateName.toLowerCase()
-        )
-      );
+      const activeUploadDept = selectedDept !== '__ALL__' ? selectedDept : (currentFolder || 'القسم العام');
+      const targetFolderId = folderMap[activeUploadDept] || '';
 
-      if (existingDoc && !isCameraCapture) {
-        const confirmUpdate = confirm(
-          `📌 تنبيه ذكي:\nالمستند "${existingDoc.name}" موجود مسبقاً في السحابة.\n\n` +
-          `هل الملف الذي ترفعه هو النسخة المعدلة وتريد حفظ التعديلات عليه ومشاركتها مع الجميع؟\n\n` +
-          `• اضغط [موافق] لتحديث المستند الأصلي فوراً إلى إصدار جديد ومشاركته مع الأجهزة.\n` +
-          `• اضغط [إلغاء] لرفعه كمستند جديد منفصل.`
-        );
-
-        if (confirmUpdate) {
-          const storageDest = existingDoc.storagePath || getSafeStorageKey(existingDoc.name);
-          const cleanDest = storageDest.startsWith('/') ? storageDest.slice(1) : storageDest;
-
-          const { error: upErr } = await supabase.storage
-            .from('file-exchange-storage')
-            .upload(cleanDest, file, { upsert: true });
-
-          if (upErr) throw new Error(`فشل رفع النسخة المعدلة: ${upErr.message}`);
-
-          const newVersion = (existingDoc.version || 1) + 1;
-          await supabase
-            .from('files')
-            .update({
-              file_size: file.size,
-              current_version: newVersion,
-              last_modified_by_name: 'لوحة الويب (نسخة محدثة)',
-              is_deleted: false,
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', existingDoc.id);
-
-          await loadData();
-          alert(`✅ تم تحديث المستند "${existingDoc.name}" إلى الإصدار (V${newVersion}) بنجاح ومزامنته مع الجميع.`);
-          return;
-        }
+      const formData = new FormData();
+      formData.append('file', file, fileName);
+      if (targetFolderId) {
+        formData.append('folderId', targetFolderId);
       }
 
-      // تحديد مسار المجلد النشط وتوليد المسار الآمن للتخزين
-      const isSpecificDept = selectedDept !== '__ALL__' && selectedDept !== 'كافة الملفات';
-      const targetDept = isSpecificDept ? selectedDept : '';
-      const filePath = targetDept ? `${targetDept}/${fileName}` : fileName;
-      const safeStoragePath = getSafeStorageKey(fileName);
-
-      // 1. الرفع الفعلي إلى وعاء التخزين السحابي بالمسار الآمن
-      const { error: uploadErr } = await supabase.storage
-        .from('file-exchange-storage')
-        .upload(safeStoragePath, file, { upsert: true });
-
-      if (uploadErr) {
-        throw new Error(`فشل رفع محتوى الملف إلى التخزين السحابي: ${uploadErr.message}`);
-      }
-
-      // 2. التسجيل في جدول files
-      const { error: dbErr } = await supabase.from('files').upsert({
-        file_name: fileName,
-        file_path: filePath,
-        storage_path: safeStoragePath,
-        file_size: file.size,
-        last_modified_by_name: isCameraCapture ? 'كاميرا الجوال' : 'لوحة الويب',
-        is_deleted: false,
-        updated_at: new Date().toISOString()
-      }, { onConflict: 'file_name' });
-
-      if (dbErr) {
-        throw new Error(`فشل حفظ بيانات الملف في قاعدة البيانات: ${dbErr.message}`);
+      const res = await fetch('/api/drive/files', {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json();
+      if (!data.success) {
+        throw new Error(data.error || 'فشل الرفع إلى Google Drive');
       }
 
       await loadData();
-      alert(`✅ تم رفع المستند "${fileName}" بنجاح إلى سحابة الغرفة وسيبدأ المزامنة فوراً.`);
+      alert(`✅ تم رفع المستند "${fileName}" بنجاح إلى سحابة Google Drive وستتم مزامنته مع تطبيق الحاسوب فوراً.`);
     } catch (e: any) {
       alert(`تعذر رفع المستند: ${e.message || e}`);
     } finally {
@@ -471,21 +312,14 @@ export default function FilesPage() {
       if (event.target) event.target.value = '';
     }
   };
-
   // نقل الملف لسلة المحذوفات
   const handleMoveToTrash = async (file: FileItem) => {
-    if (!canDeleteFolder(file.folder)) {
-      alert(`⚠️ عذراً، تم تقييد صلاحية الحذف في قسم "${file.folder}" بواسطة مسؤول النظام (الأدمن).`);
-      return;
-    }
     if (!confirm(`هل أنت متأكد من نقل المستند "${file.name}" إلى سلة المحذوفات؟`)) return;
     try {
       setActionLoading(true);
-      await supabase
-        .from('files')
-        .update({ is_deleted: true, updated_at: new Date().toISOString() })
-        .eq('id', file.id);
-
+      const res = await fetch(`/api/drive/files?id=${file.id}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
       await loadData();
     } catch (e: any) {
       alert(`تعذر نقل الملف: ${e.message || e}`);
@@ -498,11 +332,13 @@ export default function FilesPage() {
   const handleRestoreFile = async (file: FileItem) => {
     try {
       setActionLoading(true);
-      await supabase
-        .from('files')
-        .update({ is_deleted: false, updated_at: new Date().toISOString() })
-        .eq('id', file.id);
-
+      const res = await fetch('/api/drive/files', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'RESTORE', id: file.id }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
       await loadData();
       alert(`♻️ تم استرجاع المستند "${file.name}" بنجاح.`);
     } catch (e: any) {
@@ -520,12 +356,13 @@ export default function FilesPage() {
 
     try {
       setActionLoading(true);
-      const ids = trashItems.map(f => f.id);
-      await supabase
-        .from('files')
-        .update({ is_deleted: false, updated_at: new Date().toISOString() })
-        .in('id', ids);
-
+      for (const item of trashItems) {
+        await fetch('/api/drive/files', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'RESTORE', id: item.id }),
+        });
+      }
       await loadData();
       alert(`✅ تم استرجاع كافة المحذوفات بنجاح.`);
     } catch (e: any) {
@@ -537,16 +374,14 @@ export default function FilesPage() {
 
   // حذف نهائي للمستند
   const handlePermanentDelete = async (file: FileItem) => {
-    if (!canDeleteFolder(file.folder)) {
-      alert(`⚠️ عذراً، تم تقييد صلاحية الحذف في قسم "${file.folder}" بواسطة مسؤول النظام (الأدمن).`);
-      return;
-    }
-    if (!confirm(`⚠️ تحذير: سيتم حذف المستند "${file.name}" نهائياً من السحابة ولا يمكن استرجاعه. هل تود المتابعة؟`)) return;
+    if (!confirm(`⚠️ تحذير: سيتم حذف المستند "${file.name}" نهائياً من Google Drive ولا يمكن استرجاعه. هل تود المتابعة؟`)) return;
     try {
       setActionLoading(true);
-      await supabase.from('files').delete().eq('id', file.id);
-      await supabase.storage.from('file-exchange-storage').remove([file.storagePath, `shared/${file.name}`]);
+      const res = await fetch(`/api/drive/files?id=${file.id}&permanent=true`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
       setFiles(prev => prev.filter(f => f.id !== file.id));
+      await loadData();
     } catch (e: any) {
       alert(`فشل الحذف النهائي: ${e.message || e}`);
     } finally {
@@ -562,8 +397,9 @@ export default function FilesPage() {
 
     try {
       setActionLoading(true);
-      const ids = trashItems.map(f => f.id);
-      await supabase.from('files').delete().in('id', ids);
+      for (const item of trashItems) {
+        await fetch(`/api/drive/files?id=${item.id}&permanent=true`, { method: 'DELETE' });
+      }
       await loadData();
       alert('🧹 تم إفراغ سلة المحذوفات بنجاح.');
     } catch (e: any) {
@@ -573,21 +409,11 @@ export default function FilesPage() {
     }
   };
 
-  // استخراج الرابط الموقع الآمن للمستند (Signed URL) لضمان إمكانية تنزيله وفتحه بنجاح
+  // رابط تنزيل مباشر
   const getFileDirectUrl = async (file: FileItem): Promise<string> => {
-    try {
-      const cleanPath = file.storagePath.startsWith('/') ? file.storagePath.slice(1) : file.storagePath;
-      const { data, error } = await supabase.storage
-        .from('file-exchange-storage')
-        .createSignedUrl(cleanPath, 3600);
-      if (data?.signedUrl) {
-        return data.signedUrl;
-      }
-    } catch (e) {
-      console.error('Signed URL generation failed:', e);
-    }
-    const baseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://bjcillpivgcntzbwmpsm.supabase.co';
-    return `${baseUrl}/storage/v1/object/public/file-exchange-storage/${encodeURIComponent(file.storagePath)}`;
+    if (file.downloadUrl) return file.downloadUrl;
+    if (file.previewUrl) return file.previewUrl;
+    return `https://drive.google.com/uc?id=${file.id}&export=download`;
   };
 
   // 1. فتح المستند مباشرة في برنامج Office الأصلي (سواء على الهاتف أو الحاسوب)
@@ -787,27 +613,19 @@ export default function FilesPage() {
   };
 
   // 3. تنزيل نسخة عادية من الملف بالاسم العربي الصريح
-  const handleDownloadFile = (file: FileItem) => {
+  const handleDownloadFile = async (file: FileItem) => {
     try {
-      const downloadUrl = `/api/storage/download?path=${encodeURIComponent(file.storagePath)}&name=${encodeURIComponent(file.name)}`;
-      const a = document.createElement('a');
-      a.href = downloadUrl;
-      a.download = file.name;
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => {
-        try { document.body.removeChild(a); } catch {}
-      }, 2000);
+      const downloadUrl = file.downloadUrl || (await getFileDirectUrl(file));
+      window.open(downloadUrl, '_blank');
 
       setToastMessage({
-        text: `📥 جاري تنزيل "${file.name}" بالاسم العربي الأصلي...`,
+        text: `📥 جاري تنزيل "${file.name}"...`,
         type: 'info'
       });
     } catch (e: any) {
       alert(`فشل التحميل: ${e.message || e}`);
     }
   };
-
   // 4. إظهار الملف داخل مجلد الويندوز (Reveal in Explorer)
   const handleRevealInExplorer = async (file: FileItem) => {
     try {
@@ -832,11 +650,18 @@ export default function FilesPage() {
     if (!fName) return;
     try {
       setActionLoading(true);
-      await supabase.from('shared_folders').insert({ name: fName });
+      const res = await fetch('/api/drive/files', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'CREATE_FOLDER', name: fName }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
+
       setShowNewFolderModal(false);
       setNewFolderName('');
       await loadData();
-      alert(`📁 تم إنشاء المجلد "${fName}" في السحابة بنجاح.`);
+      alert(`📁 تم إنشاء المجلد "${fName}" في Google Drive بنجاح.`);
     } catch (e: any) {
       alert(`تعذر إنشاء المجلد: ${e.message || e}`);
     } finally {
@@ -863,26 +688,24 @@ export default function FilesPage() {
 
     try {
       setActionLoading(true);
-      await supabase
-        .from('files')
-        .update({ 
-          file_name: newName,
-          file_path: newName,
-          updated_at: new Date().toISOString() 
-        })
-        .eq('id', itemToRename.id);
+      const res = await fetch('/api/drive/files', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'RENAME', id: itemToRename.id, name: newName }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
 
       setShowRenameModal(false);
       setItemToRename(null);
       await loadData();
-      alert(`✏️ تم تعديل الاسم إلى "${newName}" بنجاح في السحابة.`);
+      alert(`✏️ تم تعديل الاسم إلى "${newName}" بنجاح في Google Drive.`);
     } catch (e: any) {
       alert(`تعذر تعديل الاسم: ${e.message || e}`);
     } finally {
       setActionLoading(false);
     }
   };
-
   // تصفية الملفات حسب التبويب (نشط / محذوف)، القسم، البحث، والنوع
   const activeFiles = files.filter(f => !f.isDeleted);
   const trashFiles = files.filter(f => f.isDeleted);

@@ -15,6 +15,7 @@ from PyQt6.QtCore import Qt
 
 from supabase_client import SupabaseClient
 from r2_client import CloudflareR2Client
+from gdrive_client import GoogleDriveClient
 from offline_queue import LocalStateManager
 from sync_engine import SyncEngine
 from gui import FileExchangeMainWindow
@@ -249,22 +250,12 @@ def main():
             # 3. إذا لم يكن موجوداً على القرص، تنزيله فوراً من السحابة
             if not target_cand:
                 try:
-                    state_mgr = LocalStateManager()
-                    saved_url = state_mgr.get_setting("supabase_url", "https://bjcillpivgcntzbwmpsm.supabase.co")
-                    saved_key = state_mgr.get_setting("supabase_key", "sb_publishable_Bfk1klLDNsLWKHvdRhWqNg_XoDqqJ6X")
-                    client = SupabaseClient(saved_url, saved_key)
-                    
                     target_sub_dir = sync_folder / clean_sub if (target_folder and target_folder != '__ALL__') else sync_folder
                     target_sub_dir.mkdir(parents=True, exist_ok=True)
                     dest_path = target_sub_dir / clean_target_file
 
-                    safe_sp = target_storage_path
-                    if not safe_sp:
-                        f_info = client.get_file_by_name(target_file)
-                        if f_info and f_info.get('storage_path'):
-                            safe_sp = f_info['storage_path']
-
-                    res = client.download_file(clean_target_file, str(dest_path), storage_path=safe_sp)
+                    g_client = GoogleDriveClient()
+                    res = g_client.download_file(clean_target_file, str(dest_path), storage_path=target_storage_path)
                     success = res[0] if isinstance(res, tuple) else bool(res)
                     if success and dest_path.exists():
                         target_cand = dest_path
@@ -335,20 +326,8 @@ def main():
 
     state_mgr = LocalStateManager()
 
-    # فحص وتهيئة سحابة Cloudflare R2 (10GB مجاناً وبدون رسوم باندويث)
-    r2_acc = state_mgr.get_setting("r2_account_id", os.environ.get("R2_ACCOUNT_ID", ""))
-    r2_key = state_mgr.get_setting("r2_access_key_id", os.environ.get("R2_ACCESS_KEY_ID", ""))
-    r2_sec = state_mgr.get_setting("r2_secret_access_key", os.environ.get("R2_SECRET_ACCESS_KEY", ""))
-    r2_bkt = state_mgr.get_setting("r2_bucket_name", os.environ.get("R2_BUCKET_NAME", "file-exchange-storage"))
-
-    r2_client = CloudflareR2Client(r2_acc, r2_key, r2_sec, r2_bkt)
-    if r2_client.is_configured():
-        cloud_client = r2_client
-    else:
-        saved_url = state_mgr.get_setting("supabase_url", "https://bjcillpivgcntzbwmpsm.supabase.co")
-        saved_key = state_mgr.get_setting("supabase_key", "sb_publishable_Bfk1klLDNsLWKHvdRhWqNg_XoDqqJ6X")
-        supabase_cli = SupabaseClient(saved_url, saved_key)
-        cloud_client = supabase_cli if supabase_cli.is_configured() else r2_client
+    # ربط سحابة Google Drive (15GB مجاناً)
+    cloud_client = GoogleDriveClient()
     
     device_id = str(uuid.uuid4())
     device_name = state_mgr.get_setting("device_name", os.environ.get('COMPUTERNAME', 'جهاز-مستخدم'))

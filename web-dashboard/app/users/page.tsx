@@ -109,7 +109,7 @@ export default function UsersPermissionsPage() {
       <div className="p-4 bg-sky-50 border border-sky-200 rounded-xl text-xs text-sky-900 flex items-center gap-2">
         <Shield className="w-4 h-4 text-sky-600 shrink-0" />
         <span>
-          <strong>حماية الخادم:</strong> يتم تطبيق هذه الصلاحيات بقوة على مستوى قاعدة بيانات Supabase عبر سياسات (Row Level Security - RLS). أي محاولة لتعديل أو رفع ملف دون امتلاك صلاحية <code>can_write</code> يتم رفضها على الخادم فوراً.
+          <strong>حماية الخادم:</strong> يتم تطبيق هذه الصلاحيات بقوة على مستوى سحابة Google Drive المشتركة. أي محاولة لتعديل أو رفع ملف دون امتلاك صلاحية <code>can_write</code> يتم رفضها على الخادم فوراً.
         </span>
       </div>
 

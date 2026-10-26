@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabase';
+import { drive } from '@/lib/googleDrive';
 
 export const dynamic = 'force-dynamic';
 
-// خريطة شاملة لأنواع MIME لضمان تعرف أنظمة أندرويد وiOS على صيغة المستند فوراً
 const MIME_TYPES: Record<string, string> = {
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   '.doc': 'application/msword',
@@ -32,69 +31,28 @@ const MIME_TYPES: Record<string, string> = {
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const storagePath = searchParams.get('path');
+    const fileId = searchParams.get('path') || searchParams.get('id');
     const rawName = searchParams.get('name') || 'document';
-    const inline = searchParams.get('inline') === 'true';
 
-    if (!storagePath) {
-      return NextResponse.json({ error: 'مسار الملف مطلوب (path parameter is required)' }, { status: 400 });
+    if (!fileId) {
+      return NextResponse.json({ error: 'fileId parameter is required' }, { status: 400 });
     }
 
-    let cleanPath = storagePath.startsWith('/') ? storagePath.slice(1) : storagePath;
-
-    // محاولة تنزيل الملف من Supabase Storage
-    let { data, error } = await supabase.storage
-      .from('file-exchange-storage')
-      .download(cleanPath);
-
-    // إذا فشل التنزيل وكان المسار لا يبدأ بـ shared/، نجرب إضافتها
-    if ((error || !data) && !cleanPath.startsWith('shared/')) {
-      const fallback = await supabase.storage
-        .from('file-exchange-storage')
-        .download(`shared/${cleanPath}`);
-      if (!fallback.error && fallback.data) {
-        data = fallback.data;
-        error = null;
-      }
-    }
-
-    if (error || !data) {
-      return NextResponse.json(
-        { error: error?.message || 'تعذر العثور على الملف في السحابة' },
-        { status: 404 }
-      );
-    }
-
-    // استخراج الامتداد لتحديد نوع MIME بدقة
-    const dotIndex = rawName.lastIndexOf('.');
-    const ext = dotIndex !== -1 ? rawName.slice(dotIndex).toLowerCase() : '';
-    const contentType = MIME_TYPES[ext] || data.type || 'application/octet-stream';
-
-    // تجهيز اسم ملف بالمعايير القياسية العالمية (RFC 5987 / RFC 6266)
-    // fallback بالإنجليزية للمتصفحات القديمة + اسم عربي سليم 100% لكافة الهواتف الحديثة
-    const asciiFallback = `document${ext}`;
-    const encodedName = encodeURIComponent(rawName);
-    const dispositionType = inline ? 'inline' : 'attachment';
-    const contentDisposition = `${dispositionType}; filename="${asciiFallback}"; filename*=UTF-8''${encodedName}`;
-
-    // تحويل البيانات إلى ArrayBuffer لضمان توافقية وسرعة البث
-    const arrayBuffer = await data.arrayBuffer();
-
-    return new NextResponse(arrayBuffer, {
-      status: 200,
-      headers: {
-        'Content-Type': contentType,
-        'Content-Disposition': contentDisposition,
-        'Content-Length': arrayBuffer.byteLength.toString(),
-        'Cache-Control': 'public, max-age=86400, stale-while-revalidate=43200',
-        'X-Content-Type-Options': 'nosniff',
-      },
-    });
-  } catch (err: any) {
-    console.error('Error serving storage download:', err);
-    return NextResponse.json(
-      { error: err.message || 'خطأ غير متوقع أثناء معالجة الملف' },
-      { status: 500 }
+    const res = await drive.files.get(
+      { fileId, alt: 'media' },
+      { responseType: 'stream' }
     );
+
+    const ext = rawName.includes('.') ? '.' + rawName.split('.').pop()?.toLowerCase() : '';
+    const contentType = MIME_TYPES[ext || ''] || 'application/octet-stream';
+    const encodedFilename = encodeURIComponent(rawName);
+
+    const headers = new Headers();
+    headers.set('Content-Type', contentType);
+    headers.set('Content-Disposition', `attachment; filename*=UTF-8''${encodedFilename}`);
+
+    return new NextResponse(res.data as any, { headers });
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

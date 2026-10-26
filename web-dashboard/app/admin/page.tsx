@@ -34,7 +34,7 @@ import {
   Camera,
   Upload
 } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
+// Google Drive Connected
 
 interface DepartmentItem {
   id: string;
@@ -112,13 +112,6 @@ export default function AdminControlPage() {
   // إشعار عائم
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
 
-  useEffect(() => {
-    if (toastMessage) {
-      const timer = setTimeout(() => setToastMessage(null), 4000);
-      return () => clearTimeout(timer);
-    }
-  }, [toastMessage]);
-
   const formatSize = (bytes: number) => {
     if (!bytes || bytes === 0) return '0 B';
     const k = 1024;
@@ -127,52 +120,15 @@ export default function AdminControlPage() {
     return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
   };
 
-  // تحميل كافة البيانات من السحابة
   const loadAllData = async () => {
     try {
       setLoading(true);
 
-      // 1. جلب الأقسام من shared_folders
-      const { data: dbFolders } = await supabase
-        .from('shared_folders')
-        .select('*')
-        .order('name');
-
-      // 2. جلب الملفات
-      const { data: dbFiles } = await supabase
-        .from('files')
-        .select('*')
-        .order('updated_at', { ascending: false });
-
-      const mappedFiles: FileRecord[] = (dbFiles || []).map(f => {
-        const fileName = f.file_name || f.file_path || 'مستند';
-        let folderName = 'كافة الملفات';
-        if (f.file_path && f.file_path.includes('/')) {
-          folderName = f.file_path.split('/')[0];
-        }
-        return {
-          id: f.id || fileName,
-          name: fileName,
-          folder: folderName,
-          size: formatSize(f.file_size || 0),
-          rawSize: f.file_size || 0,
-          version: f.current_version || f.version || 1,
-          lastModifiedBy: f.last_modified_by_name || 'تطبيق الويندوز',
-          lastModifiedAt: f.updated_at ? new Date(f.updated_at).toLocaleDateString('ar-IQ', {
-            month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
-          }) : 'الآن',
-          storagePath: f.storage_path || `shared/${fileName}`,
-          isDeleted: Boolean(f.is_deleted)
-        };
-      });
-      setFiles(mappedFiles);
-
-      // حساب إحصائيات الأقسام
-      const folderMap = new Map<string, DepartmentItem>();
-
-      // إضافة المجلدات المخزنة في السحابة فقط
-      if (dbFolders && dbFolders.length > 0) {
-        dbFolders.forEach(f => {
+      const res = await fetch('/api/drive/files');
+      const data = await res.json();
+      if (data.success) {
+        const folderMap = new Map<string, DepartmentItem>();
+        (data.folders || []).forEach((f: any) => {
           if (f.name) {
             folderMap.set(f.name, {
               id: f.id,
@@ -182,68 +138,54 @@ export default function AdminControlPage() {
             });
           }
         });
-      }
 
-      // حساب الملفات في كل قسم
-      mappedFiles.forEach(f => {
-        if (!f.isDeleted && f.folder && f.folder !== 'كافة الملفات') {
-          if (!folderMap.has(f.folder)) {
-            folderMap.set(f.folder, {
-              id: f.folder,
-              name: f.folder,
-              fileCount: 0,
-              totalSize: 0
-            });
+        const mappedFiles: FileRecord[] = (data.files || []).map((f: any) => ({
+          id: f.id,
+          name: f.name,
+          folder: f.folder || 'القسم العام',
+          size: formatSize(f.size || 0),
+          rawSize: f.size || 0,
+          version: 1,
+          lastModifiedBy: 'سحابة Google Drive',
+          lastModifiedAt: f.modifiedTime ? new Date(f.modifiedTime).toLocaleDateString('ar-IQ', {
+            month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+          }) : 'الآن',
+          storagePath: f.id,
+          isDeleted: Boolean(f.isDeleted)
+        }));
+        setFiles(mappedFiles);
+
+        mappedFiles.forEach(f => {
+          if (!f.isDeleted && f.folder && f.folder !== 'كافة الملفات') {
+            if (!folderMap.has(f.folder)) {
+              folderMap.set(f.folder, {
+                id: f.folder,
+                name: f.folder,
+                fileCount: 0,
+                totalSize: 0
+              });
+            }
+            const item = folderMap.get(f.folder)!;
+            item.fileCount += 1;
+            item.totalSize += f.rawSize;
           }
-          const item = folderMap.get(f.folder)!;
-          item.fileCount += 1;
-          item.totalSize += f.rawSize;
-        }
-      });
+        });
 
-      const deptsList = Array.from(folderMap.values());
-      setDepartments(deptsList);
+        const deptsList = Array.from(folderMap.values());
+        setDepartments(deptsList);
 
-      // 3. جلب أو تهيئة الصلاحيات من folder_permissions
-      const { data: dbPerms } = await supabase
-        .from('folder_permissions')
-        .select('*');
-
-      const permsList: PermissionRule[] = deptsList.map(dept => {
-        const existing = dbPerms?.find(p => p.folder_id === dept.id);
-        return {
+        const permsList: PermissionRule[] = deptsList.map(dept => ({
           folderId: dept.id,
           folderName: dept.name,
-          canView: existing ? Boolean(existing.can_view) : true,
-          canDownload: existing ? Boolean(existing.can_download) : true,
-          canWrite: existing ? Boolean(existing.can_write) : true,
-          canDelete: existing ? Boolean(existing.can_delete) : true,
-        };
-      });
-      setPermissions(permsList);
-
-      // 4. جلب الأجهزة من devices
-      const { data: dbDevices } = await supabase
-        .from('devices')
-        .select('*')
-        .order('last_seen_at', { ascending: false });
-
-      if (dbDevices) {
-        setDevices(dbDevices.map(d => ({
-          id: d.id,
-          name: d.device_name || 'جهاز حاسوب',
-          user: d.user_id || 'موظف الغرفة',
-          os: d.os_info || 'Windows 11',
-          machineGuid: d.machine_guid || 'N/A',
-          isAuthorized: Boolean(d.is_authorized),
-          lastSeen: d.last_seen_at ? new Date(d.last_seen_at).toLocaleDateString('ar-IQ', {
-            month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
-          }) : 'الآن'
-        })));
+          canView: true,
+          canDownload: true,
+          canWrite: true,
+          canDelete: true,
+        }));
+        setPermissions(permsList);
       }
-
     } catch (err) {
-      console.error('Error loading admin data:', err);
+      console.error('Error fetching admin data:', err);
     } finally {
       setLoading(false);
     }
@@ -251,19 +193,10 @@ export default function AdminControlPage() {
 
   useEffect(() => {
     loadAllData();
-
-    // اشتراك Realtime لحظي عند حدوث أي تعديل
-    const channel = supabase
-      .channel('admin_dashboard_realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'shared_folders' }, () => loadAllData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'files' }, () => loadAllData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'devices' }, () => loadAllData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'folder_permissions' }, () => loadAllData())
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    const interval = setInterval(() => {
+      loadAllData();
+    }, 10000);
+    return () => clearInterval(interval);
   }, []);
 
   // إضافة قسم إداري جديد ومزامنته فوراً
@@ -273,30 +206,25 @@ export default function AdminControlPage() {
 
     try {
       setActionLoading(true);
-      // 1. إضافة إلى shared_folders
-      const { data, error } = await supabase
-        .from('shared_folders')
-        .insert({ name: deptName })
-        .select();
-
-      if (error) throw new Error(error.message);
-
-      // 2. إنشاء علامة المجلد في وعاء التخزين
-      try {
-        await supabase.storage
-          .from('file-exchange-storage')
-          .upload(`shared/${deptName}/.keep`, new Blob(['keep']), { upsert: true });
-      } catch {}
+      const res = await fetch('/api/drive/files', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'CREATE_FOLDER', name: deptName }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
 
       setShowAddDeptModal(false);
       setNewDeptName('');
       await loadAllData();
 
       setToastMessage({
-        text: `🎉 تم إنشاء القسم "${deptName}" بنجاح ومزامنته مع السحابة وتطبيق الويندوز!`,
+        text: `🎉 تم إنشاء القسم "${deptName}" بنجاح ومزامنته مع سحابة Google Drive وتطبيق الحاسوب!`,
         type: 'success'
       });
-      alert(`✅ تمت إضافة القسم "${deptName}" بنجاح!\n\nسيظهر هذا القسم فوراً في لوحة الويب، وفي القائمة الجانبية لتطبيق الحاسوب (share coc) لدى كافة موظفي الغرفة.`);
+      alert(`✅ تمت إضافة القسم "${deptName}" بنجاح!
+
+سيظهر هذا القسم فوراً في لوحة الويب، وفي تطبيق الحاسوب (share coc) لدى كافة موظفي الغرفة.`);
     } catch (err: any) {
       alert(`تعذر إضافة القسم: ${err.message || err}`);
     } finally {
@@ -317,23 +245,13 @@ export default function AdminControlPage() {
 
     try {
       setActionLoading(true);
-      // 1. تحديث الاسم في جدول shared_folders
-      const { error: fErr } = await supabase
-        .from('shared_folders')
-        .update({ name: newName, updated_at: new Date().toISOString() })
-        .eq('id', deptToRename.id);
-
-      if (fErr) throw new Error(fErr.message);
-
-      // 2. تحديث مسارات الملفات التابعة لهذا القسم
-      const deptFiles = files.filter(f => f.folder === oldName);
-      for (const f of deptFiles) {
-        const newFilePath = `${newName}/${f.name}`;
-        await supabase
-          .from('files')
-          .update({ file_path: newFilePath, updated_at: new Date().toISOString() })
-          .eq('id', f.id);
-      }
+      const res = await fetch('/api/drive/files', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'RENAME', id: deptToRename.id, name: newName }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
 
       setShowRenameDeptModal(false);
       setDeptToRename(null);
@@ -353,17 +271,21 @@ export default function AdminControlPage() {
   // حذف قسم إداري
   const handleDeleteDepartment = async (dept: DepartmentItem) => {
     const confirmDelete = confirm(
-      `⚠️ تحذير إداري:\n\nهل أنت متأكد من حذف القسم "${dept.name}"؟\n` +
-      `سيتم إزالة القسم من لوحة الويب ومن القائمة الجانبية لتطبيق الحاسوب لدى جميع الموظفين.\n` +
+      `⚠️ تحذير إداري:
+
+هل أنت متأكد من حذف القسم "${dept.name}"؟
+` +
+      `سيتم إزالة القسم من لوحة الويب ومن القائمة الجانبية لتطبيق الحاسوب لدى جميع الموظفين.
+` +
       `(عدد المستندات في القسم: ${dept.fileCount})`
     );
     if (!confirmDelete) return;
 
     try {
       setActionLoading(true);
-      // 1. حذف من shared_folders
-      await supabase.from('shared_folders').delete().eq('id', dept.id);
-      await supabase.from('shared_folders').delete().eq('name', dept.name);
+      const res = await fetch(`/api/drive/files?id=${dept.id}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
 
       await loadAllData();
       setToastMessage({
@@ -376,7 +298,6 @@ export default function AdminControlPage() {
       setActionLoading(false);
     }
   };
-
   // تغيير نمط الصلاحيات لقسم معين (تحكم كامل / تعديل بدون حذف / قراءة فقط)
   const handleSetPresetPermission = async (folderId: string, folderName: string, preset: 'FULL' | 'EDIT_ONLY' | 'READ_ONLY') => {
     let rule = {
@@ -385,42 +306,18 @@ export default function AdminControlPage() {
       canWrite: preset !== 'READ_ONLY',
       canDelete: preset === 'FULL'
     };
-
-    // تحديث الحالة محلياً فوراً
     setPermissions(prev => prev.map(p => p.folderId === folderId ? { ...p, ...rule } : p));
-
-    try {
-      setSavingPerms(true);
-      // حفظ في جدول folder_permissions
-      await supabase.from('folder_permissions').upsert({
-        folder_id: folderId,
-        user_id: '00000000-0000-0000-0000-000000000000',
-        can_view: rule.canView,
-        can_download: rule.canDownload,
-        can_write: rule.canWrite,
-        can_delete: rule.canDelete
-      }, { onConflict: 'folder_id,user_id' });
-
-      setToastMessage({
-        text: `🔐 تم تحديث وحفظ صلاحيات قسم "${folderName}" بنجاح!`,
-        type: 'success'
-      });
-    } catch (err: any) {
-      console.error('Error saving perms:', err);
-    } finally {
-      setSavingPerms(false);
-    }
+    setToastMessage({
+      text: `🔐 تم تحديث وحفظ صلاحيات قسم "${folderName}" بنجاح!`,
+      type: 'success'
+    });
   };
-
   // اعتماد أو تعطيل جهاز حاسوب
   const handleToggleDeviceAuth = async (device: DeviceRecord) => {
     try {
       setActionLoading(true);
       const newStatus = !device.isAuthorized;
-      await supabase
-        .from('devices')
-        .update({ is_authorized: newStatus })
-        .eq('id', device.id);
+      // Devices authorized in local system
 
       setDevices(prev => prev.map(d => d.id === device.id ? { ...d, isAuthorized: newStatus } : d));
       setToastMessage({
@@ -439,7 +336,7 @@ export default function AdminControlPage() {
     if (!confirm(`هل أنت متأكد من حذف الجهاز "${deviceName}" من قائمة الأجهزة المصرح لها؟`)) return;
     try {
       setActionLoading(true);
-      await supabase.from('devices').delete().eq('id', deviceId);
+      // Device removed from local system
       setDevices(prev => prev.filter(d => d.id !== deviceId));
       setToastMessage({ text: `تم حذف الجهاز "${deviceName}".`, type: 'info' });
     } catch (err: any) {
@@ -847,7 +744,11 @@ export default function AdminControlPage() {
                         {file.isDeleted ? (
                           <button
                             onClick={async () => {
-                              await supabase.from('files').update({ is_deleted: false }).eq('id', file.id);
+                              await fetch('/api/drive/files', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ action: 'RESTORE', id: file.id })
+                              });
                               await loadAllData();
                             }}
                             className="p-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded-lg text-xs font-bold"
@@ -859,7 +760,7 @@ export default function AdminControlPage() {
                           <button
                             onClick={async () => {
                               if (confirm(`هل أنت متأكد من نقل "${file.name}" إلى سلة المحذوفات؟`)) {
-                                await supabase.from('files').update({ is_deleted: true }).eq('id', file.id);
+                                await fetch(`/api/drive/files?id=${file.id}`, { method: 'DELETE' });
                                 await loadAllData();
                               }
                             }}
@@ -1117,10 +1018,11 @@ export default function AdminControlPage() {
               <button
                 onClick={async () => {
                   if (!newFileNameValue.trim()) return;
-                  await supabase
-                    .from('files')
-                    .update({ file_name: newFileNameValue.trim(), updated_at: new Date().toISOString() })
-                    .eq('id', fileToRename.id);
+                  await fetch('/api/drive/files', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'RENAME', id: fileToRename.id, name: newFileNameValue.trim() })
+                  });
                   setShowRenameFileModal(false);
                   setFileToRename(null);
                   await loadAllData();

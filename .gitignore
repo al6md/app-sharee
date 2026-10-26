@@ -25,6 +25,9 @@ yarn-error.log*
 .env.development.local
 .env.test.local
 .env.production.local
+*gdrive*credentials*.json
+*gdrive*token*.json
+gdrive_credentials.json
 
 # Databases & Local state
 local_state.db
