@@ -1,17 +1,9 @@
 import './globals.css';
 import Link from 'next/link';
 import { 
-  FolderSync, 
   Files, 
-  Laptop, 
-  Users, 
-  ShieldAlert, 
-  Cloud, 
-  History,
-  CheckCircle2,
-  HardDrive,
-  Menu,
-  Shield
+  Shield, 
+  Download
 } from 'lucide-react';
 import PwaRegistrar from './PwaRegistrar';
 
@@ -76,10 +68,10 @@ export default function RootLayout({
           <div className="flex items-center gap-2">
             <Link 
               href="/admin"
-              className="inline-flex items-center gap-1 text-[10px] bg-[#c59b27] text-[#0e2720] font-black px-2 py-1 rounded-lg border border-[#c59b27] shadow-xs active:scale-95"
+              className="inline-flex items-center gap-1 text-[10px] bg-[#c59b27] text-[#0e2720] font-black px-2.5 py-1 rounded-lg border border-[#c59b27] shadow-xs active:scale-95"
             >
-              <Shield className="w-3 h-3 text-[#0e2720]" />
-              <span>الأدمن</span>
+              <Shield className="w-3.5 h-3.5 text-[#0e2720]" />
+              <span>لوحة الأدمن</span>
             </Link>
             <span className="inline-flex items-center gap-1 text-[10px] bg-emerald-950/80 text-emerald-400 font-bold px-2 py-0.5 rounded-full border border-emerald-600/40">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
@@ -100,69 +92,45 @@ export default function RootLayout({
               </div>
             </div>
 
-            {/* الروابط التنقلية المنظمة */}
-            <nav className="p-3 space-y-1 text-xs">
+            {/* الروابط التنقلية المقتصرة على المستندات والأقسام ولوحة الأدمن */}
+            <nav className="p-3 space-y-2 text-xs">
               <Link 
                 href="/files" 
-                className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-700 hover:bg-slate-100 font-bold transition"
+                className="flex items-center gap-3 px-3.5 py-3 rounded-xl text-slate-800 hover:bg-slate-100 font-bold transition border border-transparent hover:border-slate-200"
               >
-                <Files className="w-4 h-4 text-[#107c41]" />
-                <span>المستندات والأقسام</span>
-              </Link>
-
-              <Link 
-                href="/" 
-                className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-700 hover:bg-slate-100 font-semibold transition"
-              >
-                <HardDrive className="w-4 h-4 text-[#0f6cbd]" />
-                <span>نظرة عامة والتخزين</span>
-              </Link>
-
-              <Link 
-                href="/devices" 
-                className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-700 hover:bg-slate-100 font-semibold transition"
-              >
-                <Laptop className="w-4 h-4 text-[#a4373a]" />
-                <span>الأجهزة المعتمدة</span>
-              </Link>
-
-              <Link 
-                href="/audit" 
-                className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-700 hover:bg-slate-100 font-semibold transition"
-              >
-                <History className="w-4 h-4 text-slate-600" />
-                <span>سجل التدقيق والمزامنة</span>
-              </Link>
-
-              <Link 
-                href="/users" 
-                className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-700 hover:bg-slate-100 font-semibold transition"
-              >
-                <Users className="w-4 h-4 text-indigo-600" />
-                <span>المستخدمين والصلاحيات</span>
+                <Files className="w-5 h-5 text-[#107c41]" />
+                <span className="text-sm">المستندات والأقسام</span>
               </Link>
 
               <Link 
                 href="/admin" 
-                className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-amber-950 bg-amber-50 hover:bg-amber-100 font-black border border-amber-300 transition shadow-xs mt-2"
+                className="flex items-center gap-3 px-3.5 py-3 rounded-xl text-amber-950 bg-amber-50 hover:bg-amber-100 font-black border border-amber-300 transition shadow-xs"
               >
-                <Shield className="w-4 h-4 text-amber-700" />
-                <span>لوحة تحكم الأدمن 🛡️</span>
+                <Shield className="w-5 h-5 text-amber-700" />
+                <span className="text-sm">لوحة تحكم الأدمن 🛡️</span>
               </Link>
             </nav>
           </div>
 
-          {/* حالة السحابة المنظمة في الأسفل */}
-          <div className="p-3.5 m-3 bg-[#f0f6f4] rounded-xl border border-[#d5dfdb] text-xs">
-            <div className="flex items-center justify-between mb-2">
+          {/* حالة السحابة وزر تحميل تطبيق الويندوز في الأسفل */}
+          <div className="p-3.5 m-3 bg-[#f0f6f4] rounded-xl border border-[#d5dfdb] text-xs space-y-2.5">
+            <div className="flex items-center justify-between">
               <span className="font-bold text-[#14372e] text-[11px]">السحابة المشتركة</span>
               <span className="text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full text-[10px] font-bold border border-emerald-300">
                 🟢 متصلة
               </span>
             </div>
             <p className="text-slate-600 text-[10px] leading-relaxed">
-              مرتبطة لحظياً بتطبيق ويندوز المكتبي في الغرفة.
+              مرتبطة لحظياً بتطبيق ويندوز المكتبي في الغرفة مع سعة 5TB.
             </p>
+            <a
+              href="/share%20coc.exe"
+              download="share coc.exe"
+              className="flex items-center justify-center gap-1.5 w-full py-2 bg-[#14372e] hover:bg-[#1a473b] text-white text-[11px] font-bold rounded-lg transition shadow-xs"
+            >
+              <Download className="w-3.5 h-3.5 text-[#ecd58a]" />
+              <span>تحميل تطبيق الويندوز</span>
+            </a>
           </div>
         </aside>
 
@@ -172,37 +140,21 @@ export default function RootLayout({
         </main>
 
         {/* 4. شريط التنقل السفلي للهواتف المحمولة (Mobile Bottom Navigation Bar) */}
-        <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-slate-200 z-40 px-3 py-1.5 flex items-center justify-around shadow-lg">
+        <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-slate-200 z-40 px-6 py-2.5 flex items-center justify-around shadow-lg">
           <Link 
             href="/files" 
-            className="flex flex-col items-center gap-0.5 text-[#14372e] font-bold text-[10px] py-1 px-3 rounded-lg"
+            className="flex flex-col items-center gap-1 text-[#14372e] font-bold text-xs py-1 px-4 rounded-xl active:bg-slate-100 transition"
           >
             <Files className="w-5 h-5 text-[#14372e]" />
-            <span>المستندات</span>
+            <span>المستندات والأقسام</span>
           </Link>
 
           <Link 
-            href="/" 
-            className="flex flex-col items-center gap-0.5 text-slate-500 hover:text-slate-800 font-semibold text-[10px] py-1 px-3 rounded-lg"
+            href="/admin" 
+            className="flex flex-col items-center gap-1 text-amber-900 font-bold text-xs py-1 px-4 rounded-xl active:bg-amber-100 transition"
           >
-            <HardDrive className="w-5 h-5" />
-            <span>التخزين</span>
-          </Link>
-
-          <Link 
-            href="/devices" 
-            className="flex flex-col items-center gap-0.5 text-slate-500 hover:text-slate-800 font-semibold text-[10px] py-1 px-3 rounded-lg"
-          >
-            <Laptop className="w-5 h-5" />
-            <span>الأجهزة</span>
-          </Link>
-
-          <Link 
-            href="/audit" 
-            className="flex flex-col items-center gap-0.5 text-slate-500 hover:text-slate-800 font-semibold text-[10px] py-1 px-3 rounded-lg"
-          >
-            <History className="w-5 h-5" />
-            <span>السجل</span>
+            <Shield className="w-5 h-5 text-amber-700" />
+            <span>لوحة الأدمن</span>
           </Link>
         </nav>
       </body>
