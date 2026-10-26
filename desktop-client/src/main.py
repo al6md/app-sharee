@@ -129,7 +129,6 @@ class LoginDialog(QDialog):
 def ensure_desktop_shortcut():
     """إنشاء وتأكيد وجود اختصار لتطبيق share coc على سطح المكتب بشعاره الرسمي"""
     try:
-        import subprocess
         if getattr(sys, 'frozen', False):
             target_exe = sys.executable
             app_dir = Path(target_exe).parent
@@ -137,13 +136,31 @@ def ensure_desktop_shortcut():
             target_exe = str(Path(__file__).resolve())
             app_dir = Path(__file__).parent.parent
 
+        desktop_paths = [
+            Path(os.environ.get('USERPROFILE', 'C:')) / "OneDrive" / "Desktop",
+            Path(os.environ.get('USERPROFILE', 'C:')) / "Desktop"
+        ]
+        
+        shortcut_found = False
+        for dp in desktop_paths:
+            if (dp / "share coc.lnk").exists():
+                shortcut_found = True
+                break
+
+        if shortcut_found:
+            return
+
         ico_path = app_dir / "assets" / "logo.ico"
         if not ico_path.exists():
             ico_path = app_dir / "logo.ico"
 
+        import subprocess
         ps_script = f"""
         $wsh = New-Object -ComObject WScript.Shell
         $desktop = [Environment]::GetFolderPath('Desktop')
+        if (-not (Test-Path $desktop)) {{
+            $desktop = Join-Path $env:USERPROFILE 'OneDrive\\Desktop'
+        }}
         $shortcutPath = Join-Path $desktop 'share coc.lnk'
         $s = $wsh.CreateShortcut($shortcutPath)
         $s.TargetPath = '{target_exe}'
@@ -156,7 +173,7 @@ def ensure_desktop_shortcut():
         }}
         $s.Save()
         """
-        subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], capture_output=True, timeout=5)
+        subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], capture_output=True, timeout=3)
     except Exception as e:
         print(f"[Shortcut creation]: {e}")
 

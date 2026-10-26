@@ -25,7 +25,14 @@ a = Analysis(
         'r2_client',
         'boto3',
         'botocore',
-        'local_bridge'
+        'local_bridge',
+        'supabase_client',
+        'sync_engine',
+        'offline_queue',
+        'office_handler',
+        'gui',
+        'conflict_manager',
+        'autostart'
     ],
     hookspath=[],
     hooksconfig={},

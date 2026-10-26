@@ -6,6 +6,7 @@ for line in out.splitlines():
     if len(parts) >= 2:
         pname = parts[0].strip('"')
         pid = parts[1].strip('"')
-        if 'share' in pname.lower():
-            print(f"Terminating {pname} (PID: {pid})")
-            subprocess.run(['taskkill', '/F', '/PID', pid], capture_output=True)
+        if 'share' in pname.lower() or 'fileexchange' in pname.lower():
+            if 'code' not in pname.lower():
+                print(f"Terminating {pname} (PID: {pid})")
+                subprocess.run(['taskkill', '/F', '/PID', pid], capture_output=True)
