@@ -31,7 +31,9 @@ import {
   Smartphone,
   UploadCloud,
   CheckCircle2,
-  Play
+  Play,
+  BarChart3,
+  PieChart
 } from 'lucide-react';
 // Google Drive Connected
 
@@ -101,6 +103,7 @@ export default function FilesPage() {
   const [currentFolder, setCurrentFolder] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState<string>('ALL');
+  const [showStats, setShowStats] = useState(true);
 
   const [files, setFiles] = useState<FileItem[]>([]);
   const [folderMap, setFolderMap] = useState<Record<string, string>>({});
@@ -942,6 +945,47 @@ export default function FilesPage() {
     return matchSearch && matchType;
   });
 
+  // إحصائيات المستندات والمساحة التخزينية الإجمالية ولكل نوع
+  const scopeFiles = activeTab === 'TRASH' ? trashFiles : (
+    currentFolder
+      ? activeFiles.filter(f => f.folder === currentFolder || f.folder.startsWith(currentFolder + '/'))
+      : selectedDept === '__ALL__'
+        ? activeFiles
+        : activeFiles.filter(f => f.department === selectedDept || f.folder === selectedDept || f.folder.startsWith(selectedDept + '/'))
+  );
+
+  const stats = {
+    totalCount: scopeFiles.length,
+    totalRawSize: scopeFiles.reduce((acc, f) => acc + (f.rawSize || 0), 0),
+    word: {
+      count: scopeFiles.filter(f => f.type === 'word').length,
+      size: scopeFiles.filter(f => f.type === 'word').reduce((acc, f) => acc + (f.rawSize || 0), 0),
+    },
+    excel: {
+      count: scopeFiles.filter(f => f.type === 'excel').length,
+      size: scopeFiles.filter(f => f.type === 'excel').reduce((acc, f) => acc + (f.rawSize || 0), 0),
+    },
+    access: {
+      count: scopeFiles.filter(f => f.type === 'access').length,
+      size: scopeFiles.filter(f => f.type === 'access').reduce((acc, f) => acc + (f.rawSize || 0), 0),
+    },
+    pdf: {
+      count: scopeFiles.filter(f => f.type === 'pdf').length,
+      size: scopeFiles.filter(f => f.type === 'pdf').reduce((acc, f) => acc + (f.rawSize || 0), 0),
+    },
+    image: {
+      count: scopeFiles.filter(f => f.type === 'image').length,
+      size: scopeFiles.filter(f => f.type === 'image').reduce((acc, f) => acc + (f.rawSize || 0), 0),
+    },
+    other: {
+      count: scopeFiles.filter(f => f.type === 'file').length,
+      size: scopeFiles.filter(f => f.type === 'file').reduce((acc, f) => acc + (f.rawSize || 0), 0),
+    },
+    foldersCount: selectedDept === '__ALL__'
+      ? allFolders.length
+      : allFolders.filter(f => f.department === selectedDept || f.path.startsWith(selectedDept + '/')).length
+  };
+
   const getFileBadge = (type: string) => {
     switch (type) {
       case 'word':
@@ -1064,6 +1108,20 @@ export default function FilesPage() {
             <span className="hidden sm:inline">مجلد جديد</span>
           </button>
 
+          {/* زر تبديل عرض لوحة الإحصائيات الشاملة */}
+          <button
+            onClick={() => setShowStats(!showStats)}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition active:scale-95 shrink-0 ${
+              showStats 
+                ? 'bg-amber-100/90 text-amber-950 border border-amber-300 shadow-2xs' 
+                : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+            }`}
+            title="عرض إحصائيات المستندات والمساحة حسب النوع"
+          >
+            <BarChart3 className="w-4 h-4 text-amber-700" />
+            <span className="hidden sm:inline">إحصائيات الملفات</span>
+          </button>
+
           {/* زر التحديث اللحظي */}
           <button
             onClick={loadData}
@@ -1075,6 +1133,168 @@ export default function FilesPage() {
           </button>
         </div>
       </div>
+
+      {/* 1.5. لوحة إحصائيات الملفات والمساحة التخزينية ولكل نوع */}
+      {showStats && (
+        <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-xs space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
+            <div className="flex items-center gap-2">
+              <div className="p-2 bg-[#14372e]/10 text-[#14372e] rounded-xl shrink-0">
+                <BarChart3 className="w-4 h-4 text-[#14372e]" />
+              </div>
+              <div>
+                <h3 className="text-xs sm:text-sm font-black text-slate-800 flex items-center gap-1.5">
+                  <span>إحصائيات المستندات والأنواع</span>
+                  <span className="text-[11px] font-bold text-slate-500">
+                    {selectedDept === '__ALL__' ? '• كافة الأقسام والمجلدات' : `• قسم ${selectedDept}`}
+                  </span>
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  اضغط على أي نوع لتصفية وعرض مستنداته فوراً
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+              <span className="bg-slate-50 text-slate-700 font-bold px-3 py-1 rounded-xl text-xs border border-slate-200 font-mono">
+                💾 إجمالي الحجم: <strong className="text-[#14372e]">{formatSize(stats.totalRawSize)}</strong>
+              </span>
+              <span className="bg-[#14372e]/10 text-[#14372e] font-bold px-3 py-1 rounded-xl text-xs border border-[#14372e]/20 font-mono">
+                🗂️ {stats.totalCount} مستنداً
+              </span>
+            </div>
+          </div>
+
+          {/* شبكة بطاقات الإحصائيات لكل نوع */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+            {/* 1. الإجمالي العام */}
+            <div 
+              onClick={() => setFilterType('ALL')}
+              className={`cursor-pointer p-3 rounded-xl border transition flex flex-col justify-between ${
+                filterType === 'ALL'
+                  ? 'bg-[#14372e] text-white border-[#14372e] shadow-sm'
+                  : 'bg-slate-50 hover:bg-slate-100/80 text-slate-700 border-slate-200'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold">كافة الملفات</span>
+                <span className="text-xs">📁</span>
+              </div>
+              <div className="mt-2.5">
+                <div className="text-lg font-black font-mono leading-none">{stats.totalCount}</div>
+                <div className={`text-[10px] mt-1 font-mono font-medium ${filterType === 'ALL' ? 'text-emerald-200' : 'text-slate-400'}`}>
+                  {formatSize(stats.totalRawSize)}
+                </div>
+              </div>
+            </div>
+
+            {/* 2. مستندات Word */}
+            <div 
+              onClick={() => setFilterType(filterType === 'WORD' ? 'ALL' : 'WORD')}
+              className={`cursor-pointer p-3 rounded-xl border transition flex flex-col justify-between ${
+                filterType === 'WORD'
+                  ? 'bg-sky-700 text-white border-sky-700 shadow-sm'
+                  : 'bg-sky-50/60 hover:bg-sky-50 text-sky-950 border-sky-200'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold">Word</span>
+                <FileText className={`w-4 h-4 ${filterType === 'WORD' ? 'text-white' : 'text-sky-600'}`} />
+              </div>
+              <div className="mt-2.5">
+                <div className="text-lg font-black font-mono leading-none">{stats.word.count}</div>
+                <div className={`text-[10px] mt-1 font-mono font-medium ${filterType === 'WORD' ? 'text-sky-200' : 'text-sky-700'}`}>
+                  {formatSize(stats.word.size)}
+                </div>
+              </div>
+            </div>
+
+            {/* 3. جداول Excel */}
+            <div 
+              onClick={() => setFilterType(filterType === 'EXCEL' ? 'ALL' : 'EXCEL')}
+              className={`cursor-pointer p-3 rounded-xl border transition flex flex-col justify-between ${
+                filterType === 'EXCEL'
+                  ? 'bg-emerald-700 text-white border-emerald-700 shadow-sm'
+                  : 'bg-emerald-50/60 hover:bg-emerald-50 text-emerald-950 border-emerald-200'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold">Excel</span>
+                <FileSpreadsheet className={`w-4 h-4 ${filterType === 'EXCEL' ? 'text-white' : 'text-emerald-600'}`} />
+              </div>
+              <div className="mt-2.5">
+                <div className="text-lg font-black font-mono leading-none">{stats.excel.count}</div>
+                <div className={`text-[10px] mt-1 font-mono font-medium ${filterType === 'EXCEL' ? 'text-emerald-200' : 'text-emerald-700'}`}>
+                  {formatSize(stats.excel.size)}
+                </div>
+              </div>
+            </div>
+
+            {/* 4. قواعد Access */}
+            <div 
+              onClick={() => setFilterType(filterType === 'ACCESS' ? 'ALL' : 'ACCESS')}
+              className={`cursor-pointer p-3 rounded-xl border transition flex flex-col justify-between ${
+                filterType === 'ACCESS'
+                  ? 'bg-amber-800 text-white border-amber-800 shadow-sm'
+                  : 'bg-amber-50/60 hover:bg-amber-50 text-amber-950 border-amber-200'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold">Access</span>
+                <Database className={`w-4 h-4 ${filterType === 'ACCESS' ? 'text-white' : 'text-amber-700'}`} />
+              </div>
+              <div className="mt-2.5">
+                <div className="text-lg font-black font-mono leading-none">{stats.access.count}</div>
+                <div className={`text-[10px] mt-1 font-mono font-medium ${filterType === 'ACCESS' ? 'text-amber-200' : 'text-amber-800'}`}>
+                  {formatSize(stats.access.size)}
+                </div>
+              </div>
+            </div>
+
+            {/* 5. وثائق PDF */}
+            <div 
+              onClick={() => setFilterType(filterType === 'PDF' ? 'ALL' : 'PDF')}
+              className={`cursor-pointer p-3 rounded-xl border transition flex flex-col justify-between ${
+                filterType === 'PDF'
+                  ? 'bg-rose-700 text-white border-rose-700 shadow-sm'
+                  : 'bg-rose-50/60 hover:bg-rose-50 text-rose-950 border-rose-200'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold">PDF</span>
+                <FileText className={`w-4 h-4 ${filterType === 'PDF' ? 'text-white' : 'text-rose-600'}`} />
+              </div>
+              <div className="mt-2.5">
+                <div className="text-lg font-black font-mono leading-none">{stats.pdf.count}</div>
+                <div className={`text-[10px] mt-1 font-mono font-medium ${filterType === 'PDF' ? 'text-rose-200' : 'text-rose-700'}`}>
+                  {formatSize(stats.pdf.size)}
+                </div>
+              </div>
+            </div>
+
+            {/* 6. كتب مصورة / صور */}
+            <div 
+              onClick={() => setFilterType(filterType === 'IMAGE' ? 'ALL' : 'IMAGE')}
+              className={`cursor-pointer p-3 rounded-xl border transition flex flex-col justify-between ${
+                filterType === 'IMAGE'
+                  ? 'bg-purple-700 text-white border-purple-700 shadow-sm'
+                  : 'bg-purple-50/60 hover:bg-purple-50 text-purple-950 border-purple-200'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold">صور / كاميرا</span>
+                <Camera className={`w-4 h-4 ${filterType === 'IMAGE' ? 'text-white' : 'text-purple-600'}`} />
+              </div>
+              <div className="mt-2.5">
+                <div className="text-lg font-black font-mono leading-none">{stats.image.count}</div>
+                <div className={`text-[10px] mt-1 font-mono font-medium ${filterType === 'IMAGE' ? 'text-purple-200' : 'text-purple-700'}`}>
+                  {formatSize(stats.image.size)}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 2. شريط التبويب: المستندات النشطة مقابل سلة المحذوفات */}
       <div className="flex items-center justify-between border-b border-slate-200 pb-1">
@@ -1181,12 +1401,12 @@ export default function FilesPage() {
         {/* تصفية سريعة بالصيغة */}
         <div className="flex items-center gap-1 overflow-x-auto w-full sm:w-auto pb-1 sm:pb-0">
           {[
-            { tag: 'ALL', label: 'الكل' },
-            { tag: 'WORD', label: 'Word' },
-            { tag: 'EXCEL', label: 'Excel' },
-            { tag: 'ACCESS', label: 'Access' },
-            { tag: 'PDF', label: 'PDF' },
-            { tag: 'IMAGE', label: 'صور' },
+            { tag: 'ALL', label: `الكل (${stats.totalCount})` },
+            { tag: 'WORD', label: `Word (${stats.word.count})` },
+            { tag: 'EXCEL', label: `Excel (${stats.excel.count})` },
+            { tag: 'ACCESS', label: `Access (${stats.access.count})` },
+            { tag: 'PDF', label: `PDF (${stats.pdf.count})` },
+            { tag: 'IMAGE', label: `صور (${stats.image.count})` },
           ].map(t => (
             <button
               key={t.tag}

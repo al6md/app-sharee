@@ -178,28 +178,29 @@ def ensure_desktop_shortcut():
         print(f"[Shortcut creation]: {e}")
 
 
-def _activate_running_instance():
-    """محاولة إيقاظ وإظهار النسخة العاملة حالياً عبر الجسر المحلي بأمان على خيط Qt الرئيسي"""
-    try:
-        import urllib.request
-        with urllib.request.urlopen("http://127.0.0.1:18290/show", timeout=2.0) as resp:
-            return resp.status == 200
-    except Exception:
-        return False
-
-
-def _cleanup_stuck_instances():
-    """إنهاء أي عملية قديمة متجمدة لا تستجيب على الجسر المحلي"""
-    my_pid = os.getpid()
-    try:
-        subprocess.run(
-            ["taskkill", "/F", "/FI", f"PID ne {my_pid}", "/IM", "share coc.exe"],
-            capture_output=True, timeout=4,
-            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)
-        )
-        time.sleep(0.3)
-    except Exception:
-        pass
+def _activate_running_instance(retries=4, delay=0.5):
+    """محاولة إيقاظ وإظهار النسخة العاملة حالياً عبر الجسر المحلي أو Win32 بأمان على خيط Qt الرئيسي"""
+    import urllib.request
+    for _ in range(retries):
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:18290/show", timeout=1.5) as resp:
+                if resp.status == 200:
+                    return True
+        except Exception:
+            pass
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            hwnd = user32.FindWindowW(None, "Share COC")
+            if not hwnd:
+                hwnd = user32.FindWindowW(None, "Share COC – غرفة تجارة كربلاء المقدسة")
+            if hwnd:
+                user32.SetForegroundWindow(hwnd)
+                return True
+        except Exception:
+            pass
+        time.sleep(delay)
+    return False
 
 
 def main():
@@ -301,20 +302,15 @@ def main():
                 )
                 sys.exit(1)
 
-    # 2. إذا كانت هناك نسخة تعمل وتستجيب، نطلب منها إظهار نافذتها عبر خيط Qt الرئيسي فوراً
-    if _activate_running_instance():
-        sys.exit(0)
-
-    # 3. التأكد من عدم وجود عملية قديمة معلقة
+    # 2. التأكد من تشغيل نسخة واحدة فقط لمنع استنساخ العمليات
     import ctypes
     ERROR_ALREADY_EXISTS = 183
     kernel32 = ctypes.windll.kernel32
     _single_instance_mutex = kernel32.CreateMutexW(None, False, "Global\\KarbalaChamberShareCOCSingleInstanceMutex")
     if kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
-        if _activate_running_instance():
-            sys.exit(0)
-        # العملية السابقة متجمدة ولا تستجيب -> إنهاؤها تلقائياً وفتح التطبيق بشكل سليم
-        _cleanup_stuck_instances()
+        # هناك نسخة تعمل بالفعل أو قيد التشغيل؛ تنشيطها وإغلاق النسخة الإضافية فوراً وهدوء
+        _activate_running_instance(retries=3, delay=0.4)
+        sys.exit(0)
 
     app = QApplication(sys.argv)
     app._single_instance_mutex = _single_instance_mutex
@@ -383,4 +379,6 @@ def main():
 
 
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
     main()

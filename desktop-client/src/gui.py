@@ -575,6 +575,14 @@ class FileExchangeMainWindow(QMainWindow):
         self.btn_refresh.clicked.connect(self._on_refresh_clicked)
         toolbar.addWidget(self.btn_refresh)
 
+        # زر إحصائيات المستندات ولكل نوع
+        self.btn_stats = QPushButton("📊 الإحصائيات")
+        self.btn_stats.setObjectName("btnGovSecondary")
+        self.btn_stats.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_stats.setToolTip("عرض إحصائيات شاملة للمستندات والمساحة وتوزيع الأنواع (Word, Excel, Access, PDF, صور)")
+        self.btn_stats.clicked.connect(self._show_file_statistics_dialog)
+        toolbar.addWidget(self.btn_stats)
+
         # حقل البحث الفوري
         self.search_box = QLineEdit()
         self.search_box.setObjectName("govSearch")
@@ -2359,6 +2367,194 @@ class FileExchangeMainWindow(QMainWindow):
         elif action == act_del:
             self._purge_from_trash(trash_id)
 
+    def _show_file_statistics_dialog(self):
+        """نافذة إحصائيات المستندات والمساحة التخزينية وتوزيع الأنواع"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("📊 إحصائيات المستندات والأنواع – غرفة تجارة كربلاء المقدسة")
+        dialog.resize(650, 520)
+        dialog.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        dialog.setStyleSheet("""
+            QDialog { background-color: #f8fafc; font-family: 'Cairo', 'Segoe UI', Tahoma; }
+            QLabel { color: #162420; }
+            QTableWidget {
+                background-color: #ffffff;
+                border: 1.5px solid #cbd5e1;
+                border-radius: 8px;
+                gridline-color: #f1f5f9;
+            }
+            QHeaderView::section {
+                background-color: #0e2720;
+                color: #ffffff;
+                font-weight: bold;
+                font-size: 11px;
+                padding: 6px;
+                border: none;
+            }
+        """)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
+
+        # الترويسة
+        header_frame = QFrame()
+        header_frame.setStyleSheet("""
+            QFrame {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0e2720, stop:1 #1a443a);
+                border-radius: 10px;
+                border-bottom: 2px solid #c59b27;
+                padding: 10px;
+            }
+        """)
+        h_box = QHBoxLayout(header_frame)
+        h_title = QLabel("📊 التقرير الإحصائي لمستندات المنظومة")
+        h_title.setFont(QFont("Cairo", 12, QFont.Weight.Bold))
+        h_title.setStyleSheet("color: #ffffff; border: none; background: transparent;")
+        h_box.addWidget(h_title)
+        h_box.addStretch()
+
+        cur_scope = self.active_dept_name if self.active_dept_name else "الأرشيف الشامل (كافة الأقسام)"
+        scope_lbl = QLabel(f"النطاق: {cur_scope}")
+        scope_lbl.setFont(QFont("Cairo", 10))
+        scope_lbl.setStyleSheet("color: #ecd58a; border: none; background: transparent;")
+        h_box.addWidget(scope_lbl)
+        layout.addWidget(header_frame)
+
+        # حساب الإحصائيات الفعلية من الذاكرة والقرص
+        from gdrive_client import is_ignored_name
+        all_files = []
+        for root, dirs, files in os.walk(self.sync_folder):
+            if ".trash" in root:
+                continue
+            for f in files:
+                if is_ignored_name(f):
+                    continue
+                fp = Path(root) / f
+                rel = fp.relative_to(self.sync_folder).as_posix()
+                dept = rel.split('/')[0] if '/' in rel else "القسم العام"
+                if self.active_dept_name and dept != self.active_dept_name:
+                    continue
+                try:
+                    sz = fp.stat().st_size
+                except OSError:
+                    sz = 0
+                all_files.append({"name": f, "size": sz, "ext": fp.suffix.lower(), "dept": dept})
+
+        total_cnt = len(all_files)
+        total_sz = sum(x["size"] for x in all_files)
+
+        def fmt_sz(b):
+            if b < 1024: return f"{b} B"
+            if b < 1048576: return f"{round(b/1024, 1)} KB"
+            return f"{round(b/1048576, 2)} MB"
+
+        # بطاقات الملخص السريع
+        summary_row = QHBoxLayout()
+        summary_row.setSpacing(8)
+
+        cards = [
+            ("📁 إجمالي المستندات", f"{total_cnt} مستند", "#14372e"),
+            ("💾 المساحة الإجمالية", fmt_sz(total_sz), "#0284c7"),
+            ("🏛️ القسم النشط", str(self.active_dept_name or "كافة الأقسام"), "#c59b27")
+        ]
+        for title, val, col in cards:
+            c_frame = QFrame()
+            c_frame.setStyleSheet(f"""
+                QFrame {{
+                    background: #ffffff;
+                    border: 1.5px solid #e2e8f0;
+                    border-right: 4px solid {col};
+                    border-radius: 8px;
+                    padding: 8px;
+                }}
+            """)
+            c_lay = QVBoxLayout(c_frame)
+            c_lay.setContentsMargins(6, 4, 6, 4)
+            c_lay.setSpacing(2)
+            lbl_t = QLabel(title)
+            lbl_t.setFont(QFont("Cairo", 9))
+            lbl_t.setStyleSheet("color: #64748b;")
+            c_lay.addWidget(lbl_t)
+            lbl_v = QLabel(val)
+            lbl_v.setFont(QFont("Cairo", 11, QFont.Weight.Bold))
+            lbl_v.setStyleSheet(f"color: {col};")
+            c_lay.addWidget(lbl_v)
+            summary_row.addWidget(c_frame)
+        layout.addLayout(summary_row)
+
+        # جدول التوزيع حسب النوع
+        types_info = [
+            ("مستندات Word الرسمية", ("📝", ".docx, .doc"), (".docx", ".doc"), "#0284c7"),
+            ("جداول Excel والحسابات", ("📊", ".xlsx, .xls, .csv"), (".xlsx", ".xls", ".csv"), "#107c41"),
+            ("قواعد بيانات Access والسجلات", ("🗄️", ".accdb, .mdb"), (".accdb", ".mdb"), "#b45309"),
+            ("وثائق PDF والتعاميم المعتمدة", ("📄", ".pdf"), (".pdf",), "#e11d48"),
+            ("كتب مصورة وكاميرا / صور", ("📷", ".jpg, .png, .webp"), (".jpg", ".jpeg", ".png", ".webp", ".bmp"), "#7c3aed"),
+            ("ملفات ومستندات أخرى", ("📄", "صيغ متنوعة"), (), "#475569"),
+        ]
+
+        table = QTableWidget()
+        table.setColumnCount(5)
+        table.setHorizontalHeaderLabels(["نوع المستند", "الصيغ المدعومة", "عدد الملفات", "إجمالي الحجم", "النسبة"])
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+
+        row_idx = 0
+        for label, (icon, exts_str), exts, col in types_info:
+            if exts:
+                t_files = [x for x in all_files if x["ext"] in exts]
+            else:
+                known_exts = set().union(*[t[2] for t in types_info if t[2]])
+                t_files = [x for x in all_files if x["ext"] not in known_exts]
+
+            cnt = len(t_files)
+            sz = sum(x["size"] for x in t_files)
+            pct = round((sz / total_sz * 100), 1) if total_sz > 0 else 0
+
+            table.insertRow(row_idx)
+            table.setRowHeight(row_idx, 38)
+
+            c_name = QTableWidgetItem(f"{icon} {label}")
+            c_name.setFont(QFont("Cairo", 10, QFont.Weight.Bold))
+            table.setItem(row_idx, 0, c_name)
+
+            c_ext = QTableWidgetItem(exts_str)
+            c_ext.setFont(QFont("Segoe UI", 9))
+            c_ext.setForeground(QColor("#64748b"))
+            table.setItem(row_idx, 1, c_ext)
+
+            c_cnt = QTableWidgetItem(f"{cnt} ملف")
+            c_cnt.setFont(QFont("Cairo", 10, QFont.Weight.Bold))
+            c_cnt.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            table.setItem(row_idx, 2, c_cnt)
+
+            c_sz = QTableWidgetItem(fmt_sz(sz))
+            c_sz.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+            c_sz.setForeground(QColor(col))
+            c_sz.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            table.setItem(row_idx, 3, c_sz)
+
+            c_pct = QTableWidgetItem(f"{pct}%")
+            c_pct.setFont(QFont("Segoe UI", 9))
+            c_pct.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            table.setItem(row_idx, 4, c_pct)
+
+            row_idx += 1
+
+        layout.addWidget(table, stretch=1)
+
+        # زر إغلاق
+        btn_close = QPushButton("إغلاق الإحصائيات")
+        btn_close.setObjectName("btnGovPrimary")
+        btn_close.clicked.connect(dialog.accept)
+        layout.addWidget(btn_close, alignment=Qt.AlignmentFlag.AlignLeft)
+
+        dialog.exec()
+
     def _on_trash_row_double_clicked(self, row, col):
         """عند النقر المزدوج على سطر في سلة المحذوفات: اقتراح استعادته ومزامنته فوراً"""
         cell_0 = self.trash_table.item(row, 0)
@@ -2647,9 +2843,22 @@ class FileExchangeMainWindow(QMainWindow):
             self.all_files_cache = all_items
 
             trash_cnt = self.state_mgr.get_trash_count(dept_name=self.active_dept_name)
-            self.lbl_total.setText(f"المستندات: {len(files_list)} | المجلدات: {len(folders_list)}")
-            self.lbl_trash_stat.setText(f"المحذوفات: {trash_cnt}")
+            word_cnt = sum(1 for x in files_list if Path(x['file_name']).suffix.lower() in ('.docx', '.doc'))
+            excel_cnt = sum(1 for x in files_list if Path(x['file_name']).suffix.lower() in ('.xlsx', '.xls', '.csv'))
+            access_cnt = sum(1 for x in files_list if Path(x['file_name']).suffix.lower() in ('.accdb', '.mdb'))
+            pdf_cnt = sum(1 for x in files_list if Path(x['file_name']).suffix.lower() == '.pdf')
+            folders_cnt = len(folders_list)
+
+            self.tab_all.setText(f"كافة المستندات ({len(files_list)})")
+            self.tab_folders.setText(f"المجلدات 📁 ({folders_cnt})" if folders_cnt > 0 else "المجلدات 📁")
+            self.tab_word.setText(f"Word 📝 ({word_cnt})" if word_cnt > 0 else "Word 📝")
+            self.tab_excel.setText(f"Excel 📊 ({excel_cnt})" if excel_cnt > 0 else "Excel 📊")
+            self.tab_access.setText(f"Access 🗄️ ({access_cnt})" if access_cnt > 0 else "Access 🗄️")
+            self.tab_pdf.setText(f"PDF 📄 ({pdf_cnt})" if pdf_cnt > 0 else "PDF 📄")
             self.tab_trash.setText(f"المحذوفات 🗑️ ({trash_cnt})" if trash_cnt > 0 else "المحذوفات 🗑️")
+
+            self.lbl_total.setText(f"المستندات: {len(files_list)} (Word: {word_cnt} | Excel: {excel_cnt} | Access: {access_cnt} | PDF: {pdf_cnt}) | المجلدات: {folders_cnt}")
+            self.lbl_trash_stat.setText(f"المحذوفات: {trash_cnt}")
 
             current_sig = (
                 str(self.active_dept_name),
