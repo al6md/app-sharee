@@ -53,7 +53,7 @@ def get_gov_stylesheet():
         background-color: {BG_CANVAS};
     }}
     QWidget {{
-        font-family: 'Segoe UI', 'Cairo', Tahoma, sans-serif;
+        font-family: 'Cairo', 'Segoe UI', Tahoma, sans-serif;
     }}
     QLabel {{
         color: {TEXT_TITLE};
@@ -80,13 +80,13 @@ def get_gov_stylesheet():
         color: #ffffff;
         border: 1px solid #0c231c;
         border-radius: 7px;
-        padding: 9px 22px;
-        font-size: 13px;
+        padding: 7px 14px;
+        font-size: 12px;
         font-weight: 700;
+        min-width: 75px;
     }}
     QPushButton#btnGovPrimary:hover {{
         background-color: {GOV_GREEN_HOVER};
-        box-shadow: 0 2px 6px rgba(20, 55, 46, 0.2);
     }}
     QPushButton#btnGovPrimary:pressed {{
         background-color: {GOV_GREEN_DARK};
@@ -98,9 +98,10 @@ def get_gov_stylesheet():
         color: {GOV_GREEN};
         border: 1.5px solid #c2d3cc;
         border-radius: 7px;
-        padding: 8px 18px;
-        font-size: 12.5px;
+        padding: 7px 11px;
+        font-size: 12px;
         font-weight: 700;
+        min-width: 60px;
     }}
     QPushButton#btnGovSecondary:hover {{
         background-color: {GOV_GREEN_LIGHT};
@@ -148,20 +149,20 @@ def get_gov_stylesheet():
         border: 1.5px solid {BORDER_SUBTLE};
         border-radius: 10px;
         gridline-color: #f1f5f3;
-        font-size: 13px;
+        font-size: 13.5px;
         outline: none;
     }}
     QHeaderView::section {{
         background-color: #eef3f1;
         color: {GOV_GREEN};
         font-weight: 800;
-        padding: 12px 16px;
+        padding: 9px 10px;
         border: none;
         border-bottom: 2px solid {BORDER_SUBTLE};
         font-size: 12.5px;
     }}
     QTableWidget::item {{
-        padding: 12px 14px;
+        padding: 6px 10px;
         border-bottom: 1px solid #edf3f0;
     }}
     QTableWidget::item:selected {{
@@ -419,10 +420,10 @@ def get_gov_stylesheet():
         color: #162420;
         border: 1px solid #e2ece8;
         border-radius: 8px;
-        padding: 8px 10px;
-        margin-bottom: 4px;
-        font-size: 11.5px;
-        font-weight: 600;
+        padding: 9px 12px;
+        margin-bottom: 5px;
+        font-size: 12.5px;
+        font-weight: 700;
     }}
     QListWidget#deptList::item:hover {{
         background-color: #eaf3f0;
@@ -515,9 +516,9 @@ def get_gov_stylesheet():
     """
 
 def apply_gov_shadow(widget, blur=16, offset_y=3, alpha=15):
-    """إضفاء تأثير الظل الهادئ والوقور"""
-    shadow = QGraphicsDropShadowEffect(widget)
-    shadow.setBlurRadius(blur)
-    shadow.setColor(QColor(20, 55, 46, alpha))
-    shadow.setOffset(0, offset_y)
-    widget.setGraphicsEffect(shadow)
+    """
+    ملاحظة هندسية: تم تعطيل QGraphicsDropShadowEffect المتداخل في PyQt6
+    لأنه يسبب بطئاً شديداً في الرسم (Software Gaussian Blur) وتوقفاً مفاجئاً (Painter Crash)
+    عند التمرير السريع أو تحديث الجداول والبطاقات. يُستعاض عنه بإطارات CSS نظيفة وسريعة.
+    """
+    return

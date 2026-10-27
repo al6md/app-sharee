@@ -46,6 +46,11 @@ local_state.db
 .idea/
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# TypeScript build info
+*.tsbuildinfo
+web-dashboard/tsconfig.tsbuildinfo
 
 # Local binaries & scripts in root
 /*.exe
@@ -57,6 +62,7 @@ install_app.py
 web-dashboard/public/*.old
 web-dashboard/public/FileExchange_Latest.exe
 web-dashboard/public/FileExchange_Updated.exe
+web-dashboard/public/ShareCOC_Setup.exe
 
 # Agent metadata
 .gemini/

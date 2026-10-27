@@ -1,41 +1,31 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { 
-  Shield, 
-  ShieldAlert, 
-  FolderPlus, 
-  Folder, 
-  Edit3, 
-  Trash2, 
-  Users, 
-  Laptop, 
-  Lock, 
-  Unlock, 
-  Check, 
-  X, 
-  RefreshCw, 
-  Plus, 
-  Search, 
-  FileText, 
-  Save, 
-  Key, 
-  AlertTriangle, 
-  Layers, 
+import { useState, useEffect, useRef } from 'react';
+import {
+  Shield,
+  Folder,
+  Edit3,
+  Trash2,
+  Laptop,
+  Lock,
+  Unlock,
+  Check,
+  X,
+  RefreshCw,
+  Plus,
+  Search,
+  FileText,
+  Save,
+  Key,
+  AlertTriangle,
+  Layers,
   Settings,
-  FolderOpen,
-  ArrowRight,
   Eye,
   EyeOff,
-  Download,
-  RotateCcw,
   CheckCircle2,
-  FileSpreadsheet,
-  Database,
-  Camera,
-  Upload,
   LogOut,
-  User
+  User,
+  RotateCcw,
 } from 'lucide-react';
 
 interface DepartmentItem {
@@ -51,8 +41,14 @@ interface PermissionRule {
   folderName: string;
   canView: boolean;
   canDownload: boolean;
-  canWrite: boolean;
+  canUpload: boolean;
+  canCreateFolder: boolean;
+  canEdit: boolean;
+  canRename: boolean;
+  canMove: boolean;
   canDelete: boolean;
+  canPermanentDelete: boolean;
+  pinCode?: string;
 }
 
 interface DeviceRecord {
@@ -63,6 +59,7 @@ interface DeviceRecord {
   machineGuid: string;
   isAuthorized: boolean;
   lastSeen: string;
+  status?: string;
 }
 
 interface FileRecord {
@@ -79,29 +76,33 @@ interface FileRecord {
 }
 
 export default function AdminControlPage() {
-  // حالة تسجيل الدخول والأمان
+  // حالة تسجيل الدخول والأمان المتزامنة مع السحابة
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [isCheckingAuth, setIsCheckingAuth] = useState<boolean>(true);
   const [adminUsername, setAdminUsername] = useState<string>('admin');
+  const [adminPassword, setAdminPassword] = useState<string>('admin1234');
 
   // حقول نموذج تسجيل الدخول
   const [loginUser, setLoginUser] = useState<string>('');
   const [loginPass, setLoginPass] = useState<string>('');
   const [showLoginPass, setShowLoginPass] = useState<boolean>(false);
   const [loginError, setLoginError] = useState<string>('');
+  const [loggingIn, setLoggingIn] = useState<boolean>(false);
 
-  // نافذة تعديل بيانات الدخول
+  // نافذة وتبويب تعديل بيانات الدخول (اليوزر والباسورد)
   const [showCredentialsModal, setShowCredentialsModal] = useState<boolean>(false);
   const [currentPassInput, setCurrentPassInput] = useState<string>('');
-  const [newUserInput, setNewUserInput] = useState<string>('');
+  const [newUserInput, setNewUserInput] = useState<string>('admin');
   const [newPassInput, setNewPassInput] = useState<string>('');
   const [confirmPassInput, setConfirmPassInput] = useState<string>('');
+  const [showCurrentPass, setShowCurrentPass] = useState<boolean>(false);
   const [showNewPass, setShowNewPass] = useState<boolean>(false);
+  const [savingCredentials, setSavingCredentials] = useState<boolean>(false);
   const [credError, setCredError] = useState<string>('');
   const [credSuccess, setCredSuccess] = useState<string>('');
 
   // التبويب النشط في لوحة الأدمن
-  const [activeTab, setActiveTab] = useState<'DEPTS' | 'PERMS' | 'FILES' | 'DEVICES'>('DEPTS');
+  const [activeTab, setActiveTab] = useState<'DEPTS' | 'PERMS' | 'FILES' | 'DEVICES' | 'ACCOUNT'>('DEPTS');
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -116,6 +117,10 @@ export default function AdminControlPage() {
   // بيانات الصلاحيات
   const [permissions, setPermissions] = useState<PermissionRule[]>([]);
   const [savingPerms, setSavingPerms] = useState(false);
+  const [selectedPermDept, setSelectedPermDept] = useState<PermissionRule | null>(null);
+  const [pinInput, setPinInput] = useState('');
+  const lastPermSaveRef = useRef<number>(0);
+  const isSavingPermsRef = useRef<boolean>(false);
 
   // بيانات الملفات
   const [files, setFiles] = useState<FileRecord[]>([]);
@@ -125,33 +130,79 @@ export default function AdminControlPage() {
   const [fileToRename, setFileToRename] = useState<FileRecord | null>(null);
   const [newFileNameValue, setNewFileNameValue] = useState('');
 
-  // بيانات الأجهزة
+  // بيانات الأجهزة المعتمدة
   const [devices, setDevices] = useState<DeviceRecord[]>([]);
+  const [showAddDeviceModal, setShowAddDeviceModal] = useState(false);
+  const [newDeviceName, setNewDeviceName] = useState('');
+  const [newDeviceUser, setNewDeviceUser] = useState('');
+  const [newDeviceOs, setNewDeviceOs] = useState('Windows 11 Pro');
 
   // إشعار عائم
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
 
-  // التحقق من الجلسة وبيانات الاعتماد عند التحميل
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      let storedUser = localStorage.getItem('sharecoc_admin_username');
-      let storedPass = localStorage.getItem('sharecoc_admin_password');
-
-      if (!storedUser || !storedPass) {
-        storedUser = 'admin';
-        storedPass = 'admin1234';
-        localStorage.setItem('sharecoc_admin_username', storedUser);
-        localStorage.setItem('sharecoc_admin_password', storedPass);
-      }
-
-      setAdminUsername(storedUser);
-
-      const sessionActive = localStorage.getItem('sharecoc_admin_session');
-      if (sessionActive === 'true') {
-        setIsAuthenticated(true);
-      }
-      setIsCheckingAuth(false);
+    if (toastMessage) {
+      const t = setTimeout(() => setToastMessage(null), 4500);
+      return () => clearTimeout(t);
     }
+  }, [toastMessage]);
+
+  // إشعار تطبيق سطح المكتب المحلي بالمزامنة الفورية بعد أي تغيير في الصلاحيات أو الأقسام
+  const notifyLocalDesktopSync = () => {
+    try {
+      fetch('http://127.0.0.1:18290/sync', { method: 'GET', mode: 'cors' }).catch(() => {});
+    } catch {
+      // تجاهل إن لم يكن تطبيق سطح المكتب يعمل على نفس الجهاز
+    }
+  };
+
+  // التحقق من الجلسة ومزامنة بيانات دخول الأدمن من السحابة عند التحميل
+  useEffect(() => {
+    let mounted = true;
+    const initAuth = async () => {
+      try {
+        if (typeof window !== 'undefined') {
+          const localUser = localStorage.getItem('sharecoc_admin_username') || 'admin';
+          const localPass = localStorage.getItem('sharecoc_admin_password') || 'admin1234';
+          setAdminUsername(localUser);
+          setAdminPassword(localPass);
+          setNewUserInput(localUser);
+
+          const sessionActive = localStorage.getItem('sharecoc_admin_session');
+          if (sessionActive === 'true') {
+            setIsAuthenticated(true);
+          }
+        }
+
+        // جلب بيانات الاعتماد الحقيقية المحفوظة في السحابة
+        const res = await fetch('/api/drive/permissions?force=1', { cache: 'no-store' });
+        const data = await res.json();
+        if (mounted && data.success && data.adminCredentials) {
+          const cloudUser = data.adminCredentials.username || 'admin';
+          const cloudPass = data.adminCredentials.password || 'admin1234';
+          setAdminUsername(cloudUser);
+          setAdminPassword(cloudPass);
+          setNewUserInput(cloudUser);
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('sharecoc_admin_username', cloudUser);
+            localStorage.setItem('sharecoc_admin_password', cloudPass);
+          }
+        }
+        if (mounted && data.success && Array.isArray(data.devices)) {
+          setDevices(data.devices);
+        }
+      } catch (e) {
+        console.error('Error syncing cloud admin credentials:', e);
+      } finally {
+        if (mounted) {
+          setIsCheckingAuth(false);
+        }
+      }
+    };
+    initAuth();
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   const formatSize = (bytes: number) => {
@@ -159,16 +210,33 @@ export default function AdminControlPage() {
     const k = 1024;
     const sizes = ['B', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
   };
 
-  const loadAllData = async () => {
+  const loadAllData = async (isBackgroundPoll: boolean = false) => {
     try {
-      setLoading(true);
+      if (!isBackgroundPoll) {
+        setLoading(true);
+      }
 
-      const res = await fetch('/api/drive/files');
+      const res = await fetch('/api/drive/files', { cache: 'no-store' });
       const data = await res.json();
       if (data.success) {
+        if (data.adminCredentials && !savingCredentials) {
+          const cUser = data.adminCredentials.username || 'admin';
+          const cPass = data.adminCredentials.password || 'admin1234';
+          setAdminUsername(cUser);
+          setAdminPassword(cPass);
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('sharecoc_admin_username', cUser);
+            localStorage.setItem('sharecoc_admin_password', cPass);
+          }
+        }
+
+        if (Array.isArray(data.devices) && !actionLoading) {
+          setDevices(data.devices);
+        }
+
         const folderMap = new Map<string, DepartmentItem>();
         (data.folders || []).forEach((f: any) => {
           if (f.name) {
@@ -176,7 +244,7 @@ export default function AdminControlPage() {
               id: f.id,
               name: f.name,
               fileCount: 0,
-              totalSize: 0
+              totalSize: 0,
             });
           }
         });
@@ -189,15 +257,20 @@ export default function AdminControlPage() {
           rawSize: f.size || 0,
           version: 1,
           lastModifiedBy: 'سحابة Google Drive',
-          lastModifiedAt: f.modifiedTime ? new Date(f.modifiedTime).toLocaleDateString('ar-IQ', {
-            month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
-          }) : 'الآن',
+          lastModifiedAt: f.modifiedTime
+            ? new Date(f.modifiedTime).toLocaleDateString('ar-IQ', {
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+              })
+            : 'الآن',
           storagePath: f.id,
-          isDeleted: Boolean(f.isDeleted)
+          isDeleted: Boolean(f.isDeleted),
         }));
         setFiles(mappedFiles);
 
-        mappedFiles.forEach(f => {
+        mappedFiles.forEach((f) => {
           if (!f.isDeleted && f.folder && f.folder !== 'كافة الملفات') {
             const deptName = f.folder.split('/')[0];
             if (!folderMap.has(deptName)) {
@@ -205,7 +278,7 @@ export default function AdminControlPage() {
                 id: deptName,
                 name: deptName,
                 fileCount: 0,
-                totalSize: 0
+                totalSize: 0,
               });
             }
             const item = folderMap.get(deptName)!;
@@ -217,51 +290,125 @@ export default function AdminControlPage() {
         const deptsList = Array.from(folderMap.values());
         setDepartments(deptsList);
 
-        const permsList: PermissionRule[] = deptsList.map(dept => ({
-          folderId: dept.id,
-          folderName: dept.name,
-          canView: true,
-          canDownload: true,
-          canWrite: true,
-          canDelete: true,
-        }));
-        setPermissions(permsList);
+        // عدم الكتابة فوق الصلاحيات أثناء الحفظ أو بعده مباشرة لمنع رجوع الأزرار لحالتها القديمة
+        const recentlySaved = Date.now() - lastPermSaveRef.current < 8000;
+        if (!isSavingPermsRef.current && (!isBackgroundPoll || !recentlySaved)) {
+          const cloudPerms = data.permissions || {};
+          const permsList: PermissionRule[] = deptsList.map((dept) => {
+            const saved = cloudPerms[dept.name] || {};
+            return {
+              folderId: dept.id,
+              folderName: dept.name,
+              canView: saved.canView !== undefined ? Boolean(saved.canView) : true,
+              canDownload: saved.canDownload !== undefined ? Boolean(saved.canDownload) : true,
+              canUpload: saved.canUpload !== undefined ? Boolean(saved.canUpload) : true,
+              canCreateFolder: saved.canCreateFolder !== undefined ? Boolean(saved.canCreateFolder) : true,
+              canEdit: saved.canEdit !== undefined ? Boolean(saved.canEdit) : true,
+              canRename: saved.canRename !== undefined ? Boolean(saved.canRename) : true,
+              canMove: saved.canMove !== undefined ? Boolean(saved.canMove) : true,
+              canDelete: saved.canDelete !== undefined ? Boolean(saved.canDelete) : true,
+              canPermanentDelete: saved.canPermanentDelete !== undefined ? Boolean(saved.canPermanentDelete) : true,
+              pinCode: saved.pinCode || '',
+            };
+          });
+          setPermissions(permsList);
+        }
       }
     } catch (err) {
       console.error('Error fetching admin data:', err);
     } finally {
-      setLoading(false);
+      if (!isBackgroundPoll) {
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
     if (!isAuthenticated) return;
-    loadAllData();
+    loadAllData(false);
     const interval = setInterval(() => {
-      loadAllData();
-    }, 10000);
+      loadAllData(true);
+    }, 15000);
     return () => clearInterval(interval);
   }, [isAuthenticated]);
 
-  // معالجة تسجيل الدخول
-  const handleLogin = (e?: React.FormEvent) => {
+  // معالجة تسجيل الدخول المتزامن مع السحابة
+  const handleLogin = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setLoginError('');
+    const inputUser = loginUser.trim();
+    const inputPass = loginPass;
 
-    const storedUser = localStorage.getItem('sharecoc_admin_username') || 'admin';
-    const storedPass = localStorage.getItem('sharecoc_admin_password') || 'admin1234';
+    if (!inputUser || !inputPass) {
+      setLoginError('يرجى إدخال اسم المستخدم وكلمة المرور');
+      return;
+    }
 
-    if (loginUser.trim() === storedUser && loginPass === storedPass) {
-      setIsAuthenticated(true);
-      localStorage.setItem('sharecoc_admin_session', 'true');
-      setLoginPass('');
-      setLoginError('');
-      setToastMessage({
-        text: `مرحباً بك يا ${storedUser}، تم تسجيل الدخول بنجاح!`,
-        type: 'success'
+    setLoggingIn(true);
+    try {
+      // التحقق السحابي المباشر أولاً
+      const res = await fetch('/api/drive/permissions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'VERIFY_CREDENTIALS',
+          username: inputUser,
+          password: inputPass,
+        }),
       });
-    } else {
-      setLoginError('اسم المستخدم أو كلمة المرور غير صحيحة، يرجى التحقق وإعادة المحاولة.');
+      const data = await res.json();
+
+      if (data.success && data.adminCredentials) {
+        const cUser = data.adminCredentials.username || 'admin';
+        const cPass = data.adminCredentials.password || 'admin1234';
+        setAdminUsername(cUser);
+        setAdminPassword(cPass);
+        localStorage.setItem('sharecoc_admin_username', cUser);
+        localStorage.setItem('sharecoc_admin_password', cPass);
+
+        if (data.valid) {
+          setIsAuthenticated(true);
+          localStorage.setItem('sharecoc_admin_session', 'true');
+          setNewUserInput(cUser);
+          setLoginPass('');
+          setLoginError('');
+          setToastMessage({
+            text: `✅ مرحباً بك يا ${cUser}، تم تسجيل الدخول إلى لوحة التحكم بنجاح!`,
+            type: 'success',
+          });
+          return;
+        }
+      }
+
+      // التحقق الاحتياطي المحلي في حال تعذر الاتصال اللحظي
+      const storedUser = localStorage.getItem('sharecoc_admin_username') || adminUsername || 'admin';
+      const storedPass = localStorage.getItem('sharecoc_admin_password') || adminPassword || 'admin1234';
+
+      if (inputUser.toLowerCase() === storedUser.toLowerCase() && inputPass === storedPass) {
+        setIsAuthenticated(true);
+        localStorage.setItem('sharecoc_admin_session', 'true');
+        setNewUserInput(storedUser);
+        setLoginPass('');
+        setLoginError('');
+        setToastMessage({
+          text: `✅ مرحباً بك يا ${storedUser}، تم تسجيل الدخول بنجاح!`,
+          type: 'success',
+        });
+      } else {
+        setLoginError('اسم المستخدم أو كلمة المرور غير صحيحة، يرجى التحقق وإعادة المحاولة.');
+      }
+    } catch {
+      const storedUser = localStorage.getItem('sharecoc_admin_username') || adminUsername || 'admin';
+      const storedPass = localStorage.getItem('sharecoc_admin_password') || adminPassword || 'admin1234';
+      if (inputUser.toLowerCase() === storedUser.toLowerCase() && inputPass === storedPass) {
+        setIsAuthenticated(true);
+        localStorage.setItem('sharecoc_admin_session', 'true');
+        setLoginPass('');
+      } else {
+        setLoginError('اسم المستخدم أو كلمة المرور غير صحيحة.');
+      }
+    } finally {
+      setLoggingIn(false);
     }
   };
 
@@ -275,52 +422,124 @@ export default function AdminControlPage() {
     }
   };
 
-  // تعديل بيانات تسجيل الدخول
-  const handleChangeCredentials = (e?: React.FormEvent) => {
+  // تعديل وحفظ بيانات تسجيل الدخول (اليوزر والباسورد) فعلياً في السحابة والمتصفح
+  const handleChangeCredentials = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setCredError('');
     setCredSuccess('');
 
-    const storedPass = localStorage.getItem('sharecoc_admin_password') || 'admin1234';
+    const targetUsername = (newUserInput || adminUsername).trim();
+    const targetPassword = newPassInput.trim() ? newPassInput.trim() : adminPassword;
 
-    if (currentPassInput !== storedPass) {
-      setCredError('كلمة المرور الحالية غير صحيحة!');
+    if (!targetUsername) {
+      setCredError('يرجى إدخال اسم مستخدم صالح.');
       return;
     }
 
-    if (!newUserInput.trim()) {
-      setCredError('يرجى كتابة اسم مستخدم صالح.');
+    // إذا أدخل كلمة مرور حالية نتحقق منها، وإذا كان مسجلاً دخوله بالفعل نسمح له بالتحديث المباشر
+    if (currentPassInput.trim() && currentPassInput !== adminPassword) {
+      setCredError('كلمة المرور الحالية المدخلة غير مطابقة لكلمة المرور المسجلة!');
       return;
     }
 
-    if (!newPassInput || newPassInput.length < 4) {
-      setCredError('كلمة المرور الجديدة يجب أن تحتوي على 4 أحرف أو أرقام على الأقل.');
-      return;
+    if (newPassInput.trim()) {
+      if (newPassInput.trim().length < 4) {
+        setCredError('كلمة المرور الجديدة يجب أن تتكون من 4 أحرف أو أرقام على الأقل.');
+        return;
+      }
+      if (confirmPassInput.trim() && newPassInput.trim() !== confirmPassInput.trim()) {
+        setCredError('كلمة المرور الجديدة وتأكيدها غير متطابقين!');
+        return;
+      }
     }
 
-    if (newPassInput !== confirmPassInput) {
-      setCredError('كلمة المرور الجديدة وتأكيدها غير متطابقين!');
-      return;
-    }
+    try {
+      setSavingCredentials(true);
+      const res = await fetch('/api/drive/permissions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'UPDATE_CREDENTIALS',
+          username: targetUsername,
+          password: targetPassword,
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        throw new Error(data.error || 'فشل حفظ بيانات الدخول في السحابة');
+      }
 
-    localStorage.setItem('sharecoc_admin_username', newUserInput.trim());
-    localStorage.setItem('sharecoc_admin_password', newPassInput.trim());
-    setAdminUsername(newUserInput.trim());
-    setCredSuccess('✅ تم تحديث بيانات تسجيل دخول الأدمن بنجاح!');
+      const savedUser = data.adminCredentials?.username || targetUsername;
+      const savedPass = data.adminCredentials?.password || targetPassword;
 
-    setTimeout(() => {
-      setShowCredentialsModal(false);
+      localStorage.setItem('sharecoc_admin_username', savedUser);
+      localStorage.setItem('sharecoc_admin_password', savedPass);
+      setAdminUsername(savedUser);
+      setAdminPassword(savedPass);
+      setNewUserInput(savedUser);
       setCurrentPassInput('');
-      setNewUserInput('');
       setNewPassInput('');
       setConfirmPassInput('');
+
+      const msg = `✅ تم تحديث وحفظ بيانات الدخول في السحابة بنجاح! (المستخدم: ${savedUser})`;
+      setCredSuccess(msg);
+      setToastMessage({
+        text: msg,
+        type: 'success',
+      });
+
+      if (showCredentialsModal) {
+        setTimeout(() => {
+          setShowCredentialsModal(false);
+          setCredError('');
+          setCredSuccess('');
+        }, 1200);
+      }
+    } catch (err: any) {
+      setCredError(err.message || 'حدث خطأ أثناء حفظ بيانات الدخول في السحابة');
+    } finally {
+      setSavingCredentials(false);
+    }
+  };
+
+  // إعادة ضبط اليوزر والباسورد إلى الافتراضي (admin / admin1234)
+  const handleResetDefaultCredentials = async () => {
+    if (!confirm('هل تريد إعادة ضبط اسم المستخدم إلى (admin) وكلمة المرور إلى (admin1234) وحفظها في السحابة؟')) {
+      return;
+    }
+    try {
+      setSavingCredentials(true);
       setCredError('');
       setCredSuccess('');
-      setToastMessage({
-        text: '🔑 تم حفظ بيانات دخول الأدمن الجديدة بنجاح!',
-        type: 'success'
+      const res = await fetch('/api/drive/permissions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'UPDATE_CREDENTIALS',
+          username: 'admin',
+          password: 'admin1234',
+        }),
       });
-    }, 1200);
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
+
+      localStorage.setItem('sharecoc_admin_username', 'admin');
+      localStorage.setItem('sharecoc_admin_password', 'admin1234');
+      setAdminUsername('admin');
+      setAdminPassword('admin1234');
+      setNewUserInput('admin');
+      setNewPassInput('');
+      setConfirmPassInput('');
+      setCredSuccess('✅ تمت استعادة بيانات الدخول الافتراضية (admin / admin1234) بنجاح!');
+      setToastMessage({
+        text: '🔑 تمت استعادة اليوزر والباسورد الافتراضي (admin / admin1234) في السحابة!',
+        type: 'success',
+      });
+    } catch (err: any) {
+      setCredError(err.message || 'تعذر إعادة ضبط بيانات الدخول');
+    } finally {
+      setSavingCredentials(false);
+    }
   };
 
   // إضافة قسم إداري جديد ومزامنته فوراً
@@ -340,13 +559,13 @@ export default function AdminControlPage() {
 
       setShowAddDeptModal(false);
       setNewDeptName('');
-      await loadAllData();
+      await loadAllData(false);
+      notifyLocalDesktopSync();
 
       setToastMessage({
         text: `🎉 تم إنشاء القسم "${deptName}" بنجاح ومزامنته مع سحابة Google Drive وتطبيق الحاسوب!`,
-        type: 'success'
+        type: 'success',
       });
-      alert(`✅ تمت إضافة القسم "${deptName}" بنجاح!\n\nسيظهر هذا القسم فوراً في لوحة الويب، وفي تطبيق الحاسوب (share coc) لدى كافة موظفي الغرفة.`);
     } catch (err: any) {
       alert(`تعذر إضافة القسم: ${err.message || err}`);
     } finally {
@@ -377,11 +596,12 @@ export default function AdminControlPage() {
 
       setShowRenameDeptModal(false);
       setDeptToRename(null);
-      await loadAllData();
+      await loadAllData(false);
+      notifyLocalDesktopSync();
 
       setToastMessage({
         text: `✏️ تم تعديل اسم القسم إلى "${newName}" ومزامنته مع الجميع!`,
-        type: 'success'
+        type: 'success',
       });
     } catch (err: any) {
       alert(`تعذر تعديل اسم القسم: ${err.message || err}`);
@@ -394,8 +614,8 @@ export default function AdminControlPage() {
   const handleDeleteDepartment = async (dept: DepartmentItem) => {
     const confirmDelete = confirm(
       `⚠️ تحذير إداري:\n\nهل أنت متأكد من حذف القسم "${dept.name}"؟\n` +
-      `سيتم إزالة القسم من لوحة الويب ومن القائمة الجانبية لتطبيق الحاسوب لدى جميع الموظفين.\n` +
-      `(عدد المستندات في القسم: ${dept.fileCount})`
+        `سيتم نقل القسم إلى سلة المحذوفات وإزالته من القائمة النشطة لدى الموظفين.\n` +
+        `(عدد المستندات في القسم: ${dept.fileCount})`
     );
     if (!confirmDelete) return;
 
@@ -405,10 +625,11 @@ export default function AdminControlPage() {
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
 
-      await loadAllData();
+      await loadAllData(false);
+      notifyLocalDesktopSync();
       setToastMessage({
         text: `🗑️ تم حذف القسم "${dept.name}" بنجاح.`,
-        type: 'info'
+        type: 'info',
       });
     } catch (err: any) {
       alert(`تعذر حذف القسم: ${err.message || err}`);
@@ -417,56 +638,349 @@ export default function AdminControlPage() {
     }
   };
 
-  // تغيير نمط الصلاحيات لقسم معين (تحكم كامل / تعديل بدون حذف / قراءة فقط)
-  const handleSetPresetPermission = async (folderId: string, folderName: string, preset: 'FULL' | 'EDIT_ONLY' | 'READ_ONLY') => {
-    let rule = {
-      canView: true,
-      canDownload: true,
-      canWrite: preset !== 'READ_ONLY',
-      canDelete: preset === 'FULL'
+  // حفظ صلاحيات قسم معين في سحابة Google Drive فوراً وبشكل ذري
+  const persistPermissionRule = async (updatedRule: PermissionRule, customToast?: string) => {
+    try {
+      setSavingPerms(true);
+      isSavingPermsRef.current = true;
+      lastPermSaveRef.current = Date.now();
+
+      const res = await fetch('/api/drive/permissions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          departmentName: updatedRule.folderName,
+          permission: {
+            departmentName: updatedRule.folderName,
+            canView: updatedRule.canView,
+            canDownload: updatedRule.canDownload,
+            canUpload: updatedRule.canUpload,
+            canCreateFolder: updatedRule.canCreateFolder,
+            canEdit: updatedRule.canEdit,
+            canRename: updatedRule.canRename,
+            canMove: updatedRule.canMove,
+            canDelete: updatedRule.canDelete,
+            canPermanentDelete: updatedRule.canPermanentDelete,
+            pinCode: updatedRule.pinCode || '',
+          },
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'فشل الحفظ السحابي');
+      lastPermSaveRef.current = Date.now();
+      notifyLocalDesktopSync();
+
+      setToastMessage({
+        text: customToast || `🔐 تم حفظ وتطبيق صلاحيات قسم "${updatedRule.folderName}" في السحابة فوراً!`,
+        type: 'success',
+      });
+    } catch (err: any) {
+      setToastMessage({
+        text: `❌ تعذر حفظ الصلاحيات في السحابة: ${err.message || err}`,
+        type: 'error',
+      });
+    } finally {
+      isSavingPermsRef.current = false;
+      setSavingPerms(false);
+    }
+  };
+
+  // حفظ جميع صلاحيات الأقسام دفعة واحدة
+  const handleSaveAllPermissionsNow = async () => {
+    try {
+      setSavingPerms(true);
+      isSavingPermsRef.current = true;
+      lastPermSaveRef.current = Date.now();
+
+      const mapPayload: Record<string, any> = {};
+      permissions.forEach((p) => {
+        mapPayload[p.folderName] = {
+          departmentName: p.folderName,
+          canView: p.canView,
+          canDownload: p.canDownload,
+          canUpload: p.canUpload,
+          canCreateFolder: p.canCreateFolder,
+          canEdit: p.canEdit,
+          canRename: p.canRename,
+          canMove: p.canMove,
+          canDelete: p.canDelete,
+          canPermanentDelete: p.canPermanentDelete,
+          pinCode: p.pinCode || '',
+        };
+      });
+
+      const res = await fetch('/api/drive/permissions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ permissions: mapPayload }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
+      lastPermSaveRef.current = Date.now();
+      notifyLocalDesktopSync();
+
+      setToastMessage({
+        text: '✅ تم حفظ ومزامنة مصفوفة الصلاحيات بالكامل في السحابة وتطبيقها على الويب والحاسوب!',
+        type: 'success',
+      });
+    } catch (err: any) {
+      setToastMessage({
+        text: `❌ فشل حفظ الصلاحيات: ${err.message || err}`,
+        type: 'error',
+      });
+    } finally {
+      isSavingPermsRef.current = false;
+      setSavingPerms(false);
+    }
+  };
+
+  // تبديل صلاحية مفردة من الصلاحيات التسع لقسم معين
+  const handleTogglePermissionKey = async (
+    folderId: string,
+    key: keyof Omit<PermissionRule, 'folderId' | 'folderName' | 'pinCode'>
+  ) => {
+    const baseRule =
+      selectedPermDept && selectedPermDept.folderId === folderId
+        ? selectedPermDept
+        : permissions.find((p) => p.folderId === folderId);
+    if (!baseRule) return;
+
+    const newVal = !baseRule[key];
+    const updated: PermissionRule = {
+      ...baseRule,
+      [key]: newVal,
     };
-    setPermissions(prev => prev.map(p => p.folderId === folderId ? { ...p, ...rule } : p));
-    setToastMessage({
-      text: `🔐 تم تحديث وحفظ صلاحيات قسم "${folderName}" بنجاح!`,
-      type: 'success'
-    });
+
+    // إذا تم إلغاء صلاحية العرض (canView = false) أو تفعيلها، نحفظ الحالة مباشرة
+    setPermissions((prev) => prev.map((p) => (p.folderId === folderId ? updated : p)));
+    if (selectedPermDept?.folderId === folderId) {
+      setSelectedPermDept(updated);
+    }
+    await persistPermissionRule(updated);
+  };
+
+  // تغيير نمط الصلاحيات لقسم معين عبر القوالب السريعة
+  const handleSetPresetPermission = async (
+    folderId: string,
+    folderName: string,
+    preset: 'FULL' | 'EDIT_NO_DELETE' | 'UPLOAD_ONLY' | 'READ_ONLY' | 'VIEW_ONLY' | 'LOCKED'
+  ) => {
+    const current =
+      selectedPermDept && selectedPermDept.folderId === folderId
+        ? selectedPermDept
+        : permissions.find((p) => p.folderId === folderId);
+    if (!current) return;
+
+    let updated: PermissionRule = { ...current };
+    if (preset === 'FULL') {
+      updated = {
+        ...current,
+        canView: true,
+        canDownload: true,
+        canUpload: true,
+        canCreateFolder: true,
+        canEdit: true,
+        canRename: true,
+        canMove: true,
+        canDelete: true,
+        canPermanentDelete: true,
+      };
+    } else if (preset === 'EDIT_NO_DELETE') {
+      updated = {
+        ...current,
+        canView: true,
+        canDownload: true,
+        canUpload: true,
+        canCreateFolder: true,
+        canEdit: true,
+        canRename: true,
+        canMove: true,
+        canDelete: false,
+        canPermanentDelete: false,
+      };
+    } else if (preset === 'UPLOAD_ONLY') {
+      updated = {
+        ...current,
+        canView: true,
+        canDownload: true,
+        canUpload: true,
+        canCreateFolder: true,
+        canEdit: false,
+        canRename: false,
+        canMove: false,
+        canDelete: false,
+        canPermanentDelete: false,
+      };
+    } else if (preset === 'READ_ONLY') {
+      updated = {
+        ...current,
+        canView: true,
+        canDownload: true,
+        canUpload: false,
+        canCreateFolder: false,
+        canEdit: false,
+        canRename: false,
+        canMove: false,
+        canDelete: false,
+        canPermanentDelete: false,
+      };
+    } else if (preset === 'VIEW_ONLY') {
+      updated = {
+        ...current,
+        canView: true,
+        canDownload: false,
+        canUpload: false,
+        canCreateFolder: false,
+        canEdit: false,
+        canRename: false,
+        canMove: false,
+        canDelete: false,
+        canPermanentDelete: false,
+      };
+    } else if (preset === 'LOCKED') {
+      updated = {
+        ...current,
+        canView: false,
+        canDownload: false,
+        canUpload: false,
+        canCreateFolder: false,
+        canEdit: false,
+        canRename: false,
+        canMove: false,
+        canDelete: false,
+        canPermanentDelete: false,
+      };
+    }
+
+    setPermissions((prev) => prev.map((p) => (p.folderId === folderId ? updated : p)));
+    if (selectedPermDept?.folderId === folderId) {
+      setSelectedPermDept(updated);
+    }
+    await persistPermissionRule(updated, `🔐 تم تطبيق وحفظ قالب الصلاحيات لقسم "${folderName}" سحابياً!`);
+  };
+
+  // إعادة فتح كافة الصلاحيات لجميع الأقسام
+  const handleResetAllPermissions = async () => {
+    if (!confirm('هل تريد منح الصلاحيات الكاملة (تحكم كامل) لكافة الأقسام وحفظها في السحابة؟')) return;
+    try {
+      setSavingPerms(true);
+      isSavingPermsRef.current = true;
+      lastPermSaveRef.current = Date.now();
+
+      const res = await fetch('/api/drive/permissions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'RESET_ALL',
+          departmentNames: departments.map((d) => d.name),
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
+
+      setPermissions((prev) =>
+        prev.map((p) => ({
+          ...p,
+          canView: true,
+          canDownload: true,
+          canUpload: true,
+          canCreateFolder: true,
+          canEdit: true,
+          canRename: true,
+          canMove: true,
+          canDelete: true,
+          canPermanentDelete: true,
+          pinCode: '',
+        }))
+      );
+      lastPermSaveRef.current = Date.now();
+      notifyLocalDesktopSync();
+
+      setToastMessage({
+        text: '✅ تم منح الصلاحيات الكاملة لجميع الأقسام ومزامنتها سحابياً!',
+        type: 'success',
+      });
+    } catch (err: any) {
+      alert(`تعذر إعادة ضبط الصلاحيات: ${err.message || err}`);
+    } finally {
+      isSavingPermsRef.current = false;
+      setSavingPerms(false);
+    }
+  };
+
+  // حفظ قائمة الأجهزة في السحابة
+  const persistDevicesToCloud = async (updatedDevices: DeviceRecord[], messageText: string) => {
+    try {
+      setActionLoading(true);
+      setDevices(updatedDevices);
+      const res = await fetch('/api/drive/permissions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'SAVE_DEVICES',
+          devices: updatedDevices,
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
+      setToastMessage({ text: messageText, type: 'success' });
+    } catch (err: any) {
+      setToastMessage({ text: `تعذر حفظ حالة الأجهزة: ${err.message || err}`, type: 'error' });
+    } finally {
+      setActionLoading(false);
+    }
   };
 
   // اعتماد أو تعطيل جهاز حاسوب
   const handleToggleDeviceAuth = async (device: DeviceRecord) => {
-    try {
-      setActionLoading(true);
-      const newStatus = !device.isAuthorized;
-      setDevices(prev => prev.map(d => d.id === device.id ? { ...d, isAuthorized: newStatus } : d));
-      setToastMessage({
-        text: newStatus ? `✅ تم اعتماد جهاز "${device.name}" بنجاح.` : `⛔ تم تعطيل وصول جهاز "${device.name}".`,
-        type: newStatus ? 'success' : 'info'
-      });
-    } catch (err: any) {
-      alert(`فشل تحديث حالة الجهاز: ${err.message || err}`);
-    } finally {
-      setActionLoading(false);
-    }
+    const newStatus = !device.isAuthorized;
+    const updated = devices.map((d) =>
+      d.id === device.id
+        ? { ...d, isAuthorized: newStatus, status: newStatus ? 'متصل الآن' : 'موقوف إدارياً' }
+        : d
+    );
+    await persistDevicesToCloud(
+      updated,
+      newStatus ? `✅ تم اعتماد وتفعيل جهاز "${device.name}" بنجاح.` : `⛔ تم إيقاف صلاحية جهاز "${device.name}".`
+    );
+  };
+
+  // إضافة جهاز جديد للقائمة المعتمدة
+  const handleAddDevice = async () => {
+    if (!newDeviceName.trim()) return;
+    const newDev: DeviceRecord = {
+      id: `dev-${Date.now()}`,
+      name: newDeviceName.trim().toUpperCase(),
+      user: newDeviceUser.trim() || 'موظف الغرفة',
+      os: newDeviceOs.trim() || 'Windows 11 Pro',
+      machineGuid: `COC-KARBALA-${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
+      isAuthorized: true,
+      lastSeen: 'الآن',
+      status: 'متصل الآن',
+    };
+    const updated = [...devices, newDev];
+    setShowAddDeviceModal(false);
+    setNewDeviceName('');
+    setNewDeviceUser('');
+    await persistDevicesToCloud(updated, `💻 تمت إضافة واعتماد الجهاز "${newDev.name}" في السحابة!`);
   };
 
   // حذف جهاز
   const handleDeleteDevice = async (deviceId: string, deviceName: string) => {
     if (!confirm(`هل أنت متأكد من حذف الجهاز "${deviceName}" من قائمة الأجهزة المصرح لها؟`)) return;
-    try {
-      setActionLoading(true);
-      setDevices(prev => prev.filter(d => d.id !== deviceId));
-      setToastMessage({ text: `تم حذف الجهاز "${deviceName}".`, type: 'info' });
-    } catch (err: any) {
-      alert(`تعذر حذف الجهاز: ${err.message || err}`);
-    } finally {
-      setActionLoading(false);
-    }
+    const updated = devices.filter((d) => d.id !== deviceId);
+    await persistDevicesToCloud(updated, `🗑️ تم حذف الجهاز "${deviceName}" من السحابة.`);
   };
 
   // تصفية الملفات في تبويب الملفات
-  const filteredFiles = files.filter(f => {
-    const matchDept = selectedDeptFilter === '__ALL__' || f.folder === selectedDeptFilter || f.folder.startsWith(selectedDeptFilter + '/');
-    const matchSearch = f.name.toLowerCase().includes(fileSearch.toLowerCase()) || f.folder.toLowerCase().includes(fileSearch.toLowerCase());
+  const filteredFiles = files.filter((f) => {
+    const matchDept =
+      selectedDeptFilter === '__ALL__' ||
+      f.folder === selectedDeptFilter ||
+      f.folder.startsWith(selectedDeptFilter + '/');
+    const matchSearch =
+      f.name.toLowerCase().includes(fileSearch.toLowerCase()) ||
+      f.folder.toLowerCase().includes(fileSearch.toLowerCase());
     return matchDept && matchSearch;
   });
 
@@ -474,8 +988,8 @@ export default function AdminControlPage() {
   if (isCheckingAuth) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[70vh] gap-3">
-        <RefreshCw className="w-8 h-8 animate-spin text-[#14372e]" />
-        <p className="text-xs font-bold text-slate-500">جاري التحقق من أمان الجلسة...</p>
+        <RefreshCw className="w-9 h-9 animate-spin text-[#14372e]" />
+        <p className="text-sm font-bold text-slate-600">جاري التحقق من أمان الجلسة ومزامنة السحابة...</p>
       </div>
     );
   }
@@ -490,41 +1004,37 @@ export default function AdminControlPage() {
             <div className="w-16 h-16 mx-auto mb-3 rounded-full bg-white/10 p-1 border-2 border-[#c59b27] flex items-center justify-center shadow-md">
               <Shield className="w-8 h-8 text-[#ecd58a]" />
             </div>
-            <h2 className="text-lg font-black text-white">تسجيل دخول لوحة الأدمن</h2>
-            <p className="text-xs text-[#ecd58a] mt-1 font-semibold">غرفة تجارة كربلاء المقدسة</p>
-            <p className="text-[11px] text-slate-300 mt-1">المنطقة مقيدة ومخصصة لإدارة المنظومة فقط</p>
+            <h2 className="text-xl font-black text-white">تسجيل دخول لوحة الأدمن</h2>
+            <p className="text-sm text-[#ecd58a] mt-1 font-bold">غرفة تجارة كربلاء المقدسة</p>
+            <p className="text-xs text-slate-300 mt-1">المنطقة مقيدة ومخصصة لإدارة المنظومة والصلاحيات فقط</p>
           </div>
 
           {/* نموذج تسجيل الدخول */}
           <form onSubmit={handleLogin} className="p-6 space-y-4">
             {loginError && (
-              <div className="flex items-center gap-2 p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-xs font-bold">
-                <AlertTriangle className="w-4 h-4 shrink-0" />
+              <div className="flex items-center gap-2 p-3.5 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-sm font-bold">
+                <AlertTriangle className="w-5 h-5 shrink-0" />
                 <span>{loginError}</span>
               </div>
             )}
 
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                اسم مستخدم الأدمن
-              </label>
+              <label className="block text-sm font-bold text-slate-800 mb-1.5">اسم مستخدم الأدمن</label>
               <div className="relative">
                 <input
                   type="text"
                   required
                   value={loginUser}
                   onChange={(e) => setLoginUser(e.target.value)}
-                  placeholder="أدخل اسم المستخدم (مثال: admin)"
-                  className="w-full pl-3 pr-10 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14372e] focus:bg-white transition"
+                  placeholder={`أدخل اسم المستخدم (الحالي: ${adminUsername})`}
+                  className="w-full pl-3 pr-10 py-3 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14372e] focus:bg-white transition font-bold"
                 />
-                <User className="w-4 h-4 text-slate-400 absolute right-3 top-3" />
+                <User className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5" />
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                كلمة المرور
-              </label>
+              <label className="block text-sm font-bold text-slate-800 mb-1.5">كلمة المرور</label>
               <div className="relative">
                 <input
                   type={showLoginPass ? 'text' : 'password'}
@@ -532,45 +1042,50 @@ export default function AdminControlPage() {
                   value={loginPass}
                   onChange={(e) => setLoginPass(e.target.value)}
                   placeholder="أدخل كلمة المرور"
-                  className="w-full pl-10 pr-10 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14372e] focus:bg-white transition"
+                  className="w-full pl-10 pr-10 py-3 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14372e] focus:bg-white transition font-bold"
                 />
-                <Lock className="w-4 h-4 text-slate-400 absolute right-3 top-3" />
+                <Lock className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5" />
                 <button
                   type="button"
                   onClick={() => setShowLoginPass(!showLoginPass)}
-                  className="absolute left-3 top-2.5 text-slate-400 hover:text-slate-600 transition"
+                  className="absolute left-3 top-3 text-slate-400 hover:text-slate-600 transition"
                 >
-                  {showLoginPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  {showLoginPass ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                 </button>
               </div>
             </div>
 
             <button
               type="submit"
-              className="w-full py-3 bg-[#14372e] hover:bg-[#1a473b] text-white text-xs font-bold rounded-xl transition shadow-md active:scale-98 flex items-center justify-center gap-2 mt-2"
+              disabled={loggingIn}
+              className="w-full py-3.5 bg-[#14372e] hover:bg-[#1a473b] text-white text-sm font-black rounded-xl transition shadow-md active:scale-98 flex items-center justify-center gap-2 mt-2 disabled:opacity-60"
             >
-              <Key className="w-4 h-4 text-[#ecd58a]" />
-              <span>تسجيل الدخول إلى لوحة التحكم</span>
+              {loggingIn ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Key className="w-4 h-4 text-[#ecd58a]" />}
+              <span>{loggingIn ? 'جاري التحقق من السحابة...' : 'تسجيل الدخول إلى لوحة التحكم'}</span>
             </button>
 
-            {/* بطاقة توضيحية لبيانات الدخول الافتراضية */}
-            <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-amber-900 text-[11px] leading-relaxed space-y-1">
+            {/* بطاقة توضيحية لبيانات الدخول */}
+            <div className="p-3.5 bg-amber-50 rounded-xl border border-amber-200 text-amber-900 text-xs leading-relaxed space-y-1">
               <div className="flex items-center gap-1.5 font-bold">
-                <Key className="w-3.5 h-3.5 text-amber-700" />
-                <span>بيانات الدخول الافتراضية لأول مرة:</span>
+                <Key className="w-4 h-4 text-amber-700" />
+                <span>معلومات الدخول:</span>
               </div>
-              <p className="font-mono text-[11px] text-amber-950 font-bold">
-                المستخدم: <span className="bg-amber-100 px-1.5 py-0.5 rounded border border-amber-300">admin</span> | كلمة المرور: <span className="bg-amber-100 px-1.5 py-0.5 rounded border border-amber-300">admin1234</span>
+              <p className="text-xs text-amber-950 font-bold">
+                اسم المستخدم النشط حالياً:{' '}
+                <span className="bg-amber-100 px-2 py-0.5 rounded border border-amber-300 font-mono">
+                  {adminUsername}
+                </span>
               </p>
-              <p className="text-[10px] text-amber-800">
-                (يمكنك تغيير اسم المستخدم وكلمة المرور في أي وقت بعد الدخول من زر 🔑 تغيير بيانات الدخول).
+              <p className="text-[11px] text-amber-800">
+                (إذا لم تقم بتغيير كلمة المرور مسبقاً فإن كلمة المرور الافتراضية هي:{' '}
+                <code className="font-bold">admin1234</code>).
               </p>
             </div>
 
             <div className="pt-2 text-center">
               <a
                 href="/files"
-                className="text-xs text-slate-500 hover:text-slate-800 font-semibold transition inline-flex items-center gap-1"
+                className="text-sm text-slate-600 hover:text-slate-900 font-bold transition inline-flex items-center gap-1"
               >
                 <span>← العودة إلى صفحة المستندات والأقسام</span>
               </a>
@@ -583,27 +1098,27 @@ export default function AdminControlPage() {
 
   // 2. المحتوى الكامل للوحة تحكم الأدمن (عند تسجيل الدخول بنجاح)
   return (
-    <div className="p-4 sm:p-6 md:p-8 space-y-6 max-w-7xl mx-auto w-full">
+    <div className="p-4 sm:p-6 md:p-8 space-y-6 max-w-[1440px] mx-auto w-full">
       {/* 1. الترويسة الرسمية للوحة تحكم الأدمن مع أزرار الإدارة وتغيير بيانات الدخول */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-gradient-to-r from-[#0e2720] via-[#14372e] to-[#1a473b] p-6 rounded-3xl text-white shadow-lg border-b-4 border-[#c59b27]">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-gradient-to-r from-[#0e2720] via-[#14372e] to-[#1a473b] p-6 rounded-3xl text-white shadow-lg border-b-4 border-[#c59b27]">
         <div className="space-y-1.5">
-          <div className="flex items-center gap-2.5">
-            <span className="p-2 bg-[#c59b27]/20 rounded-xl text-[#ecd58a] border border-[#c59b27]/40">
+          <div className="flex items-center gap-3">
+            <span className="p-2.5 bg-[#c59b27]/20 rounded-xl text-[#ecd58a] border border-[#c59b27]/40 shrink-0">
               <Shield className="w-6 h-6" />
             </span>
-            <h1 className="text-xl sm:text-2xl font-black text-white tracking-wide">
+            <h1 className="text-lg sm:text-2xl font-black text-white leading-snug">
               لوحة الإدارة والتحكم المركزي – غرفة تجارة كربلاء المقدسة
             </h1>
           </div>
-          <p className="text-xs sm:text-sm text-slate-300">
-            التحكم الشامل في إضافة وتعديل الأقسام، والمجلدات، والمستندات، ومصفوفة الصلاحيات، والربط اللحظي مع تطبيقات الويندوز والجوال.
+          <p className="text-xs sm:text-sm text-slate-200 leading-relaxed">
+            التحكم الفعلي الشامل في الأقسام، ومصفوفة الصلاحيات السحابية، وبيانات دخول الأدمن، والأجهزة المعتمدة.
           </p>
         </div>
 
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-2.5 flex-wrap">
           {/* اسم المسؤول النشط */}
-          <span className="inline-flex items-center gap-1.5 px-3 py-2 bg-white/10 text-[#ecd58a] rounded-xl text-xs font-bold border border-white/15">
-            <User className="w-3.5 h-3.5" />
+          <span className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-white/10 text-[#ecd58a] rounded-xl text-sm font-bold border border-white/15">
+            <User className="w-4 h-4" />
             <span>المسؤول: {adminUsername}</span>
           </span>
 
@@ -611,114 +1126,145 @@ export default function AdminControlPage() {
           <button
             onClick={() => {
               setNewUserInput(adminUsername);
-              setShowCredentialsModal(true);
+              setNewPassInput('');
+              setConfirmPassInput('');
+              setCredError('');
+              setCredSuccess('');
+              setActiveTab('ACCOUNT');
             }}
-            className="flex items-center gap-1.5 px-3.5 py-2 bg-[#c59b27] hover:bg-[#b0871d] text-[#0e2720] rounded-xl text-xs font-black transition shadow-xs active:scale-95"
+            className="flex items-center gap-1.5 px-4 py-2 bg-[#c59b27] hover:bg-[#b0871d] text-[#0e2720] rounded-xl text-sm font-black transition shadow-sm active:scale-95 cursor-pointer"
             title="تغيير اسم المستخدم أو كلمة المرور"
           >
-            <Key className="w-3.5 h-3.5" />
-            <span>تغيير بيانات الدخول</span>
+            <Key className="w-4 h-4" />
+            <span>تغيير اليوزر والباسورد</span>
           </button>
 
           {/* زر تسجيل الخروج */}
           <button
             onClick={handleLogout}
-            className="flex items-center gap-1 px-3 py-2 bg-rose-600/80 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition active:scale-95 border border-rose-500/30"
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-rose-600/90 hover:bg-rose-700 text-white rounded-xl text-sm font-bold transition active:scale-95 border border-rose-500/30 cursor-pointer"
             title="تسجيل الخروج"
           >
-            <LogOut className="w-3.5 h-3.5" />
+            <LogOut className="w-4 h-4" />
             <span>خروج</span>
           </button>
 
           {/* زر تحديث السحابة */}
           <button
-            onClick={loadAllData}
+            onClick={() => loadAllData(false)}
             disabled={loading}
-            className="flex items-center gap-1.5 px-3 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold transition border border-white/15 active:scale-95"
-            title="تحديث البيانات"
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl text-sm font-bold transition border border-white/15 active:scale-95 cursor-pointer"
+            title="تحديث البيانات من السحابة"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
             <span>تحديث</span>
           </button>
-
-          {/* شارة السحابة */}
-          <span className="inline-flex items-center gap-1.5 px-3 py-2 bg-emerald-950/80 text-emerald-300 rounded-xl text-xs font-bold border border-emerald-500/40">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-            السحابة متصلة
-          </span>
         </div>
       </div>
 
       {/* 2. بطاقات الإحصائيات الأربع المنظمة */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+        <div
+          onClick={() => setActiveTab('DEPTS')}
+          className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between cursor-pointer hover:border-[#14372e] transition"
+        >
           <div>
-            <p className="text-xs font-semibold text-slate-500">الأقسام الإدارية</p>
-            <p className="text-2xl font-black text-slate-900 mt-1">{departments.length}</p>
-            <p className="text-[11px] text-emerald-700 font-bold mt-0.5">متزامنة مع الويندوز</p>
+            <p className="text-sm font-bold text-slate-600">الأقسام الإدارية</p>
+            <p className="text-2xl sm:text-3xl font-black text-slate-900 mt-1">{departments.length}</p>
+            <p className="text-xs text-emerald-700 font-bold mt-1">متزامنة مع الويندوز والويب</p>
           </div>
-          <div className="w-11 h-11 rounded-xl bg-amber-50 text-amber-800 flex items-center justify-center font-bold">
-            <Layers className="w-5 h-5" />
+          <div className="w-12 h-12 rounded-xl bg-amber-50 text-amber-800 flex items-center justify-center font-bold shrink-0">
+            <Layers className="w-6 h-6" />
           </div>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+        <div
+          onClick={() => setActiveTab('FILES')}
+          className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between cursor-pointer hover:border-[#107c41] transition"
+        >
           <div>
-            <p className="text-xs font-semibold text-slate-500">المستندات المحفوظة</p>
-            <p className="text-2xl font-black text-[#107c41] mt-1">{files.filter(f => !f.isDeleted).length}</p>
-            <p className="text-[11px] text-slate-400 font-bold mt-0.5">Word • Excel • Access</p>
+            <p className="text-sm font-bold text-slate-600">المستندات المحفوظة</p>
+            <p className="text-2xl sm:text-3xl font-black text-[#107c41] mt-1">
+              {files.filter((f) => !f.isDeleted).length}
+            </p>
+            <p className="text-xs text-slate-500 font-bold mt-1">كافة الملفات والوثائق النشطة</p>
           </div>
-          <div className="w-11 h-11 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center font-bold">
-            <FileText className="w-5 h-5" />
+          <div className="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center font-bold shrink-0">
+            <FileText className="w-6 h-6" />
           </div>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+        <div
+          onClick={() => setActiveTab('DEVICES')}
+          className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between cursor-pointer hover:border-[#0f6cbd] transition"
+        >
           <div>
-            <p className="text-xs font-semibold text-slate-500">الأجهزة المصرح لها</p>
-            <p className="text-2xl font-black text-[#0f6cbd] mt-1">{devices.filter(d => d.isAuthorized).length} <span className="text-xs font-normal text-slate-400">جهاز</span></p>
-            <p className="text-[11px] text-sky-600 font-bold mt-0.5">حواسيب موظفي الغرفة</p>
+            <p className="text-sm font-bold text-slate-600">الأجهزة المصرح لها</p>
+            <p className="text-2xl sm:text-3xl font-black text-[#0f6cbd] mt-1">
+              {devices.filter((d) => d.isAuthorized).length}{' '}
+              <span className="text-xs font-bold text-slate-500">من {devices.length} جهاز</span>
+            </p>
+            <p className="text-xs text-sky-700 font-bold mt-1">حواسيب موظفي الغرفة</p>
           </div>
-          <div className="w-11 h-11 rounded-xl bg-sky-50 text-[#0f6cbd] flex items-center justify-center font-bold">
-            <Laptop className="w-5 h-5" />
+          <div className="w-12 h-12 rounded-xl bg-sky-50 text-[#0f6cbd] flex items-center justify-center font-bold shrink-0">
+            <Laptop className="w-6 h-6" />
           </div>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+        <div
+          onClick={() => setActiveTab('PERMS')}
+          className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between cursor-pointer hover:border-amber-600 transition"
+        >
           <div>
-            <p className="text-xs font-semibold text-slate-500">سلة المحذوفات</p>
-            <p className="text-2xl font-black text-rose-700 mt-1">{files.filter(f => f.isDeleted).length}</p>
-            <p className="text-[11px] text-rose-600 font-bold mt-0.5">مؤمّنة وقابلة للاسترجاع</p>
+            <p className="text-sm font-bold text-slate-600">الأقسام المقيدة / المحمية</p>
+            <p className="text-2xl sm:text-3xl font-black text-amber-700 mt-1">
+              {
+                permissions.filter(
+                  (p) =>
+                    !p.canView ||
+                    !p.canDelete ||
+                    !p.canUpload ||
+                    !p.canEdit ||
+                    Boolean(p.pinCode && p.pinCode.trim())
+                ).length
+              }
+            </p>
+            <p className="text-xs text-amber-700 font-bold mt-1">تخضع لقواعد حماية مخصصة</p>
           </div>
-          <div className="w-11 h-11 rounded-xl bg-rose-50 text-rose-700 flex items-center justify-center font-bold">
-            <Trash2 className="w-5 h-5" />
+          <div className="w-12 h-12 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center font-bold shrink-0">
+            <Shield className="w-6 h-6" />
           </div>
         </div>
       </div>
 
       {/* 3. شريط التبويبات الرئيسي للوحة الأدمن */}
-      <div className="flex items-center gap-2 border-b border-slate-200 pb-2 overflow-x-auto scrollbar-thin">
+      <div className="flex items-center gap-2.5 border-b border-slate-200 pb-3 overflow-x-auto scrollbar-thin">
         {[
           { id: 'DEPTS', label: '🏛️ إدارة الأقسام والمجلدات', count: departments.length },
-          { id: 'PERMS', label: '🔐 مصفوفة الصلاحيات (قراءة/تعديل/حذف)', count: permissions.length },
+          { id: 'PERMS', label: '🔐 مصفوفة الصلاحيات السحابية', count: permissions.length },
+          { id: 'ACCOUNT', label: '🔑 حساب الأدمن (اليوزر والباسورد)', count: null },
           { id: 'FILES', label: '📁 إدارة كافة المستندات', count: files.length },
-          { id: 'DEVICES', label: '💻 أجهزة الموظفين المعتمدة', count: devices.length }
-        ].map(tab => (
+          { id: 'DEVICES', label: '💻 أجهزة الموظفين المعتمدة', count: devices.length },
+        ].map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id as any)}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl text-xs font-black transition whitespace-nowrap ${
+            className={`flex items-center gap-2 px-4 py-3 rounded-2xl text-sm font-black transition whitespace-nowrap cursor-pointer ${
               activeTab === tab.id
                 ? 'bg-[#14372e] text-white shadow-md'
-                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
             }`}
           >
             <span>{tab.label}</span>
-            <span className={`px-2 py-0.5 rounded-full text-[10px] ${
-              activeTab === tab.id ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600'
-            }`}>
-              {tab.count}
-            </span>
+            {tab.count !== null && (
+              <span
+                className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
+                  activeTab === tab.id ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-700'
+                }`}
+              >
+                {tab.count}
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -728,16 +1274,16 @@ export default function AdminControlPage() {
       {/* التبويب الأول: إدارة الأقسام الإدارية */}
       {activeTab === 'DEPTS' && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
             <div>
-              <h3 className="font-bold text-sm text-slate-800">الأقسام الإدارية والمجلدات النشطة</h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                كل قسم هنا يمثل مجلداً مركزياً يتزامن فوراً مع حواسيب موظفي غرفة تجارة كربلاء المقدسة.
+              <h3 className="font-black text-base text-slate-900">الأقسام الإدارية والمجلدات النشطة</h3>
+              <p className="text-sm text-slate-600 mt-0.5">
+                كل قسم هنا يمثل مجلداً مركزياً يتزامن فوراً مع حواسيب موظفي غرفة تجارة كربلاء المقدسة ومنصة الويب.
               </p>
             </div>
             <button
               onClick={() => setShowAddDeptModal(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-[#14372e] hover:bg-[#1a473b] text-white text-xs font-bold rounded-xl transition shadow-xs active:scale-95"
+              className="flex items-center justify-center gap-2 px-5 py-2.5 bg-[#14372e] hover:bg-[#1a473b] text-white text-sm font-bold rounded-xl transition shadow-xs active:scale-95 cursor-pointer shrink-0"
             >
               <Plus className="w-4 h-4" />
               <span>إضافة قسم جديد</span>
@@ -745,47 +1291,595 @@ export default function AdminControlPage() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {departments.map(dept => (
-              <div 
-                key={dept.id} 
-                className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs hover:border-[#c59b27] transition flex flex-col justify-between"
-              >
-                <div>
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-3">
-                      <div className="w-12 h-12 rounded-xl bg-amber-50 text-amber-800 flex items-center justify-center font-bold border border-amber-200">
-                        <Folder className="w-6 h-6" />
+            {departments.map((dept) => {
+              const perm = permissions.find((p) => p.folderName === dept.name);
+              const isLocked = perm && !perm.canView;
+              const isReadOnly = perm && perm.canView && !perm.canUpload && !perm.canEdit && !perm.canDelete;
+              return (
+                <div
+                  key={dept.id}
+                  className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs hover:border-[#c59b27] transition flex flex-col justify-between"
+                >
+                  <div>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-start gap-3 min-w-0 flex-1">
+                        <div className="w-12 h-12 rounded-xl bg-amber-50 text-amber-800 flex items-center justify-center font-bold border border-amber-200 shrink-0">
+                          <Folder className="w-6 h-6" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <h4 className="font-black text-base text-slate-900 break-words whitespace-normal leading-snug">
+                            {dept.name}
+                          </h4>
+                          <p className="text-xs font-semibold text-slate-500 mt-1">{dept.fileCount} مستند محفوظ</p>
+                          <div className="flex flex-wrap gap-1.5 mt-2">
+                            {isLocked ? (
+                              <span className="px-2 py-0.5 rounded-md bg-rose-100 text-rose-800 text-xs font-bold">
+                                ⛔ القسم مقفل
+                              </span>
+                            ) : isReadOnly ? (
+                              <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-xs font-bold">
+                                👁️ قراءة فقط
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 text-xs font-bold">
+                                ✅ متاح ونشط
+                              </span>
+                            )}
+                            {perm?.pinCode && (
+                              <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-900 text-xs font-bold">
+                                🔑 محمي برمز PIN
+                              </span>
+                            )}
+                          </div>
+                        </div>
                       </div>
-                      <div>
-                        <h4 className="font-bold text-sm text-slate-900">{dept.name}</h4>
-                        <p className="text-xs text-slate-500 mt-0.5">{dept.fileCount} مستند محفوظ</p>
-                      </div>
+                    </div>
+
+                    <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-sm text-slate-600">
+                      <span>الحجم الإجمالي:</span>
+                      <span className="font-bold text-slate-800">{formatSize(dept.totalSize)}</span>
                     </div>
                   </div>
 
-                  <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-                    <span>الحجم الإجمالي:</span>
-                    <span className="font-bold text-slate-700">{formatSize(dept.totalSize)}</span>
+                  <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+                    <button
+                      onClick={() => {
+                        const found = permissions.find((p) => p.folderName === dept.name);
+                        if (found) {
+                          setSelectedPermDept(found);
+                          setPinInput(found.pinCode || '');
+                        } else {
+                          setActiveTab('PERMS');
+                        }
+                      }}
+                      className="px-3.5 py-2 text-xs font-bold text-[#14372e] bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl transition flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Shield className="w-4 h-4" />
+                      <span>تعديل الصلاحيات</span>
+                    </button>
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => {
+                          setDeptToRename(dept);
+                          setNewDeptRenameValue(dept.name);
+                          setShowRenameDeptModal(true);
+                        }}
+                        className="p-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition cursor-pointer"
+                        title="تعديل اسم القسم"
+                      >
+                        <Edit3 className="w-4 h-4" />
+                      </button>
+
+                      <button
+                        onClick={() => handleDeleteDepartment(dept)}
+                        className="p-2 text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-lg transition cursor-pointer"
+                        title="حذف القسم"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
                 </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
-                <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+      {/* التبويب الثاني: مصفوفة الصلاحيات المفصلة */}
+      {activeTab === 'PERMS' && (
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+          <div className="p-5 border-b border-slate-100 flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-slate-50">
+            <div>
+              <h3 className="font-black text-base text-slate-900 flex items-center gap-2">
+                <Shield className="w-5 h-5 text-[#0f6cbd]" />
+                <span>مصفوفة الصلاحيات المفصلة للأقسام (تطبق فعلياً في الويب وتطبيق الحاسوب)</span>
+              </h3>
+              <p className="text-sm text-slate-600 mt-1">
+                انقر مباشرة على أي زر (مسموح / محظور) لتبديل الصلاحية وحفظها فوراً في السحابة، أو اضغط «تخصيص» لضبط رمز PIN والقوالب.
+              </p>
+            </div>
+            <div className="flex items-center gap-2.5 flex-wrap">
+              {savingPerms && (
+                <span className="text-xs font-bold text-sky-800 bg-sky-50 px-3.5 py-2 rounded-xl border border-sky-200 flex items-center gap-1.5">
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  جاري الحفظ في السحابة...
+                </span>
+              )}
+              <button
+                onClick={handleSaveAllPermissionsNow}
+                disabled={savingPerms}
+                className="px-4 py-2.5 text-xs font-bold rounded-xl bg-[#14372e] text-white hover:bg-[#1a473b] transition flex items-center gap-1.5 shadow-xs cursor-pointer"
+              >
+                <Save className="w-4 h-4" />
+                <span>حفظ ومزامنة الكل الآن</span>
+              </button>
+              <button
+                onClick={handleResetAllPermissions}
+                disabled={savingPerms}
+                className="px-4 py-2.5 text-xs font-bold rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 transition flex items-center gap-1.5 shadow-xs cursor-pointer"
+              >
+                <Unlock className="w-4 h-4" />
+                <span>فتح كافة الصلاحيات للجميع</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-right text-sm">
+              <thead className="bg-slate-100/80 text-slate-700 border-b border-slate-200 font-black text-xs">
+                <tr>
+                  <th className="p-4 min-w-[200px]">القسم الإداري</th>
+                  <th className="p-3 text-center">تصفح وعرض</th>
+                  <th className="p-3 text-center">تنزيل وفتح</th>
+                  <th className="p-3 text-center">رفع ملفات</th>
+                  <th className="p-3 text-center">إنشاء مجلدات</th>
+                  <th className="p-3 text-center">تعديل وحفظ</th>
+                  <th className="p-3 text-center">إعادة تسمية</th>
+                  <th className="p-3 text-center">نقل ملفات</th>
+                  <th className="p-3 text-center">حذف للسلة</th>
+                  <th className="p-3 text-center">حذف نهائي</th>
+                  <th className="p-4 text-center min-w-[230px]">قوالب سريعة وتخصيص</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {permissions.map((perm) => {
+                  const permCols: {
+                    key: keyof Omit<PermissionRule, 'folderId' | 'folderName' | 'pinCode'>;
+                    label: string;
+                  }[] = [
+                    { key: 'canView', label: 'تصفح' },
+                    { key: 'canDownload', label: 'تنزيل' },
+                    { key: 'canUpload', label: 'رفع' },
+                    { key: 'canCreateFolder', label: 'مجلدات' },
+                    { key: 'canEdit', label: 'تعديل' },
+                    { key: 'canRename', label: 'تسمية' },
+                    { key: 'canMove', label: 'نقل' },
+                    { key: 'canDelete', label: 'حذف' },
+                    { key: 'canPermanentDelete', label: 'نهائي' },
+                  ];
+                  return (
+                    <tr key={perm.folderId} className="hover:bg-slate-50/80 transition">
+                      <td className="p-4 font-bold text-slate-900">
+                        <div className="flex items-center gap-2.5">
+                          <Folder className="w-5 h-5 text-amber-600 shrink-0" />
+                          <span className="break-words whitespace-normal leading-snug text-sm font-black">
+                            {perm.folderName}
+                          </span>
+                          {perm.pinCode && (
+                            <span
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 text-amber-900 text-xs font-bold shrink-0"
+                              title={`محمي برمز PIN: ${perm.pinCode}`}
+                            >
+                              <Key className="w-3 h-3" /> PIN
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      {permCols.map((col) => {
+                        const enabled = Boolean(perm[col.key]);
+                        return (
+                          <td key={col.key} className="p-2.5 text-center">
+                            <button
+                              type="button"
+                              onClick={() => handleTogglePermissionKey(perm.folderId, col.key)}
+                              title={`انقر لتبديل صلاحية (${col.label}) لقسم ${perm.folderName}`}
+                              className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-bold border transition cursor-pointer active:scale-95 ${
+                                enabled
+                                  ? 'text-emerald-800 bg-emerald-50 border-emerald-300 hover:bg-emerald-100'
+                                  : 'text-rose-800 bg-rose-50 border-rose-300 hover:bg-rose-100'
+                              }`}
+                            >
+                              {enabled ? <Check className="w-3.5 h-3.5" /> : <X className="w-3.5 h-3.5" />}
+                              <span>{enabled ? 'مسموح' : 'محظور'}</span>
+                            </button>
+                          </td>
+                        );
+                      })}
+                      <td className="p-3 text-center">
+                        <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={() => handleSetPresetPermission(perm.folderId, perm.folderName, 'FULL')}
+                            className="px-2.5 py-1.5 text-xs font-bold rounded-lg bg-emerald-50 text-emerald-800 hover:bg-emerald-100 transition border border-emerald-200 cursor-pointer"
+                          >
+                            كامل
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleSetPresetPermission(perm.folderId, perm.folderName, 'EDIT_NO_DELETE')}
+                            className="px-2.5 py-1.5 text-xs font-bold rounded-lg bg-sky-50 text-sky-800 hover:bg-sky-100 transition border border-sky-200 cursor-pointer"
+                          >
+                            بلا حذف
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleSetPresetPermission(perm.folderId, perm.folderName, 'READ_ONLY')}
+                            className="px-2.5 py-1.5 text-xs font-bold rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200 transition border border-slate-300 cursor-pointer"
+                          >
+                            قراءة فقط
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleSetPresetPermission(perm.folderId, perm.folderName, 'LOCKED')}
+                            className="px-2.5 py-1.5 text-xs font-bold rounded-lg bg-rose-50 text-rose-800 hover:bg-rose-100 transition border border-rose-200 cursor-pointer"
+                          >
+                            قفل
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedPermDept(perm);
+                              setPinInput(perm.pinCode || '');
+                            }}
+                            className="px-3 py-1.5 text-xs font-bold rounded-lg bg-[#14372e] text-white hover:bg-[#1b4b3f] transition flex items-center gap-1 cursor-pointer"
+                          >
+                            <Settings className="w-3.5 h-3.5" />
+                            <span>تخصيص و PIN</span>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* التبويب الثالث (الجديد والمباشر): إدارة حساب الأدمن (اليوزر والباسورد) */}
+      {activeTab === 'ACCOUNT' && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          <div className="lg:col-span-7 bg-white rounded-3xl border border-slate-200 shadow-xs p-6 space-y-5">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-700 border border-amber-200 flex items-center justify-center">
+                  <Key className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="font-black text-base text-slate-900">
+                    تغيير اسم المستخدم وكلمة المرور للوحة الأدمن
+                  </h3>
+                  <p className="text-sm text-slate-500 mt-0.5">
+                    يتم حفظ اليوزر والباسورد الجديد في سحابة Google Drive فوراً ليعملا على جميع المتصفحات والأجهزة.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {credError && (
+              <div className="p-4 bg-rose-50 border border-rose-200 text-rose-700 rounded-2xl text-sm font-bold flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 shrink-0" />
+                <span>{credError}</span>
+              </div>
+            )}
+
+            {credSuccess && (
+              <div className="p-4 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-2xl text-sm font-bold flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5 shrink-0 text-emerald-600" />
+                <span>{credSuccess}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleChangeCredentials} className="space-y-4">
+              <div>
+                <label className="block text-sm font-bold text-slate-800 mb-1.5">
+                  اسم مستخدم الأدمن الجديد (Username)
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    required
+                    value={newUserInput}
+                    onChange={(e) => setNewUserInput(e.target.value)}
+                    placeholder="أدخل اسم المستخدم الجديد (مثال: admin)"
+                    className="w-full pl-4 pr-10 py-3 text-sm font-bold bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14372e] focus:bg-white"
+                  />
+                  <User className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5" />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-slate-800 mb-1.5">
+                  كلمة المرور الجديدة (Password)
+                </label>
+                <div className="relative">
+                  <input
+                    type={showNewPass ? 'text' : 'password'}
+                    value={newPassInput}
+                    onChange={(e) => setNewPassInput(e.target.value)}
+                    placeholder="أدخل كلمة المرور الجديدة (أو اتركها فارغة للإبقاء على الحالية)"
+                    className="w-full pl-10 pr-10 py-3 text-sm font-bold bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14372e] focus:bg-white"
+                  />
+                  <Lock className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5" />
                   <button
-                    onClick={() => {
-                      setDeptToRename(dept);
-                      setNewDeptRenameValue(dept.name);
-                      setShowRenameDeptModal(true);
-                    }}
-                    className="p-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition"
-                    title="تعديل اسم القسم"
+                    type="button"
+                    onClick={() => setShowNewPass(!showNewPass)}
+                    className="absolute left-3 top-3 text-slate-400 hover:text-slate-700"
                   >
-                    <Edit3 className="w-4 h-4" />
+                    {showNewPass ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-slate-800 mb-1.5">
+                  تأكيد كلمة المرور الجديدة
+                </label>
+                <input
+                  type={showNewPass ? 'text' : 'password'}
+                  value={confirmPassInput}
+                  onChange={(e) => setConfirmPassInput(e.target.value)}
+                  placeholder="أعد كتابة كلمة المرور الجديدة للتأكيد"
+                  className="w-full px-4 py-3 text-sm font-bold bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14372e] focus:bg-white"
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={handleResetDefaultCredentials}
+                  disabled={savingCredentials}
+                  className="px-4 py-2.5 text-xs font-bold text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-xl transition flex items-center gap-1.5 cursor-pointer"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  <span>استعادة الافتراضي (admin / admin1234)</span>
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={savingCredentials}
+                  className="px-6 py-3 text-sm font-black bg-[#14372e] text-white rounded-xl hover:bg-[#1a473b] transition shadow-md flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                >
+                  {savingCredentials ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Save className="w-4 h-4 text-[#ecd58a]" />
+                  )}
+                  <span>{savingCredentials ? 'جاري الحفظ في السحابة...' : 'حفظ اليوزر والباسورد الجديد'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <div className="lg:col-span-5 space-y-4">
+            <div className="bg-white rounded-3xl border border-slate-200 shadow-xs p-6 space-y-4">
+              <h4 className="font-black text-base text-slate-900 flex items-center gap-2">
+                <Shield className="w-5 h-5 text-[#14372e]" />
+                <span>بيانات الدخول النشطة حالياً في السحابة</span>
+              </h4>
+              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-600 font-bold">اسم المستخدم الحالي:</span>
+                  <span className="font-mono font-black text-slate-900 bg-white px-3 py-1 rounded-lg border border-slate-200">
+                    {adminUsername}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-600 font-bold">كلمة المرور الحالية:</span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono font-black text-slate-900 bg-white px-3 py-1 rounded-lg border border-slate-200">
+                      {showCurrentPass ? adminPassword : '••••••••'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setShowCurrentPass(!showCurrentPass)}
+                      className="p-1.5 text-slate-500 hover:text-slate-800 bg-white rounded-lg border border-slate-200 cursor-pointer"
+                      title={showCurrentPass ? 'إخفاء كلمة المرور' : 'إظهار كلمة المرور الحالية'}
+                    >
+                      {showCurrentPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                💡 ملاحظة أمنية: يتم تشفير وحفظ بيانات الدخول في ملف الإعدادات المركزي داخل Google Drive لضمان عمل نفس اليوزر والباسورد عند فتح لوحة الأدمن من أي حاسوب أو هاتف.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* التبويب الرابع: إدارة كافة المستندات */}
+      {activeTab === 'FILES' && (
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+          <div className="p-5 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-3 bg-slate-50">
+            <div>
+              <h3 className="font-black text-base text-slate-900">إدارة المستندات الرسمية والأرشفة</h3>
+              <p className="text-sm text-slate-600 mt-0.5">
+                عرض الأسماء الكاملة للمستندات، تعديل الأسماء، وحذف المستندات الزائدة من التخزين السحابي.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <select
+                value={selectedDeptFilter}
+                onChange={(e) => setSelectedDeptFilter(e.target.value)}
+                className="px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-xl font-bold text-slate-800"
+              >
+                <option value="__ALL__">كافة الأقسام</option>
+                {departments.map((d) => (
+                  <option key={d.id} value={d.name}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
+
+              <div className="relative">
+                <input
+                  type="text"
+                  placeholder="بحث في المستندات..."
+                  value={fileSearch}
+                  onChange={(e) => setFileSearch(e.target.value)}
+                  className="pl-3 pr-9 py-2 text-sm bg-white border border-slate-300 rounded-xl font-semibold"
+                />
+                <Search className="w-4 h-4 text-slate-400 absolute right-3 top-2.5" />
+              </div>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-right text-sm">
+              <thead className="bg-slate-100/80 text-slate-700 border-b border-slate-200 font-black">
+                <tr>
+                  <th className="p-4 min-w-[280px]">اسم المستند الكامل</th>
+                  <th className="p-4 min-w-[180px]">القسم / المسار</th>
+                  <th className="p-4">الحجم</th>
+                  <th className="p-4">تاريخ الحفظ</th>
+                  <th className="p-4 text-center">الحالة</th>
+                  <th className="p-4 text-center">إجراءات</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filteredFiles.map((file) => (
+                  <tr key={file.id} className="hover:bg-slate-50/70 transition">
+                    <td className="p-4 font-bold text-slate-900">
+                      <div className="flex items-start gap-2.5">
+                        <FileText className="w-5 h-5 text-slate-500 shrink-0 mt-0.5" />
+                        <span className="break-words whitespace-normal leading-relaxed text-sm font-bold">
+                          {file.name}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="p-4 text-slate-700 font-semibold break-words whitespace-normal">{file.folder}</td>
+                    <td className="p-4 text-slate-700 font-mono font-bold">{file.size}</td>
+                    <td className="p-4 text-slate-600">{file.lastModifiedAt}</td>
+                    <td className="p-4 text-center">
+                      <span
+                        className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold ${
+                          file.isDeleted
+                            ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                            : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                        }`}
+                      >
+                        {file.isDeleted ? 'في السلة' : 'نشط ومؤرشف'}
+                      </span>
+                    </td>
+                    <td className="p-4 text-center">
+                      <div className="flex items-center justify-center gap-2">
+                        <button
+                          onClick={() => {
+                            setFileToRename(file);
+                            setNewFileNameValue(file.name);
+                            setShowRenameFileModal(true);
+                          }}
+                          className="p-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition cursor-pointer"
+                          title="تعديل اسم المستند"
+                        >
+                          <Edit3 className="w-4 h-4" />
+                        </button>
+
+                        <button
+                          onClick={async () => {
+                            if (!confirm(`هل أنت متأكد من حذف المستند "${file.name}"؟`)) return;
+                            await fetch(`/api/drive/files?id=${file.id}`, { method: 'DELETE' });
+                            await loadAllData(false);
+                            notifyLocalDesktopSync();
+                          }}
+                          className="p-2 text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-lg transition cursor-pointer"
+                          title="حذف المستند"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* التبويب الخامس: أجهزة الموظفين المعتمدة */}
+      {activeTab === 'DEVICES' && (
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6 space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b pb-4">
+            <div>
+              <h3 className="font-black text-base text-slate-900">حواسيب موظفي غرفة تجارة كربلاء المعتمدة</h3>
+              <p className="text-sm text-slate-600 mt-0.5">
+                إدارة الأجهزة المصرح لها بالمزامنة التلقائية عبر تطبيق الحاسوب (Share COC).
+              </p>
+            </div>
+            <div className="flex items-center gap-2.5">
+              <button
+                onClick={() => setShowAddDeviceModal(true)}
+                className="flex items-center gap-2 px-4 py-2.5 bg-[#14372e] hover:bg-[#1a473b] text-white text-sm font-bold rounded-xl transition cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>إضافة جهاز معتمد</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pt-2">
+            {devices.map((dev) => (
+              <div
+                key={dev.id}
+                className={`p-5 rounded-2xl border space-y-3 transition ${
+                  dev.isAuthorized
+                    ? 'border-slate-200 bg-slate-50/60'
+                    : 'border-rose-200 bg-rose-50/30 opacity-85'
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <Laptop className={`w-5 h-5 shrink-0 ${dev.isAuthorized ? 'text-[#0f6cbd]' : 'text-rose-600'}`} />
+                    <span className="font-black text-sm text-slate-900 break-words">{dev.name}</span>
+                  </div>
+                  <span
+                    className={`text-xs font-bold px-2.5 py-0.5 rounded-full shrink-0 ${
+                      dev.isAuthorized ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                    }`}
+                  >
+                    {dev.isAuthorized ? '🟢 معتمد ونشط' : '⛔ موقوف'}
+                  </span>
+                </div>
+                <p className="text-sm text-slate-700 break-words">
+                  القسم / الموظف: <strong className="text-slate-900">{dev.user}</strong>
+                </p>
+                <p className="text-xs text-slate-500 font-mono">نظام التشغيل: {dev.os}</p>
+
+                <div className="pt-3 border-t border-slate-200/80 flex items-center justify-between gap-2">
+                  <button
+                    onClick={() => handleToggleDeviceAuth(dev)}
+                    disabled={actionLoading}
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                      dev.isAuthorized
+                        ? 'bg-amber-100 text-amber-900 hover:bg-amber-200'
+                        : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                    }`}
+                  >
+                    {dev.isAuthorized ? 'إيقاف الصلاحية مؤقتاً' : 'تفعيل واعتماد الجهاز'}
                   </button>
 
                   <button
-                    onClick={() => handleDeleteDepartment(dept)}
-                    className="p-2 text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-lg transition"
-                    title="حذف القسم"
+                    onClick={() => handleDeleteDevice(dev.id, dev.name)}
+                    disabled={actionLoading}
+                    className="p-2 text-rose-600 hover:bg-rose-100 rounded-xl transition cursor-pointer"
+                    title="حذف الجهاز"
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
@@ -796,363 +1890,59 @@ export default function AdminControlPage() {
         </div>
       )}
 
-      {/* التبويب الثاني: مصفوفة الصلاحيات */}
-      {activeTab === 'PERMS' && (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-          <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
-            <div>
-              <h3 className="font-bold text-sm text-slate-800">مصفوفة صلاحيات الوصول والتعديل للأقسام</h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                تحديد صلاحيات القراءة، التحميل، التعديل، والحذف لكل قسم على حدة.
-              </p>
-            </div>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-right text-xs">
-              <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 font-bold">
-                <tr>
-                  <th className="p-4">القسم الإداري</th>
-                  <th className="p-4 text-center">معاينة وتصفح</th>
-                  <th className="p-4 text-center">تحميل المستندات</th>
-                  <th className="p-4 text-center">تعديل وحفظ</th>
-                  <th className="p-4 text-center">حذف المستندات</th>
-                  <th className="p-4 text-center">إجراءات سريعة</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {permissions.map(perm => (
-                  <tr key={perm.folderId} className="hover:bg-slate-50/50 transition">
-                    <td className="p-4 font-bold text-slate-800 flex items-center gap-2">
-                      <Folder className="w-4 h-4 text-amber-600" />
-                      <span>{perm.folderName}</span>
-                    </td>
-                    <td className="p-4 text-center">
-                      <span className="inline-flex items-center gap-1 text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full text-[11px] font-bold border border-emerald-200">
-                        <Check className="w-3.5 h-3.5" /> متاح
-                      </span>
-                    </td>
-                    <td className="p-4 text-center">
-                      <span className="inline-flex items-center gap-1 text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full text-[11px] font-bold border border-emerald-200">
-                        <Check className="w-3.5 h-3.5" /> متاح
-                      </span>
-                    </td>
-                    <td className="p-4 text-center">
-                      <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold border ${
-                        perm.canWrite 
-                          ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
-                          : 'text-rose-700 bg-rose-50 border-rose-200'
-                      }`}>
-                        {perm.canWrite ? <Check className="w-3.5 h-3.5" /> : <X className="w-3.5 h-3.5" />}
-                        {perm.canWrite ? 'مسموح' : 'محظور'}
-                      </span>
-                    </td>
-                    <td className="p-4 text-center">
-                      <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold border ${
-                        perm.canDelete 
-                          ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
-                          : 'text-amber-800 bg-amber-50 border-amber-200'
-                      }`}>
-                        {perm.canDelete ? <Check className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
-                        {perm.canDelete ? 'مسموح' : 'مقيد للأدمن'}
-                      </span>
-                    </td>
-                    <td className="p-4 text-center">
-                      <div className="flex items-center justify-center gap-1.5">
-                        <button
-                          onClick={() => handleSetPresetPermission(perm.folderId, perm.folderName, 'FULL')}
-                          className="px-2.5 py-1 text-[10px] font-bold rounded-lg bg-emerald-50 text-emerald-800 hover:bg-emerald-100 transition border border-emerald-200"
-                        >
-                          تحكم كامل
-                        </button>
-                        <button
-                          onClick={() => handleSetPresetPermission(perm.folderId, perm.folderName, 'EDIT_ONLY')}
-                          className="px-2.5 py-1 text-[10px] font-bold rounded-lg bg-sky-50 text-sky-800 hover:bg-sky-100 transition border border-sky-200"
-                        >
-                          تعديل بلا حذف
-                        </button>
-                        <button
-                          onClick={() => handleSetPresetPermission(perm.folderId, perm.folderName, 'READ_ONLY')}
-                          className="px-2.5 py-1 text-[10px] font-bold rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200 transition"
-                        >
-                          قراءة فقط
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* التبويب الثالث: إدارة كافة المستندات */}
-      {activeTab === 'FILES' && (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-          <div className="p-4 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-3 bg-slate-50">
-            <div>
-              <h3 className="font-bold text-sm text-slate-800">إدارة المستندات الرسمية والأرشفة</h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                تعديل الأسماء، المعاينة المباشرة، وحذف المستندات الزائدة من التخزين السحابي.
-              </p>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <select
-                value={selectedDeptFilter}
-                onChange={(e) => setSelectedDeptFilter(e.target.value)}
-                className="px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-xl font-bold"
-              >
-                <option value="__ALL__">كافة الأقسام</option>
-                {departments.map(d => (
-                  <option key={d.id} value={d.name}>{d.name}</option>
-                ))}
-              </select>
-
-              <div className="relative">
-                <input
-                  type="text"
-                  placeholder="بحث في المستندات..."
-                  value={fileSearch}
-                  onChange={(e) => setFileSearch(e.target.value)}
-                  className="pl-3 pr-8 py-1.5 text-xs bg-white border border-slate-200 rounded-xl"
-                />
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-2.5" />
-              </div>
-            </div>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-right text-xs">
-              <thead className="bg-slate-50 text-slate-600 border-b border-slate-200 font-bold">
-                <tr>
-                  <th className="p-4">اسم المستند</th>
-                  <th className="p-4">القسم</th>
-                  <th className="p-4">الحجم</th>
-                  <th className="p-4">تاريخ الحفظ</th>
-                  <th className="p-4 text-center">الحالة</th>
-                  <th className="p-4 text-center">إجراءات</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {filteredFiles.map(file => (
-                  <tr key={file.id} className="hover:bg-slate-50/50 transition">
-                    <td className="p-4 font-bold text-slate-800 flex items-center gap-2">
-                      <FileText className="w-4 h-4 text-slate-500" />
-                      <span>{file.name}</span>
-                    </td>
-                    <td className="p-4 text-slate-600">{file.folder}</td>
-                    <td className="p-4 text-slate-600 font-mono">{file.size}</td>
-                    <td className="p-4 text-slate-500">{file.lastModifiedAt}</td>
-                    <td className="p-4 text-center">
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                        file.isDeleted
-                          ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                          : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                      }`}>
-                        {file.isDeleted ? 'في السلة' : 'نشط ومؤرشف'}
-                      </span>
-                    </td>
-                    <td className="p-4 text-center">
-                      <div className="flex items-center justify-center gap-1.5">
-                        <button
-                          onClick={() => {
-                            setFileToRename(file);
-                            setNewFileNameValue(file.name);
-                            setShowRenameFileModal(true);
-                          }}
-                          className="p-1.5 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition"
-                          title="تعديل اسم المستند"
-                        >
-                          <Edit3 className="w-3.5 h-3.5" />
-                        </button>
-
-                        <button
-                          onClick={async () => {
-                            if (!confirm(`هل أنت متأكد من حذف المستند "${file.name}"؟`)) return;
-                            await fetch(`/api/drive/files?id=${file.id}`, { method: 'DELETE' });
-                            await loadAllData();
-                          }}
-                          className="p-1.5 text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-lg transition"
-                          title="حذف المستند"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* التبويب الرابع: أجهزة الموظفين المعتمدة */}
-      {activeTab === 'DEVICES' && (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6 space-y-4">
-          <div className="flex items-center justify-between border-b pb-4">
-            <div>
-              <h3 className="font-bold text-sm text-slate-800">حواسيب موظفي غرفة تجارة كربلاء المعتمدة</h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                الأجهزة المثبت عليها تطبيق الويندوز (share coc) والمصرح لها بالمزامنة التلقائية.
-              </p>
-            </div>
-            <span className="text-xs bg-emerald-50 text-emerald-800 font-bold px-3 py-1 rounded-full border border-emerald-200">
-              🟢 الترخيص نشط ومفتوح
-            </span>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pt-2">
-            {[
-              { id: 'dev-1', name: 'COC-SECRETARY-PC', user: 'أمانة السر والإدارة العامة', os: 'Windows 11 Pro', status: 'متصل الآن' },
-              { id: 'dev-2', name: 'COC-REGISTRY-01', user: 'قسم السجل التجاري', os: 'Windows 10 Enterprise', status: 'متصل الآن' },
-              { id: 'dev-3', name: 'COC-SUBSCRIPTION-01', user: 'قسم الاشتراكات', os: 'Windows 11 Pro', status: 'متصل الآن' },
-              { id: 'dev-4', name: 'COC-GENERAL-LAPTOP', user: 'القسم العام والمتابعة', os: 'Windows 11 Home', status: 'متصل الآن' },
-            ].map(dev => (
-              <div key={dev.id} className="p-4 rounded-xl border border-slate-200 bg-slate-50/50 space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Laptop className="w-4 h-4 text-[#0f6cbd]" />
-                    <span className="font-bold text-xs text-slate-800">{dev.name}</span>
-                  </div>
-                  <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded-full">
-                    {dev.status}
-                  </span>
-                </div>
-                <p className="text-xs text-slate-600">المستخدم: <strong className="text-slate-800">{dev.user}</strong></p>
-                <p className="text-[11px] text-slate-400 font-mono">نظام التشغيل: {dev.os}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* 5. النوافذ المنبثقة (Modals) */}
 
-      {/* نافذة تغيير بيانات تسجيل الدخول */}
-      {showCredentialsModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <div className="flex items-center gap-2 text-amber-900 font-bold">
-                <Key className="w-5 h-5 text-amber-600" />
-                <h3 className="text-sm font-black">تغيير بيانات تسجيل دخول الأدمن</h3>
-              </div>
-              <button 
-                onClick={() => {
-                  setShowCredentialsModal(false);
-                  setCredError('');
-                  setCredSuccess('');
-                }}
-                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {credError && (
-              <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-xs font-bold flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 shrink-0" />
-                <span>{credError}</span>
-              </div>
-            )}
-
-            {credSuccess && (
-              <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs font-bold flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
-                <span>{credSuccess}</span>
-              </div>
-            )}
-
-            <form onSubmit={handleChangeCredentials} className="space-y-3.5">
+      {/* نافذة إضافة جهاز جديد */}
+      {showAddDeviceModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-xl">
+            <h3 className="font-black text-base text-slate-900">إضافة جهاز حاسوب معتمد</h3>
+            <div className="space-y-3">
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  كلمة المرور الحالية للتأكيد
-                </label>
-                <input
-                  type="password"
-                  required
-                  value={currentPassInput}
-                  onChange={(e) => setCurrentPassInput(e.target.value)}
-                  placeholder="أدخل كلمة المرور الحالية"
-                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14372e]"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  اسم المستخدم الجديد
-                </label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">اسم الحاسوب (Computer Name)</label>
                 <input
                   type="text"
-                  required
-                  value={newUserInput}
-                  onChange={(e) => setNewUserInput(e.target.value)}
-                  placeholder="اسم المستخدم الجديد"
-                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14372e]"
+                  placeholder="مثال: COC-LEGAL-01"
+                  value={newDeviceName}
+                  onChange={(e) => setNewDeviceName(e.target.value)}
+                  className="w-full px-4 py-2.5 text-sm bg-slate-50 border border-slate-300 rounded-xl"
                 />
               </div>
-
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  كلمة المرور الجديدة
-                </label>
-                <div className="relative">
-                  <input
-                    type={showNewPass ? 'text' : 'password'}
-                    required
-                    value={newPassInput}
-                    onChange={(e) => setNewPassInput(e.target.value)}
-                    placeholder="كلمة مرور جديدة (4 أحرف أو أرقام على الأقل)"
-                    className="w-full pl-9 pr-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14372e]"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowNewPass(!showNewPass)}
-                    className="absolute left-2.5 top-2 text-slate-400 hover:text-slate-600"
-                  >
-                    {showNewPass ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  تأكيد كلمة المرور الجديدة
-                </label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">القسم أو الموظف المسؤول</label>
                 <input
-                  type="password"
-                  required
-                  value={confirmPassInput}
-                  onChange={(e) => setConfirmPassInput(e.target.value)}
-                  placeholder="أعد إدخال كلمة المرور الجديدة"
-                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14372e]"
+                  type="text"
+                  placeholder="مثال: القسم القانوني"
+                  value={newDeviceUser}
+                  onChange={(e) => setNewDeviceUser(e.target.value)}
+                  className="w-full px-4 py-2.5 text-sm bg-slate-50 border border-slate-300 rounded-xl"
                 />
               </div>
-
-              <div className="flex items-center justify-end gap-2 pt-3 border-t">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowCredentialsModal(false);
-                    setCredError('');
-                    setCredSuccess('');
-                  }}
-                  className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition"
-                >
-                  إلغاء
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 text-xs font-bold bg-[#14372e] text-white rounded-xl hover:bg-[#1a473b] transition shadow-sm flex items-center gap-1.5"
-                >
-                  <Save className="w-3.5 h-3.5" />
-                  <span>حفظ البيانات الجديدة</span>
-                </button>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">نظام التشغيل</label>
+                <input
+                  type="text"
+                  value={newDeviceOs}
+                  onChange={(e) => setNewDeviceOs(e.target.value)}
+                  className="w-full px-4 py-2.5 text-sm bg-slate-50 border border-slate-300 rounded-xl"
+                />
               </div>
-            </form>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-3 border-t">
+              <button
+                onClick={() => setShowAddDeviceModal(false)}
+                className="px-4 py-2 text-sm font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition"
+              >
+                إلغاء
+              </button>
+              <button
+                onClick={handleAddDevice}
+                disabled={!newDeviceName.trim() || actionLoading}
+                className="px-5 py-2 text-sm font-bold bg-[#14372e] text-white rounded-xl hover:bg-[#1a473b] transition"
+              >
+                إضافة واعتماد
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1161,8 +1951,8 @@ export default function AdminControlPage() {
       {showAddDeptModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-xl">
-            <h3 className="font-bold text-sm text-slate-800">إضافة قسم إداري جديد</h3>
-            <p className="text-xs text-slate-500">
+            <h3 className="font-black text-base text-slate-900">إضافة قسم إداري جديد</h3>
+            <p className="text-sm text-slate-600">
               سيتم إنشاء مجلد جديد في Google Drive ومزامنته فوراً مع أجهزة الموظفين في الغرفة.
             </p>
 
@@ -1171,21 +1961,21 @@ export default function AdminControlPage() {
               placeholder="اسم القسم (مثال: الشؤون القانونية)..."
               value={newDeptName}
               onChange={(e) => setNewDeptName(e.target.value)}
-              className="w-full px-4 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14372e]"
+              className="w-full px-4 py-3 text-sm font-bold bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14372e]"
               autoFocus
             />
 
             <div className="flex items-center justify-end gap-2 pt-2 border-t">
               <button
                 onClick={() => setShowAddDeptModal(false)}
-                className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition"
+                className="px-4 py-2 text-sm font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition"
               >
                 إلغاء
               </button>
               <button
                 onClick={handleCreateDepartment}
                 disabled={actionLoading || !newDeptName.trim()}
-                className="px-5 py-2 text-xs font-bold bg-[#14372e] text-white rounded-xl hover:bg-[#1a473b] transition shadow-sm disabled:opacity-50"
+                className="px-5 py-2.5 text-sm font-bold bg-[#14372e] text-white rounded-xl hover:bg-[#1a473b] transition shadow-sm disabled:opacity-50"
               >
                 إنشاء ومزامنة
               </button>
@@ -1198,30 +1988,30 @@ export default function AdminControlPage() {
       {showRenameDeptModal && deptToRename && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-xl">
-            <h3 className="font-bold text-sm text-slate-800">تعديل اسم القسم</h3>
-            <p className="text-xs text-slate-500">
-              الاسم الحالي: <strong className="text-slate-800">{deptToRename.name}</strong>
+            <h3 className="font-black text-base text-slate-900">تعديل اسم القسم</h3>
+            <p className="text-sm text-slate-600">
+              الاسم الحالي: <strong className="text-slate-900">{deptToRename.name}</strong>
             </p>
 
             <input
               type="text"
               value={newDeptRenameValue}
               onChange={(e) => setNewDeptRenameValue(e.target.value)}
-              className="w-full px-4 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14372e]"
+              className="w-full px-4 py-3 text-sm font-bold bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14372e]"
               autoFocus
             />
 
             <div className="flex items-center justify-end gap-2 pt-2 border-t">
               <button
                 onClick={() => setShowRenameDeptModal(false)}
-                className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition"
+                className="px-4 py-2 text-sm font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition"
               >
                 إلغاء
               </button>
               <button
                 onClick={handleRenameDepartment}
                 disabled={actionLoading || !newDeptRenameValue.trim()}
-                className="px-5 py-2 text-xs font-bold bg-[#14372e] text-white rounded-xl hover:bg-[#1a473b] transition shadow-sm disabled:opacity-50"
+                className="px-5 py-2.5 text-sm font-bold bg-[#14372e] text-white rounded-xl hover:bg-[#1a473b] transition shadow-sm disabled:opacity-50"
               >
                 حفظ التعديل
               </button>
@@ -1234,23 +2024,23 @@ export default function AdminControlPage() {
       {showRenameFileModal && fileToRename && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-xl">
-            <h3 className="font-bold text-sm text-slate-800">تعديل اسم المستند</h3>
-            <p className="text-xs text-slate-500">
-              الاسم الحالي: <strong className="text-slate-800">{fileToRename.name}</strong>
+            <h3 className="font-black text-base text-slate-900">تعديل اسم المستند</h3>
+            <p className="text-sm text-slate-600 break-words">
+              الاسم الحالي: <strong className="text-slate-900">{fileToRename.name}</strong>
             </p>
 
             <input
               type="text"
               value={newFileNameValue}
               onChange={(e) => setNewFileNameValue(e.target.value)}
-              className="w-full px-4 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14372e]"
+              className="w-full px-4 py-3 text-sm font-bold bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14372e]"
               autoFocus
             />
 
             <div className="flex items-center justify-end gap-2 pt-2 border-t">
               <button
                 onClick={() => setShowRenameFileModal(false)}
-                className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition"
+                className="px-4 py-2 text-sm font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition"
               >
                 إلغاء
               </button>
@@ -1260,13 +2050,14 @@ export default function AdminControlPage() {
                   await fetch('/api/drive/files', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ action: 'RENAME', id: fileToRename.id, name: newFileNameValue.trim() })
+                    body: JSON.stringify({ action: 'RENAME', id: fileToRename.id, name: newFileNameValue.trim() }),
                   });
                   setShowRenameFileModal(false);
                   setFileToRename(null);
-                  await loadAllData();
+                  await loadAllData(false);
+                  notifyLocalDesktopSync();
                 }}
-                className="px-5 py-2 text-xs font-bold bg-[#14372e] text-white rounded-xl hover:bg-[#1a473b] transition shadow-sm"
+                className="px-5 py-2.5 text-sm font-bold bg-[#14372e] text-white rounded-xl hover:bg-[#1a473b] transition shadow-sm"
               >
                 حفظ التعديل
               </button>
@@ -1275,16 +2066,244 @@ export default function AdminControlPage() {
         </div>
       )}
 
+      {/* نافذة التخصيص المفصل لصلاحيات قسم معين */}
+      {selectedPermDept && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-2xl w-full p-6 space-y-5 shadow-2xl border border-slate-200 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-[#14372e] border border-emerald-200 flex items-center justify-center shrink-0">
+                  <Shield className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="font-black text-base text-slate-900">
+                    التخصيص المفصل لصلاحيات قسم:{' '}
+                    <span className="text-[#0f6cbd]">{selectedPermDept.folderName}</span>
+                  </h3>
+                  <p className="text-xs text-slate-600 mt-0.5">
+                    يتم حفظ التعديلات مباشرة في سحابة Google Drive وتطبق فوراً على منصة الويب وتطبيق سطح المكتب.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setSelectedPermDept(null)}
+                className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* القوالب الجاهزة السريعة */}
+            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200/80 space-y-2.5">
+              <span className="text-xs font-bold text-slate-700 block">قوالب صلاحيات سريعة بنقرة واحدة:</span>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleSetPresetPermission(selectedPermDept.folderId, selectedPermDept.folderName, 'FULL')
+                  }
+                  className="px-3.5 py-2 text-xs font-bold rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 transition cursor-pointer"
+                >
+                  ✅ تحكم كامل (كل الصلاحيات)
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleSetPresetPermission(
+                      selectedPermDept.folderId,
+                      selectedPermDept.folderName,
+                      'EDIT_NO_DELETE'
+                    )
+                  }
+                  className="px-3.5 py-2 text-xs font-bold rounded-xl bg-sky-600 text-white hover:bg-sky-700 transition cursor-pointer"
+                >
+                  🛡️ إضافة وتعديل بدون حذف
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleSetPresetPermission(selectedPermDept.folderId, selectedPermDept.folderName, 'UPLOAD_ONLY')
+                  }
+                  className="px-3.5 py-2 text-xs font-bold rounded-xl bg-amber-600 text-white hover:bg-amber-700 transition cursor-pointer"
+                >
+                  📤 رفع وإضافة فقط
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleSetPresetPermission(selectedPermDept.folderId, selectedPermDept.folderName, 'READ_ONLY')
+                  }
+                  className="px-3.5 py-2 text-xs font-bold rounded-xl bg-slate-700 text-white hover:bg-slate-800 transition cursor-pointer"
+                >
+                  👁️ قراءة وتنزيل فقط
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleSetPresetPermission(selectedPermDept.folderId, selectedPermDept.folderName, 'VIEW_ONLY')
+                  }
+                  className="px-3.5 py-2 text-xs font-bold rounded-xl bg-purple-700 text-white hover:bg-purple-800 transition cursor-pointer"
+                >
+                  🔒 تصفح فقط (منع التنزيل والتعديل)
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleSetPresetPermission(selectedPermDept.folderId, selectedPermDept.folderName, 'LOCKED')
+                  }
+                  className="px-3.5 py-2 text-xs font-bold rounded-xl bg-rose-700 text-white hover:bg-rose-800 transition cursor-pointer"
+                >
+                  ⛔ قفل القسم بالكامل
+                </button>
+              </div>
+            </div>
+
+            {/* الصلاحيات التسع بالتفصيل */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {[
+                {
+                  key: 'canView' as const,
+                  title: '1. تصفح وعرض القسم (View)',
+                  desc: 'السماح برؤية القسم واستعراض قائمة الملفات والمجلدات بداخله',
+                },
+                {
+                  key: 'canDownload' as const,
+                  title: '2. تنزيل وفتح الملفات (Download & Preview)',
+                  desc: 'السماح بمعاينة الصور والملفات وتحميلها إلى الجهاز أو نسخ روابطها',
+                },
+                {
+                  key: 'canUpload' as const,
+                  title: '3. رفع وإضافة ملفات جديدة (Upload)',
+                  desc: 'السماح برفع ملفات أو صور أو مستندات جديدة داخل هذا القسم',
+                },
+                {
+                  key: 'canCreateFolder' as const,
+                  title: '4. إنشاء مجلدات فرعية (Create Folders)',
+                  desc: 'السماح بإنشاء مجلدات فرعية تنظيمية داخل القسم',
+                },
+                {
+                  key: 'canEdit' as const,
+                  title: '5. تعديل وحفظ المستندات (Edit & Update)',
+                  desc: 'السماح بتعديل الملفات المكتبية الحالية وحفظ التعديلات في السحابة',
+                },
+                {
+                  key: 'canRename' as const,
+                  title: '6. إعادة تسمية الملفات والمجلدات (Rename)',
+                  desc: 'السماح بتغيير أسماء الملفات والمجلدات الفرعية داخل القسم',
+                },
+                {
+                  key: 'canMove' as const,
+                  title: '7. نقل الملفات والمجلدات (Move)',
+                  desc: 'السماح بنقل الملفات من أو إلى هذا القسم',
+                },
+                {
+                  key: 'canDelete' as const,
+                  title: '8. الحذف إلى سلة المهملات (Delete to Trash)',
+                  desc: 'السماح بنقل ملفات ومجلدات القسم إلى سلة المهملات',
+                },
+                {
+                  key: 'canPermanentDelete' as const,
+                  title: '9. الحذف النهائي وتفريغ السلة (Permanent Delete)',
+                  desc: 'السماح بالحذف النهائي غير القابل للاسترجاع لملفات هذا القسم',
+                },
+              ].map((item) => {
+                const isEnabled = Boolean(selectedPermDept[item.key]);
+                return (
+                  <div
+                    key={item.key}
+                    onClick={() => handleTogglePermissionKey(selectedPermDept.folderId, item.key)}
+                    className={`p-4 rounded-2xl border transition cursor-pointer flex items-center justify-between gap-3 ${
+                      isEnabled
+                        ? 'bg-emerald-50/50 border-emerald-200 hover:bg-emerald-50'
+                        : 'bg-rose-50/40 border-rose-200 hover:bg-rose-50/70'
+                    }`}
+                  >
+                    <div>
+                      <h4 className="font-bold text-sm text-slate-900">{item.title}</h4>
+                      <p className="text-xs text-slate-600 mt-0.5">{item.desc}</p>
+                    </div>
+                    <span
+                      className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-bold border flex items-center gap-1 ${
+                        isEnabled
+                          ? 'bg-emerald-600 text-white border-emerald-700'
+                          : 'bg-rose-600 text-white border-rose-700'
+                      }`}
+                    >
+                      {isEnabled ? <Check className="w-3.5 h-3.5" /> : <X className="w-3.5 h-3.5" />}
+                      {isEnabled ? 'مسموح' : 'محظور'}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* رمز القفل الاختياري للقسم (PIN) */}
+            <div className="p-4 rounded-2xl bg-amber-50/60 border border-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h4 className="text-sm font-bold text-amber-950 flex items-center gap-1.5">
+                  <Key className="w-4 h-4 text-amber-700" />
+                  <span>رمز حماية القسم الاختياري (Department PIN)</span>
+                </h4>
+                <p className="text-xs text-amber-800 mt-0.5">
+                  اتركه فارغاً للوصول المباشر، أو ضع رمزاً سرياً يُطلب عند محاولة فتح القسم في الويب أو تطبيق الحاسوب.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={pinInput}
+                  onChange={(e) => setPinInput(e.target.value)}
+                  placeholder="بدون رمز PIN"
+                  className="px-3.5 py-2 text-sm bg-white border border-amber-300 rounded-xl w-40 font-mono font-bold text-center focus:outline-none focus:ring-2 focus:ring-amber-600"
+                />
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const updated: PermissionRule = {
+                      ...selectedPermDept,
+                      pinCode: pinInput.trim(),
+                    };
+                    setSelectedPermDept(updated);
+                    setPermissions((prev) => prev.map((p) => (p.folderId === updated.folderId ? updated : p)));
+                    await persistPermissionRule(
+                      updated,
+                      pinInput.trim()
+                        ? `🔑 تم تفعيل وحفظ رمز PIN لقسم "${updated.folderName}" في السحابة!`
+                        : `🔓 تمت إزالة رمز PIN لقسم "${updated.folderName}"!`
+                    );
+                  }}
+                  className="px-4 py-2 text-xs font-bold bg-amber-700 text-white rounded-xl hover:bg-amber-800 transition cursor-pointer"
+                >
+                  حفظ الرمز
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setSelectedPermDept(null)}
+                className="px-6 py-2.5 text-sm font-bold bg-[#14372e] text-white rounded-xl hover:bg-[#1a473b] transition cursor-pointer"
+              >
+                إغلاق وتم الحفظ
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* إشعار عائم Toast */}
       {toastMessage && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 animate-bounce shadow-2xl pointer-events-none">
-          <div className={`flex items-center gap-2.5 px-5 py-3 rounded-2xl text-xs font-bold border backdrop-blur-md ${
-            toastMessage.type === 'success'
-              ? 'bg-[#14372e]/95 text-white border-emerald-400'
-              : toastMessage.type === 'error'
-              ? 'bg-rose-900/95 text-white border-rose-400'
-              : 'bg-slate-900/95 text-white border-slate-700'
-          }`}>
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 shadow-2xl pointer-events-none">
+          <div
+            className={`flex items-center gap-2.5 px-6 py-3.5 rounded-2xl text-sm font-bold border backdrop-blur-md ${
+              toastMessage.type === 'success'
+                ? 'bg-[#14372e]/95 text-white border-emerald-400'
+                : toastMessage.type === 'error'
+                ? 'bg-rose-900/95 text-white border-rose-400'
+                : 'bg-slate-900/95 text-white border-slate-700'
+            }`}
+          >
             <span>{toastMessage.text}</span>
           </div>
         </div>

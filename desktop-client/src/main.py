@@ -10,6 +10,22 @@ import subprocess
 import threading
 from pathlib import Path
 
+# ضمان ترميز UTF-8 آمن للمخرجات حتى في وضع PyInstaller بدون نافذة طرفية (console=False)
+try:
+    _log_dir = Path(os.environ.get("APPDATA", Path.home())) / "FileExchange"
+    _log_dir.mkdir(parents=True, exist_ok=True)
+    _log_file = _log_dir / "share_coc.log"
+    if sys.stdout is None:
+        sys.stdout = open(_log_file, "a", encoding="utf-8", errors="replace", buffering=1)
+    elif hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if sys.stderr is None:
+        sys.stderr = sys.stdout
+    elif hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 from PyQt6.QtWidgets import (
     QApplication, QDialog, QVBoxLayout,
     QLabel, QLineEdit, QPushButton, QMessageBox
@@ -302,12 +318,44 @@ def main():
                 )
                 sys.exit(1)
 
+    # 1.5 معالجة الملفات المرسلة عبر قائمة الزر الأيمن في ويندوز (Send To -> Share COC)
+    cli_upload_paths = []
+    if len(sys.argv) > 1:
+        raw_args = sys.argv[1:]
+        if raw_args[0] == "--upload":
+            raw_args = raw_args[1:]
+        for arg in raw_args:
+            if not arg.startswith("-") and not arg.startswith("sharecoc://"):
+                p = Path(arg)
+                if p.exists():
+                    cli_upload_paths.append(p)
+
     # 2. التأكد من تشغيل نسخة واحدة فقط لمنع استنساخ العمليات
     import ctypes
     ERROR_ALREADY_EXISTS = 183
     kernel32 = ctypes.windll.kernel32
     _single_instance_mutex = kernel32.CreateMutexW(None, False, "Global\\KarbalaChamberShareCOCSingleInstanceMutex")
     if kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
+        # إذا تم إرسال ملفات عبر Send To وهناك نسخة تعمل بالفعل، انسخها لمجلد المزامنة وأيقظ المحرك فوراً
+        if cli_upload_paths:
+            import shutil
+            sync_folder = Path(os.environ.get('USERPROFILE', 'C:')) / "FileExchangeShared"
+            sync_folder.mkdir(parents=True, exist_ok=True)
+            for src_p in cli_upload_paths:
+                try:
+                    dest_p = sync_folder / src_p.name
+                    if src_p.is_file() and src_p.resolve() != dest_p.resolve():
+                        shutil.copy2(str(src_p), str(dest_p))
+                        os.utime(str(dest_p), None)
+                    elif src_p.is_dir() and src_p.resolve() != dest_p.resolve():
+                        shutil.copytree(str(src_p), str(dest_p), dirs_exist_ok=True)
+                except Exception as copy_err:
+                    print(f"[CLI SendTo copy]: {copy_err}")
+            try:
+                import urllib.request
+                urllib.request.urlopen("http://127.0.0.1:18290/sync", timeout=1.5)
+            except Exception:
+                pass
         # هناك نسخة تعمل بالفعل أو قيد التشغيل؛ تنشيطها وإغلاق النسخة الإضافية فوراً وهدوء
         _activate_running_instance(retries=3, delay=0.4)
         sys.exit(0)
@@ -317,7 +365,7 @@ def main():
     app.setApplicationName("share coc")
     app.setApplicationDisplayName("Share COC")
     app.setOrganizationName("KarbalaChamberOfCommerce")
-    app.setQuitOnLastWindowClosed(True)
+    app.setQuitOnLastWindowClosed(False)
 
     if getattr(sys, 'frozen', False):
         base_dir = Path(sys._MEIPASS)
@@ -369,6 +417,9 @@ def main():
         show_window_callback=lambda: window.bridge.show_requested.emit()
     )
     sync_engine.start()
+    if cli_upload_paths:
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(600, lambda: window._handle_dropped_paths(cli_upload_paths))
 
     exit_code = app.exec()
     try:

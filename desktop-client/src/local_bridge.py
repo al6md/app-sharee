@@ -69,7 +69,7 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
         if path == '/sync':
             try:
                 if self.sync_engine:
-                    self.sync_engine.wake(delay=0.1)
+                    self.sync_engine.wake(delay=0.05)
                 self._set_headers(200)
                 self.wfile.write(json.dumps({"success": True}).encode('utf-8'))
             except Exception as e:

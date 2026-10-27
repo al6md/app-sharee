@@ -45,7 +45,7 @@ export default function RootLayout({
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
         <link rel="apple-touch-icon" href="/icon-192.png" />
       </head>
-      <body className="bg-slate-100 text-slate-800 antialiased font-sans min-h-screen flex flex-col md:flex-row">
+      <body className="bg-slate-100 text-slate-900 antialiased min-h-screen flex flex-col md:flex-row">
         <PwaRegistrar />
 
         {/* 1. الترويسة العلوية الخاصة بالهواتف المحمولة (Mobile Top Header) */}

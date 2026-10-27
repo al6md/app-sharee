@@ -36,6 +36,7 @@ a = Analysis(
         'gui',
         'conflict_manager',
         'autostart',
+        'windows_integration',
         'gdrive_client',
         'gdrive_sync_service',
         'google.oauth2.credentials',

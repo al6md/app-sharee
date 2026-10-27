@@ -1,0 +1,58 @@
+# -*- mode: python ; coding: utf-8 -*-
+"""
+PyInstaller Spec File for Official Windows Setup Wizard (ShareCOC_Setup.exe)
+"""
+block_cipher = None
+
+a = Analysis(
+    ['src/installer_wizard.py'],
+    pathex=['src'],
+    binaries=[],
+    datas=[
+        ('assets', 'assets'),
+        ('dist/share coc.exe', 'payload'),
+    ],
+    hiddenimports=[
+        'PyQt6',
+        'PyQt6.QtCore',
+        'PyQt6.QtGui',
+        'PyQt6.QtWidgets',
+        'winreg',
+        'windows_integration',
+        'autostart',
+    ],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=['tkinter', 'matplotlib', 'numpy', 'scipy', 'boto3', 'botocore', 'googleapiclient'],
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
+    cipher=block_cipher,
+    noarchive=False,
+)
+
+pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    [],
+    name='ShareCOC_Setup',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=False,
+    icon='assets/logo.ico',
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    version_info=None
+)

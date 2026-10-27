@@ -1,30 +1,30 @@
+# -*- coding: utf-8 -*-
 """
 تبادل الملفات – File Exchange System
-محرك المزامنة الثنائي (Sync Engine) – الإصدار 3.0
+محرك المزامنة الثنائي (Sync Engine) – الإصدار 4.0 المحكم
 
 مبادئ التصميم:
-  • خيط عامل واحد فقط ينفذ كل عمليات الشبكة (لا تعارض ولا رفع مكرر ولا تجميد للواجهة).
-  • مرآة كاملة: المسار النسبي داخل FileExchangeShared == المسار داخل مجلد السحابة الجذري،
-    بكل المجلدات الفرعية وبأي عمق، والمجلدات الفارغة أيضاً.
-  • المقارنة بالبصمة MD5 (نفس البصمة التي يحسبها Google Drive) فلا تنزيل/رفع بلا داعٍ.
-  • الحذف السحابي لا يتم أبداً إلا بإجراء صريح من المستخدم (Tombstone) – فلو فُقد المجلد المحلي
-    أو انقطع الإنترنت لا تُحذف ملفات بقية الأجهزة.
-  • عند فشل الاتصال لا يُعتبر أي ملف "محذوفاً".
+  • أولوية ذكية للملفات الصغيرة والمتوسطة أولاً (Small-Files-First Priority Queue) فلا يتأخر
+    أي مستند Word أو Excel أو PDF بسبب قاعدة بيانات Access ضخمة.
+  • رفع فوري ومباشر (sync_file_now) للملفات والمجلدات التي يضيفها المستخدم من الواجهة مع
+    شريط تقدم لحظي حقيقي، وحفظ فوري لمعرّف السحابة وبصمة MD5.
+  • تنظيف تلقائي لشواهد الحذف (Tombstones) فور تأكيد غيابها من السحابة لمنع الحذف العكسي.
+  • تخزين مؤقت لبصمة MD5 حتى للملفات الضخمة لتفادي إعادة قراءة مئات الميجابايتات في كل دورة.
 """
 import os
 import json
 import time
 import hashlib
 import threading
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 from office_handler import OfficeHandler
-from gdrive_client import is_ignored_name, norm_rel
+from gdrive_client import is_ignored_name, norm_rel, _safe_log
 
-CYCLE_SECONDS = 15
+CYCLE_SECONDS = 12
 LEGACY_GENERAL_DEPT = "القسم العام"
 
 
@@ -72,10 +72,12 @@ class LocalFolderWatcher(FileSystemEventHandler):
                 self.engine.note_local_delete(src_rel, is_folder=event.is_directory, from_watcher=True)
             if etype in ("created", "modified", "moved"):
                 dest = getattr(event, "dest_path", None) or event.src_path
-                if self._relevant(self._rel(dest)):
-                    self.engine.wake(delay=2.0)
+                dest_rel = self._rel(dest)
+                if self._relevant(dest_rel):
+                    self.engine.clear_tombstone(dest_rel)
+                    self.engine.wake(delay=1.5)
         except Exception as e:
-            print(f"[Watcher error]: {e}")
+            _safe_log(f"[Watcher error]: {e}")
 
 
 class SyncEngine:
@@ -129,6 +131,7 @@ class SyncEngine:
         return {norm_rel(r["relative_path"]): dict(r) for r in rows}
 
     def _save_state(self, rel, md5, size, mtime, remote_id, remote_md5, status="synced"):
+        rel = norm_rel(rel)
         now = datetime.now().isoformat()
         with self.state_mgr._get_connection() as conn:
             conn.execute("""
@@ -137,22 +140,23 @@ class SyncEngine:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(relative_path) DO UPDATE SET
                     file_name = excluded.file_name,
-                    sha256_hash = excluded.sha256_hash,
+                    sha256_hash = CASE WHEN excluded.sha256_hash != '' THEN excluded.sha256_hash ELSE local_files.sha256_hash END,
                     file_size = excluded.file_size,
                     server_file_id = COALESCE(excluded.server_file_id, local_files.server_file_id),
                     sync_status = excluded.sync_status,
                     last_synced_at = excluded.last_synced_at,
                     last_modified_local = excluded.last_modified_local,
                     remote_md5 = COALESCE(excluded.remote_md5, local_files.remote_md5),
-                    local_mtime = excluded.local_mtime
+                    local_mtime = COALESCE(excluded.local_mtime, local_files.local_mtime)
             """, (rel, rel.split("/")[-1], md5 or "", int(size or 0), remote_id, status, now,
                   datetime.fromtimestamp(mtime).isoformat() if mtime else now, remote_md5, mtime))
 
     def _set_status(self, rel, status):
         with self.state_mgr._get_connection() as conn:
-            conn.execute("UPDATE local_files SET sync_status = ? WHERE relative_path = ?", (status, rel))
+            conn.execute("UPDATE local_files SET sync_status = ? WHERE relative_path = ?", (status, norm_rel(rel)))
 
     def _delete_state(self, rel):
+        rel = norm_rel(rel)
         with self.state_mgr._get_connection() as conn:
             conn.execute("DELETE FROM local_files WHERE relative_path = ?", (rel,))
             conn.execute("DELETE FROM upload_queue WHERE relative_path = ?", (rel,))
@@ -163,8 +167,24 @@ class SyncEngine:
         return {norm_rel(r["rel_path"]): dict(r) for r in rows}
 
     def _drop_tombstone(self, rel):
+        rel = norm_rel(rel)
         with self.state_mgr._get_connection() as conn:
             conn.execute("DELETE FROM tombstones WHERE rel_path = ?", (rel,))
+
+    def clear_tombstone(self, rel):
+        """إزالة أي شاهد حذف يطابق المسار أو أحد آبائه أو أبنائه (عند إضافة ملف أو مجلد جديد)"""
+        rel = norm_rel(rel)
+        if not rel:
+            return
+        try:
+            with self.state_mgr._get_connection() as conn:
+                parts = rel.split("/")
+                ancestors = ["/".join(parts[:i]) for i in range(1, len(parts) + 1)]
+                for anc in ancestors:
+                    conn.execute("DELETE FROM tombstones WHERE rel_path = ?", (anc,))
+                conn.execute("DELETE FROM tombstones WHERE rel_path LIKE ?", (f"{rel}/%",))
+        except Exception:
+            pass
 
     def _known_dirs(self):
         raw = self.state_mgr.get_setting("known_remote_dirs_json", "")
@@ -193,15 +213,17 @@ class SyncEngine:
         """طلب دورة مزامنة قريبة (مع تجميع الأحداث المتتالية)"""
         with self._wake_lock:
             target = time.time() + delay
-            if self._wake_at == 0 or target > self._wake_at:
+            if self._wake_at == 0 or target < self._wake_at:
                 self._wake_at = target
         self._wake_event.set()
 
     def _mark_self_op(self, rel, seconds=10):
+        rel = norm_rel(rel)
         with self._self_ops_lock:
             self._self_ops[rel] = time.time() + seconds
 
     def _is_self_op(self, rel):
+        rel = norm_rel(rel)
         now = time.time()
         with self._self_ops_lock:
             for k in [k for k, v in self._self_ops.items() if v < now]:
@@ -222,20 +244,95 @@ class SyncEngine:
                 INSERT INTO tombstones (rel_path, is_folder, created_at) VALUES (?, ?, ?)
                 ON CONFLICT(rel_path) DO UPDATE SET created_at = excluded.created_at, is_folder = excluded.is_folder
             """, (rel, 1 if is_folder else 0, time.time()))
-        self.wake(delay=3.0)
+        self.wake(delay=1.5)
 
     def note_local_move(self, old_rel, new_rel):
         """إعادة تسمية/نقل من داخل التطبيق: ننقل الملف في السحابة بدلاً من حذفه وإعادة رفعه"""
         old_rel, new_rel = norm_rel(old_rel), norm_rel(new_rel)
         self._mark_self_op(old_rel)
+        self.clear_tombstone(new_rel)
         states = self._load_states()
         st = states.get(new_rel) or states.get(old_rel)
         if not st or not st.get("server_file_id"):
             self.note_local_delete(old_rel)
-        self.wake(delay=1.0)
+        self.wake(delay=0.5)
+
+    def sync_file_now(self, local_abs_path, rel_path=None, progress_callback=None):
+        """
+        رفع مباشر وفوري لملف واحد إلى Google Drive مع تحديث قاعدة البيانات المحلية فوراً.
+        تُستدعى عند إضافة ملف أو مجلد من واجهة التطبيق لضمان التخزين السحابي الحقيقي الفوري.
+        """
+        p = Path(local_abs_path)
+        if not p.exists() or not p.is_file():
+            return False, "الملف غير موجود على القرص"
+
+        if not rel_path:
+            try:
+                rel_path = norm_rel(p.resolve().relative_to(self.sync_folder.resolve()))
+            except Exception:
+                rel_path = p.name
+        else:
+            rel_path = norm_rel(rel_path)
+
+        if is_ignored_name(p.name):
+            return True, {"ignored": True}
+
+        self.clear_tombstone(rel_path)
+        self._mark_self_op(rel_path, seconds=600)
+
+        try:
+            st_stat = p.stat()
+            size, mtime = st_stat.st_size, st_stat.st_mtime
+        except OSError as e:
+            return False, str(e)
+
+        existing_state = self.state_mgr.get_file_state(rel_path)
+        existing_id = existing_state.get("server_file_id") if existing_state else None
+
+        self._save_state(rel_path, "", size, mtime, existing_id, None, status="syncing")
+        self.notify_status({"event": "syncing", "file": rel_path, "status": "جارٍ الرفع المباشر إلى السحابة..."})
+
+        last_notify_t = [0.0]
+
+        def _on_chunk(done_bytes, total_bytes):
+            if callable(progress_callback):
+                progress_callback(done_bytes, total_bytes)
+            now_t = time.time()
+            if (now_t - last_notify_t[0]) >= 0.45 or done_bytes >= total_bytes:
+                last_notify_t[0] = now_t
+                pct = int(min(100, round((done_bytes / max(total_bytes, 1)) * 100)))
+                self.notify_status({"event": "syncing", "file": rel_path, "status": f"جارٍ الرفع السحابي ({pct}%)..."})
+
+        ok, meta = self.client.upload_file(
+            str(p),
+            rel_path=rel_path,
+            existing_id=existing_id,
+            user_name=self.username,
+            device_name=self.device_name,
+            progress_callback=_on_chunk,
+            is_priority=True,
+        )
+
+        if ok and isinstance(meta, dict):
+            if meta.get("ignored"):
+                return True, meta
+            try:
+                st_after = p.stat()
+                size, mtime = st_after.st_size, st_after.st_mtime
+            except OSError:
+                pass
+            remote_md5 = meta.get("md5Checksum") or self.calculate_hash(str(p))
+            self._save_state(rel_path, remote_md5, size, mtime, meta.get("id"), remote_md5, status="synced")
+            self.notify_status({"event": "synced", "file": rel_path, "status": "تمت المزامنة السحابية بنجاح"})
+            return True, meta
+
+        err_msg = str(meta) if meta else "فشل الرفع السحابي"
+        self._save_state(rel_path, "", size, mtime, existing_id, None, status="pending_upload")
+        self.notify_status({"event": "error", "file": rel_path, "status": f"تعذر الرفع الفوري – سيعاد تلقائياً"})
+        return False, err_msg
 
     def on_local_file_saved(self, filepath):
-        self.wake(delay=1.5)
+        self.wake(delay=1.0)
 
     def on_local_file_deleted(self, filepath):
         try:
@@ -253,7 +350,7 @@ class SyncEngine:
     def pull_remote_changes(self):
         self.wake(delay=0.1)
 
-    def sync_now(self, timeout=120):
+    def sync_now(self, timeout=60):
         """تنفيذ دورة مزامنة كاملة (للاستدعاء من خيط خلفي فقط)"""
         done = threading.Event()
         self._pending_done = done
@@ -272,10 +369,10 @@ class SyncEngine:
             self.observer.daemon = True
             self.observer.start()
         except Exception as e:
-            print(f"[Watcher start error]: {e}")
+            _safe_log(f"[Watcher start error]: {e}")
         self._worker = threading.Thread(target=self._background_sync_loop, name="SyncWorker", daemon=True)
         self._worker.start()
-        self.wake(delay=2.0)
+        self.wake(delay=1.5)
 
     def stop(self):
         self.is_running = False
@@ -288,16 +385,25 @@ class SyncEngine:
             pass
 
     def _background_sync_loop(self):
+        delta_interval = 3.0
         while self.is_running:
-            self._wake_event.wait(timeout=CYCLE_SECONDS)
+            waited = 0.0
+            while self.is_running and waited < CYCLE_SECONDS:
+                if self._wake_event.wait(timeout=min(delta_interval, CYCLE_SECONDS - waited)):
+                    break
+                waited += delta_interval
+                try:
+                    if hasattr(self.client, "poll_changes_since_last") and self.client.poll_changes_since_last():
+                        break
+                except Exception:
+                    pass
             self._wake_event.clear()
-            # احترام مهلة التجميع
             while self.is_running:
                 with self._wake_lock:
                     remaining = self._wake_at - time.time()
                 if remaining <= 0:
                     break
-                time.sleep(min(remaining, 1.0))
+                time.sleep(min(remaining, 0.5))
             with self._wake_lock:
                 self._wake_at = 0.0
             if not self.is_running:
@@ -306,7 +412,7 @@ class SyncEngine:
                 self.run_cycle()
             except Exception as e:
                 self.last_error = str(e)
-                print(f"[Background Sync Error]: {e}")
+                _safe_log(f"[Background Sync Error]: {e}")
             done = getattr(self, "_pending_done", None)
             if done is not None:
                 self._pending_done = None
@@ -345,10 +451,22 @@ class SyncEngine:
 
     def _local_md5(self, rel, info, state):
         if state and state.get("sha256_hash") and len(state["sha256_hash"]) == 32 \
-                and state.get("local_mtime") and abs(float(state["local_mtime"]) - info["mtime"]) < 0.001 \
+                and state.get("local_mtime") is not None \
+                and abs(float(state["local_mtime"]) - info["mtime"]) < 0.05 \
                 and int(state.get("file_size") or -1) == info["size"]:
             return state["sha256_hash"]
-        return self.calculate_hash(str(info["abs"]))
+        computed = self.calculate_hash(str(info["abs"]))
+        # حفظ البصمة المحسوبة فوراً لتفادي إعادة قراءة الملفات الضخمة في الدورات التالية
+        self._save_state(
+            rel,
+            computed,
+            info["size"],
+            info["mtime"],
+            state.get("server_file_id") if state else None,
+            state.get("remote_md5") if state else None,
+            status=state.get("sync_status", "pending_upload") if state else "pending_upload"
+        )
+        return computed
 
     def _is_open_in_office(self, path):
         p = str(path)
@@ -357,7 +475,7 @@ class SyncEngine:
         return OfficeHandler.is_file_locked_by_os(p)
 
     def _readable_and_stable(self, info):
-        if time.time() - info["mtime"] < 2.0:
+        if time.time() - info["mtime"] < 1.0:
             return False
         p = info["abs"]
         if OfficeHandler.is_access_db(str(p)):
@@ -384,29 +502,52 @@ class SyncEngine:
             src.rename(dest)
             self.state_mgr.add_to_trash(src.name, rel, str(dest), size,
                                         item_type='folder' if is_folder else 'file')
-            # إزالة سجلات الحالة الخاصة بالمسار (add_to_trash يحذف بالاسم أيضاً لذا نعيد ضبطها بدقة)
-            print(f"[Cloud Deletion Sync]: {rel} -> local trash")
+            _safe_log(f"[Cloud Deletion Sync]: {rel} -> local trash")
         except Exception as e:
-            print(f"[Local trash move error] {rel}: {e}")
+            _safe_log(f"[Local trash move error] {rel}: {e}")
 
     def _download(self, rel, rmeta):
         dest = self.sync_folder / rel
-        self._mark_self_op(rel)
+        self._mark_self_op(rel, seconds=20)
         self.notify_status({"event": "syncing", "file": rel, "status": "تنزيل من السحابة..."})
-        ok, msg = self.client.download_file(rmeta["name"], str(dest), storage_path=rmeta["id"])
+
+        def _on_dl_chunk(done_b, total_b):
+            pct = int(min(100, round((done_b / max(total_b, 1)) * 100)))
+            self.notify_status({"event": "syncing", "file": rel, "status": f"جارٍ التنزيل من السحابة ({pct}%)..."})
+
+        ok, msg = self.client.download_file(rmeta["name"], str(dest), storage_path=rmeta["id"], progress_callback=_on_dl_chunk)
         if ok and dest.exists():
             st = dest.stat()
             md5 = rmeta.get("md5Checksum") or self.calculate_hash(str(dest))
             self._save_state(rel, md5, st.st_size, st.st_mtime, rmeta["id"], rmeta.get("md5Checksum"))
             self.notify_status({"event": "synced", "file": rel, "status": "محدث من السحابة"})
             return True
-        print(f"[Download failed] {rel}: {msg}")
+        _safe_log(f"[Download failed] {rel}: {msg}")
         return False
 
     def _upload(self, rel, info, md5, existing_id=None):
+        if self._is_self_op(rel):
+            return True
         self.notify_status({"event": "syncing", "file": rel, "status": "جارٍ الرفع السحابي..."})
-        ok, meta = self.client.upload_file(str(info["abs"]), rel_path=rel, existing_id=existing_id,
-                                           user_name=self.username, device_name=self.device_name)
+
+        last_notify_t = [0.0]
+
+        def _on_up_chunk(done_b, total_b):
+            now_t = time.time()
+            if (now_t - last_notify_t[0]) >= 0.50 or done_b >= total_b:
+                last_notify_t[0] = now_t
+                pct = int(min(100, round((done_b / max(total_b, 1)) * 100)))
+                self.notify_status({"event": "syncing", "file": rel, "status": f"جارٍ الرفع السحابي ({pct}%)..."})
+
+        ok, meta = self.client.upload_file(
+            str(info["abs"]),
+            rel_path=rel,
+            existing_id=existing_id,
+            user_name=self.username,
+            device_name=self.device_name,
+            progress_callback=_on_up_chunk,
+            is_priority=False,
+        )
         if ok and isinstance(meta, dict) and not meta.get("ignored"):
             try:
                 st = info["abs"].stat()
@@ -426,6 +567,30 @@ class SyncEngine:
         new_name = f"{p.stem} (نسخة {dev} {stamp}){p.suffix}"
         return norm_rel(str(p.parent / new_name)) if str(p.parent) not in ("", ".") else new_name
 
+    def _has_dept_perm(self, rel_path, action_key):
+        """التحقق من صلاحية القسم السحابية قبل رفع أو تعديل أو حذف ملف من المزامنة الخلفية"""
+        try:
+            if not rel_path or not self.client or not hasattr(self.client, "get_folder_permissions"):
+                return True
+            perms = self.client.get_folder_permissions() or {}
+            if not isinstance(perms, dict):
+                return True
+            dept = norm_rel(rel_path).split("/")[0].strip()
+            if not dept or dept not in perms:
+                return True
+            rule = perms.get(dept) or {}
+            if action_key == "upload":
+                return bool(rule.get("canUpload", rule.get("can_upload", rule.get("can_write", True))))
+            if action_key == "edit":
+                return bool(rule.get("canEdit", rule.get("can_edit", rule.get("can_write", True))))
+            if action_key == "delete":
+                return bool(rule.get("canDelete", rule.get("can_delete", True)))
+            if action_key == "create_folder":
+                return bool(rule.get("canCreateFolder", rule.get("can_create_folder", rule.get("can_write", True))))
+            return True
+        except Exception:
+            return True
+
     # ------------------------------------------------------------------ #
     # الدورة الكاملة
     # ------------------------------------------------------------------ #
@@ -444,13 +609,15 @@ class SyncEngine:
         states = self._load_states()
         tombs = self._load_tombstones()
         known_dirs = self._known_dirs()
-        remote_files = snap.files
+        remote_files = dict(snap.files)
         remote_dirs = {d for d in snap.folders if d}
         state_by_remote_id = {s["server_file_id"]: rel for rel, s in states.items() if s.get("server_file_id")}
 
-        # 0) إسقاط شواهد الحذف للمسارات التي عادت موجودة محلياً (استعادة من سلة المحذوفات)
+        # 0) تنظيف شواهد الحذف للمسارات التي عادت موجودة محلياً أو التي لم تعد موجودة في السحابة أصلاً
         for t_rel in list(tombs):
-            if t_rel in local_files or t_rel in local_dirs:
+            exists_locally = (t_rel in local_files) or (t_rel in local_dirs) or any(_is_under(r, t_rel) for r in local_files)
+            exists_remotely = (t_rel in remote_files) or (t_rel in remote_dirs) or any(_is_under(r, t_rel) for r in remote_files) or any(_is_under(d, t_rel) for d in remote_dirs)
+            if exists_locally or not exists_remotely:
                 self._drop_tombstone(t_rel)
                 tombs.pop(t_rel, None)
 
@@ -481,18 +648,19 @@ class SyncEngine:
                     remote_files[rel] = m
                     handled_remote_ids.add(rid)
                     changes += 1
-                    print(f"[Move Sync] {old_rel} -> {rel}")
+                    _safe_log(f"[Move Sync] {old_rel} -> {rel}")
                 except Exception as e:
-                    print(f"[Move Sync error] {old_rel} -> {rel}: {e}")
+                    _safe_log(f"[Move Sync error] {old_rel} -> {rel}: {e}")
 
         # 2) المجلدات
         for d in sorted(remote_dirs - local_dirs, key=lambda x: x.count("/")):
             t = tombstone_for(d)
-            created = _iso_to_ts(snap.folder_meta.get(d, {}).get("createdTime"))
-            if t and t["created_at"] >= created:
-                # حذف صريح من هذا الجهاز -> حذف من السحابة (بعد نقل الملفات المنقولة في الخطوة 1)
+            if t:
                 if self.client.delete_folder(d):
                     changes += 1
+                if t.get("rel_path") == d:
+                    self._drop_tombstone(d)
+                    tombs.pop(d, None)
                 remote_dirs = {x for x in remote_dirs if not _is_under(x, d)}
                 for r in [r for r in remote_files if _is_under(r, d)]:
                     remote_files.pop(r, None)
@@ -503,13 +671,20 @@ class SyncEngine:
                 local_dirs.add(d)
                 changes += 1
             except Exception as e:
-                print(f"[Local mkdir error] {d}: {e}")
+                _safe_log(f"[Local mkdir error] {d}: {e}")
 
         for d in sorted(local_dirs - remote_dirs, key=lambda x: x.count("/")):
             if d in known_dirs and not tombstone_for(d):
-                # كان موجوداً في السحابة وحُذف منها (من جهاز آخر أو من الويب)
-                has_unsynced = any(_is_under(r, d) and (r not in states or not states[r].get("remote_md5"))
-                                   for r in local_files)
+                has_unsynced = any(
+                    _is_under(r, d) and (
+                        r not in states or (
+                            not states[r].get("remote_md5")
+                            and not states[r].get("server_file_id")
+                            and states[r].get("sync_status") != "synced"
+                        )
+                    )
+                    for r in local_files
+                )
                 if not has_unsynced:
                     self._move_to_local_trash(d, is_folder=True)
                     local_dirs = {x for x in local_dirs if not _is_under(x, d)}
@@ -524,25 +699,21 @@ class SyncEngine:
 
         # 3) الملفات الموجودة في السحابة
         pending_remote_deletes = []
+        pending_modified_uploads = []
+
         for rel, rmeta in list(remote_files.items()):
             if rmeta.get("id") in handled_remote_ids:
                 continue
             linfo = local_files.get(rel)
             st = states.get(rel)
             if linfo is None:
-                # (أ) نُقل محلياً إلى مسار آخر وسيتم التعامل معه في الخطوة 1 بالدورة القادمة
                 moved_to = state_by_remote_id.get(rmeta["id"])
                 if moved_to and moved_to != rel and moved_to in local_files:
                     continue
-                # (ب) حذف صريح من المستخدم
                 t = tombstone_for(rel)
-                if t and t["created_at"] >= _iso_to_ts(rmeta.get("modifiedTime")):
+                if t:
                     pending_remote_deletes.append((rel, rmeta))
                     continue
-                if t:
-                    # رُفع من جديد بعد الحذف -> إلغاء الشاهد
-                    self._drop_tombstone(t.get("rel_path", rel))
-                # (ج) ترحيل نسخة قديمة كانت تُحفظ داخل "القسم العام" لملفات جذر السحابة
                 if "/" not in rel:
                     legacy = f"{LEGACY_GENERAL_DEPT}/{rel}"
                     if legacy in local_files and legacy not in remote_files:
@@ -558,7 +729,6 @@ class SyncEngine:
                                 continue
                         except Exception:
                             pass
-                # (د) ملف جديد/غير موجود محلياً -> تنزيل
                 if self._download(rel, rmeta):
                     changes += 1
                 continue
@@ -571,46 +741,55 @@ class SyncEngine:
             rmd5 = rmeta.get("md5Checksum")
             if rmd5 and lmd5 == rmd5:
                 if not st or st.get("remote_md5") != rmd5 or st.get("server_file_id") != rmeta["id"] \
-                        or st.get("sync_status") != "synced" or st.get("local_mtime") != linfo["mtime"]:
+                        or st.get("sync_status") != "synced" or abs(float(st.get("local_mtime") or 0) - linfo["mtime"]) > 0.05:
                     self._save_state(rel, lmd5, linfo["size"], linfo["mtime"], rmeta["id"], rmd5)
                 continue
 
-            local_changed = st is None or st.get("sha256_hash") != lmd5
+            local_changed = st is None or st.get("sha256_hash") != lmd5 or st.get("sync_status") in ("syncing", "pending_upload", "failed")
             remote_changed = st is None or not st.get("remote_md5") or st.get("remote_md5") != rmd5
 
-            if st is None:
-                # لا يوجد سجل سابق: الأحدث يفوز
+            if st is not None and st.get("sync_status") in ("syncing", "pending_upload") and not st.get("remote_md5"):
+                # ملف أضافه المستخدم صراحةً للرفع
+                local_changed, remote_changed = True, False
+            elif st is None:
                 if linfo["mtime"] > _iso_to_ts(rmeta.get("modifiedTime")) + 2:
                     local_changed, remote_changed = True, False
                 else:
                     local_changed, remote_changed = False, True
 
             if local_changed and not remote_changed:
-                if self._readable_and_stable(linfo) and self._upload(rel, linfo, lmd5, existing_id=rmeta["id"]):
-                    changes += 1
+                if self._readable_and_stable(linfo):
+                    pending_modified_uploads.append((rel, linfo, lmd5, rmeta["id"]))
             elif remote_changed and not local_changed:
                 if self._is_open_in_office(linfo["abs"]):
-                    continue  # الملف مفتوح حالياً في Word/Excel/Access – ننتظر إغلاقه
+                    continue
                 if self._download(rel, rmeta):
                     changes += 1
             else:
-                # تعارض: تعديل محلي وسحابي معاً -> نحفظ النسختين بدون فقدان أي بيانات
                 if not self._readable_and_stable(linfo) or self._is_open_in_office(linfo["abs"]):
                     continue
                 conflict_rel = self._conflict_name(rel)
+                # إذا تجاوز اسم ملف التعارض حدود نظام التشغيل (MAX_PATH)، استخدم اسماً مبسطاً
+                if len(str(self.sync_folder / conflict_rel)) > 240:
+                    base_stem = Path(rel).stem.split(" (نسخة")[0].split(" - (تعارض")[0]
+                    short_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    conflict_rel = f"{base_stem} (نسخة_تعارض_{short_stamp}){Path(rel).suffix}"
                 try:
                     self._mark_self_op(rel)
-                    os.replace(linfo["abs"], self.sync_folder / conflict_rel)
+                    shutil.copy2(str(linfo["abs"]), str(self.sync_folder / conflict_rel))
                     self._delete_state(rel)
-                    print(f"[Conflict] {rel} -> kept local copy as {conflict_rel}")
+                    _safe_log(f"[Conflict] {rel} -> kept local copy as {conflict_rel}")
                     self._download(rel, rmeta)
                     cinfo = {"abs": self.sync_folder / conflict_rel, "size": linfo["size"], "mtime": time.time() - 10}
-                    self._upload(conflict_rel, cinfo, lmd5)
+                    pending_modified_uploads.append((conflict_rel, cinfo, lmd5, None))
                     changes += 1
                 except Exception as e:
-                    print(f"[Conflict handling error] {rel}: {e}")
+                    _safe_log(f"[Conflict handling error] {rel}: {e}")
 
         for rel, rmeta in pending_remote_deletes:
+            if not self._has_dept_perm(rel, "delete"):
+                self._drop_tombstone(rel)
+                continue
             try:
                 self.client.trash_by_id(rmeta["id"])
                 self._delete_state(rel)
@@ -618,31 +797,55 @@ class SyncEngine:
                 if t and t.get("rel_path") == rel:
                     self._drop_tombstone(rel)
                 changes += 1
-                print(f"[Delete Sync] trashed in cloud: {rel}")
+                _safe_log(f"[Delete Sync] trashed in cloud: {rel}")
             except Exception as e:
-                print(f"[Delete Sync error] {rel}: {e}")
+                _safe_log(f"[Delete Sync error] {rel}: {e}")
+
+        # رفع التعديلات المحلية مرتبة من الأصغر حجماً للأكبر
+        for rel, linfo, lmd5, ex_id in sorted(pending_modified_uploads, key=lambda x: x[1]["size"]):
+            if not self.is_running:
+                break
+            if not self._has_dept_perm(rel, "edit"):
+                continue
+            if self._upload(rel, linfo, lmd5, existing_id=ex_id):
+                changes += 1
 
         # 4) الملفات الموجودة محلياً فقط
         remote_deletion_candidates = []
+        local_only_uploads = []
+
         for rel, linfo in local_files.items():
             if rel in remote_files:
                 continue
             st = states.get(rel)
             if st and st.get("server_file_id") in handled_remote_ids:
                 continue
-            if st and st.get("remote_md5") and st.get("server_file_id") and \
-                    st["server_file_id"] not in snap.file_ids:
-                # كان متزامناً ثم اختفى من السحابة -> حُذف من جهاز آخر أو من الويب
+            was_synced = bool(
+                st and (
+                    st.get("remote_md5")
+                    or st.get("server_file_id")
+                    or st.get("sync_status") == "synced"
+                )
+            )
+            if was_synced and (not st.get("server_file_id") or st["server_file_id"] not in snap.file_ids):
                 try:
                     lmd5 = self._local_md5(rel, linfo, st)
                 except OSError:
                     continue
-                if lmd5 == st.get("sha256_hash"):
+                if not st.get("sha256_hash") or lmd5 == st.get("sha256_hash"):
                     remote_deletion_candidates.append(rel)
                     continue
             if st and st.get("server_file_id") and st["server_file_id"] in snap.file_ids:
-                continue  # نقل قيد المعالجة
+                continue
             if not self._readable_and_stable(linfo):
+                continue
+            local_only_uploads.append((rel, linfo, st))
+
+        # ترتيب الملفات الجديدة من الأصغر حجماً إلى الأكبر حتى تُرفع الملفات العادية فوراً قبل قواعد البيانات الضخمة
+        for rel, linfo, st in sorted(local_only_uploads, key=lambda x: x[1]["size"]):
+            if not self.is_running:
+                break
+            if not self._has_dept_perm(rel, "upload"):
                 continue
             try:
                 lmd5 = self._local_md5(rel, linfo, st)
@@ -651,16 +854,24 @@ class SyncEngine:
             if self._upload(rel, linfo, lmd5):
                 changes += 1
 
-        # حماية من الحذف الجماعي (مثلاً سحابة فارغة بسبب خطأ في الإعداد)
-        synced_count = sum(1 for s in states.values() if s.get("remote_md5"))
+        # تنفيذ الحذف القادم من السحابة (نقل آمن إلى سلة المهملات المحلية .trash)
         if remote_deletion_candidates:
-            if len(remote_deletion_candidates) > 25 and len(remote_deletion_candidates) > 0.5 * max(synced_count, 1):
-                print(f"[Safety] Skipped mass local deletion of {len(remote_deletion_candidates)} files")
-            else:
-                for rel in remote_deletion_candidates:
-                    self._move_to_local_trash(rel)
-                    self._delete_state(rel)
-                    changes += 1
+            for rel in remote_deletion_candidates:
+                self._move_to_local_trash(rel)
+                self._delete_state(rel)
+                changes += 1
+                _safe_log(f"[Remote Delete Sync] moved to local trash: {rel}")
+
+        # تنظيف شواهد الحذف (tombstones) التي لم يعد لها وجود في السحابة أصلاً
+        for t_rel in list(tombs.keys()):
+            still_in_cloud = (
+                t_rel in remote_files
+                or t_rel in remote_dirs
+                or any(_is_under(r, t_rel) for r in remote_files)
+                or any(_is_under(d, t_rel) for d in remote_dirs)
+            )
+            if not still_in_cloud:
+                self._drop_tombstone(t_rel)
 
         # 5) تنظيف سجلات الحالة لملفات لم تعد موجودة في أي مكان
         for rel in list(states):

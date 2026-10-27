@@ -74,12 +74,14 @@ class LocalStateManager:
                     file_size INTEGER NOT NULL,
                     deleted_at TEXT NOT NULL,
                     item_type TEXT DEFAULT 'file',
-                    dept_name TEXT DEFAULT ''
+                    dept_name TEXT DEFAULT '',
+                    server_file_id TEXT DEFAULT ''
                 )
             """)
             for ddl in (
                 "ALTER TABLE deleted_files ADD COLUMN item_type TEXT DEFAULT 'file'",
                 "ALTER TABLE deleted_files ADD COLUMN dept_name TEXT DEFAULT ''",
+                "ALTER TABLE deleted_files ADD COLUMN server_file_id TEXT DEFAULT ''",
                 "ALTER TABLE local_files ADD COLUMN remote_md5 TEXT",
                 "ALTER TABLE local_files ADD COLUMN local_mtime REAL",
             ):
@@ -93,21 +95,22 @@ class LocalStateManager:
             except Exception:
                 pass
 
-    def set_file_state(self, relative_path, file_name, sha256_hash, file_size, sync_status, server_file_id=None):
+    def set_file_state(self, relative_path, file_name, sha256_hash, file_size, sync_status, server_file_id=None, remote_md5=None):
         relative_path = str(relative_path).replace("\\", "/").strip("/")
         now = datetime.now().isoformat()
         with self._get_connection() as conn:
             conn.execute("""
-                INSERT INTO local_files (relative_path, file_name, sha256_hash, file_size, server_file_id, sync_status, last_synced_at, last_modified_local)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO local_files (relative_path, file_name, sha256_hash, file_size, server_file_id, sync_status, last_synced_at, last_modified_local, remote_md5)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(relative_path) DO UPDATE SET
                     sha256_hash = excluded.sha256_hash,
                     file_size = excluded.file_size,
                     server_file_id = COALESCE(excluded.server_file_id, local_files.server_file_id),
+                    remote_md5 = COALESCE(excluded.remote_md5, local_files.remote_md5),
                     sync_status = excluded.sync_status,
                     last_synced_at = CASE WHEN excluded.sync_status = 'synced' THEN excluded.last_synced_at ELSE local_files.last_synced_at END,
                     last_modified_local = excluded.last_modified_local
-            """, (relative_path, file_name, sha256_hash, file_size, server_file_id, sync_status, now, now))
+            """, (relative_path, file_name, sha256_hash, file_size, server_file_id, sync_status, now, now, remote_md5))
 
     def get_file_state(self, relative_path):
         relative_path = str(relative_path).replace("\\", "/").strip("/")
@@ -246,10 +249,10 @@ class LocalStateManager:
             conn.execute("UPDATE deleted_files SET dept_name = ? WHERE dept_name = ?", (new_dept_name, old_dept_name))
         self.rename_folder_prefix(old_dept_name, new_dept_name)
 
-    def add_to_trash(self, file_name, original_rel_path, trash_path, file_size, item_type='file', dept_name=''):
-        """نقل ملف أو مجلد أو قسم إلى سجل سلة المحذوفات وحذفه من الملفات النشطة حسب المسار الدقيق فقط"""
+    def add_to_trash(self, file_name, original_rel_path, trash_path, file_size, item_type='file', dept_name='', server_file_id=None):
+        """نقل ملف أو مجلد أو قسم إلى سجل سلة المحذوفات وحذفه من الملفات النشطة مع الاحتفاظ بـ server_file_id"""
         if not file_name or str(file_name).startswith("~$") or str(file_name).lower().endswith(".tmp"):
-            return
+            return None
         original_rel_path = str(original_rel_path or file_name).replace("\\", "/").strip("/")
         now = datetime.now().isoformat()
         if not dept_name:
@@ -259,15 +262,36 @@ class LocalStateManager:
                 dept_name = file_name
 
         with self._get_connection() as conn:
+            if not server_file_id:
+                cur_id = conn.execute(
+                    "SELECT server_file_id FROM local_files WHERE relative_path = ? LIMIT 1",
+                    (original_rel_path,)
+                )
+                row_id = cur_id.fetchone()
+                if row_id and row_id['server_file_id']:
+                    server_file_id = row_id['server_file_id']
+
             conn.execute("DELETE FROM deleted_files WHERE original_rel_path = ?", (original_rel_path,))
             conn.execute("""
-                INSERT INTO deleted_files (file_name, original_rel_path, trash_path, file_size, deleted_at, item_type, dept_name)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (file_name, original_rel_path, str(trash_path), file_size, now, item_type, dept_name or ''))
+                INSERT INTO deleted_files (file_name, original_rel_path, trash_path, file_size, deleted_at, item_type, dept_name, server_file_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (file_name, original_rel_path, str(trash_path), file_size, now, item_type, dept_name or '', server_file_id or ''))
             conn.execute("DELETE FROM local_files WHERE relative_path = ? OR relative_path LIKE ?",
                          (original_rel_path, f"{original_rel_path}/%"))
             conn.execute("DELETE FROM upload_queue WHERE relative_path = ? OR relative_path LIKE ?",
                          (original_rel_path, f"{original_rel_path}/%"))
+        return server_file_id
+
+    def remove_from_trash_batch(self, trash_ids):
+        """إزالة مجموعة من العناصر من سلة المحذوفات دفعة واحدة في معاملة SQLite واحدة لمنع بطء التفريغ"""
+        if not trash_ids:
+            return []
+        with self._get_connection() as conn:
+            placeholders = ",".join("?" for _ in trash_ids)
+            cur = conn.execute(f"SELECT * FROM deleted_files WHERE id IN ({placeholders})", tuple(trash_ids))
+            rows = [dict(r) for r in cur.fetchall()]
+            conn.execute(f"DELETE FROM deleted_files WHERE id IN ({placeholders})", tuple(trash_ids))
+            return rows
 
     def get_trash_files(self, dept_name=None):
         """جلب الملفات المحذوفة مؤقتاً في سلة محذوفات القسم المحدد لضمان العزل التام"""
