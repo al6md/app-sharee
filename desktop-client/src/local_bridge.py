@@ -54,8 +54,11 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
 
         if path == '/show':
             try:
-                if callable(self.show_window_callback):
-                    self.show_window_callback()
+                cb = LocalBridgeHandler.__dict__.get('show_window_callback')
+                if isinstance(cb, staticmethod):
+                    cb = cb.__func__
+                if callable(cb):
+                    cb()
                 self._set_headers(200)
                 self.wfile.write(json.dumps({"success": True}).encode('utf-8'))
             except Exception as e:
