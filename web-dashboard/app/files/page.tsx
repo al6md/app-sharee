@@ -277,6 +277,8 @@ export default function FilesPage() {
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const updateFileInputRef = useRef<HTMLInputElement>(null);
   const [fileToUpdate, setFileToUpdate] = useState<FileItem | null>(null);
+  const [isDraggingOver, setIsDraggingOver] = useState<boolean>(false);
+  const dragCounterRef = useRef<number>(0);
 
   // حالة شريط ومؤشر تقدم الرفع والتنزيل السحابي الحقيقي واللحظي (النسبة % + الميغابايت MB + سرعة الإنترنت MB/s)
   interface PreciseUploadProgress {
@@ -288,6 +290,7 @@ export default function FilesPage() {
     currentFileName: string;
     currentFileSize: number;
     currentFileUploaded: number;
+    currentFilePercentage: number;
     totalBatchSize: number;
     totalBatchUploaded: number;
     percentage: number;
@@ -351,12 +354,36 @@ export default function FilesPage() {
   const createProgressUpdater = (
     totalFiles: number,
     totalBatchBytes: number,
-    mode: 'upload' | 'download' = 'upload'
+    mode: 'upload' | 'download' = 'upload',
+    initialStatusText?: string
   ) => {
-    let completedFilesBytes = 0;
+    const fileBytesMap = new Map<number, number>();
     let firstByteTime: number | null = null;
     let smoothedSpeed = 0;
     const speedSamples: { t: number; b: number }[] = [];
+
+    // عند بدء أي عملية نقل جديدة، نظهر النافذة بالحجم الطبيعي غير المصغر فوراً لتكون واضحة وجلية للمستخدم
+    setUploadProgress({
+      show: true,
+      minimized: false,
+      mode,
+      total: totalFiles,
+      current: 1,
+      currentFileName: 'جاري التحضير وبدء النقل...',
+      currentFileSize: 0,
+      currentFileUploaded: 0,
+      currentFilePercentage: 0,
+      totalBatchSize: totalBatchBytes,
+      totalBatchUploaded: 0,
+      percentage: 0,
+      speedFormatted: 'جاري البدء...',
+      megabytesFormatted: `0.00 MB / ${formatMegabytes(totalBatchBytes)}`,
+      batchMegabytesFormatted: `0.00 MB / ${formatMegabytes(totalBatchBytes)}`,
+      timeRemainingFormatted: 'جاري الحساب...',
+      chunkText: initialStatusText || (mode === 'download' ? 'تنزيل سحابي مباشر' : 'رفع سحابي مؤكد'),
+      completed: false,
+      statusText: initialStatusText,
+    });
 
     return (
       fileIndex: number,
@@ -365,14 +392,24 @@ export default function FilesPage() {
       currentFileUploaded: number,
       chunkInfo?: { currentChunk: number; totalChunks: number; chunkSize: number },
       isFinished = false,
-      hasError = false
+      hasError = false,
+      statusOverride?: string
     ) => {
       const now = performance.now();
       const safeFileSize = Math.max(1, currentFileSize);
-      const clampedCurrentUploaded = Math.min(safeFileSize, Math.max(0, currentFileUploaded));
-      const totalUploadedSoFar = Math.min(
+      const clampedCurrentUploaded = isFinished && !hasError
+        ? safeFileSize
+        : Math.min(safeFileSize, Math.max(0, currentFileUploaded));
+
+      fileBytesMap.set(fileIndex, clampedCurrentUploaded);
+
+      let totalUploadedSoFar = 0;
+      fileBytesMap.forEach((bytes) => {
+        totalUploadedSoFar += bytes;
+      });
+      totalUploadedSoFar = Math.min(
         Math.max(1, totalBatchBytes),
-        completedFilesBytes + clampedCurrentUploaded
+        Math.max(0, totalUploadedSoFar)
       );
 
       if (totalUploadedSoFar > 0 && firstByteTime === null) {
@@ -411,8 +448,16 @@ export default function FilesPage() {
         ? 100
         : Math.min(99.9, Math.max(0, parseFloat(rawPct.toFixed(1))));
 
+      const currentFilePercentage = safeFileSize > 0
+        ? isFinished && !hasError
+          ? 100
+          : Math.min(99.9, Math.max(0, parseFloat(((clampedCurrentUploaded / safeFileSize) * 100).toFixed(1))))
+        : 0;
+
       let chunkText = '';
-      if (chunkInfo && chunkInfo.totalChunks > 1) {
+      if (statusOverride) {
+        chunkText = statusOverride;
+      } else if (chunkInfo && chunkInfo.totalChunks > 1) {
         chunkText = `الجزء ${chunkInfo.currentChunk} من ${chunkInfo.totalChunks} (${formatMegabytes(chunkInfo.chunkSize)})`;
       } else {
         chunkText = mode === 'download' ? 'تنزيل سحابي مباشر' : 'رفع سحابي مؤكد';
@@ -427,6 +472,7 @@ export default function FilesPage() {
         currentFileName: fileName,
         currentFileSize,
         currentFileUploaded: clampedCurrentUploaded,
+        currentFilePercentage,
         totalBatchSize: totalBatchBytes,
         totalBatchUploaded: totalUploadedSoFar,
         percentage,
@@ -436,11 +482,8 @@ export default function FilesPage() {
         timeRemainingFormatted: formatETA(etaSeconds),
         chunkText,
         completed: isFinished && !hasError && fileIndex + 1 >= totalFiles,
+        statusText: statusOverride || prev?.statusText,
       }));
-
-      if (isFinished && !hasError) {
-        completedFilesBytes += currentFileSize;
-      }
     };
   };
 
@@ -641,13 +684,17 @@ export default function FilesPage() {
     transferAbortedRef.current = false;
     const totalSize = Math.max(1, file.size);
 
-    // اختيار حجم الجزء (مضاعفات 256KB القياسية في Google Drive) لضمان سلاسة ودقة المؤشر
-    const CHUNK_SIZE =
-      file.size <= 4 * 1024 * 1024
-        ? 512 * 1024 // 512 KB للملفات حتى 4 ميجابايت
-        : file.size <= 25 * 1024 * 1024
-        ? 1024 * 1024 // 1 MB للملفات المتوسطة
-        : 2 * 1024 * 1024; // 2 MB للملفات الكبيرة جداً
+    // اختيار حجم الجزء (مضاعفات 256KB = 262,144 بايت القياسية في Google Drive)
+    // تم تحسين الأحجام لتسريع نقل الملفات الكبيرة والضخمة (عشرات ومئات الميغابايت) بأعلى أداء ممكن
+    const KB256 = 256 * 1024;
+    let CHUNK_SIZE = KB256 * 4; // 1 MB للملفات حتى 8 ميجابايت
+    if (file.size > 128 * 1024 * 1024) {
+      CHUNK_SIZE = KB256 * 32; // 8 MB للملفات الضخمة (> 128 MB) لتسريع النقل وتقليل طلبات HTTP
+    } else if (file.size > 32 * 1024 * 1024) {
+      CHUNK_SIZE = KB256 * 16; // 4 MB للملفات الكبيرة (32 MB إلى 128 MB)
+    } else if (file.size > 8 * 1024 * 1024) {
+      CHUNK_SIZE = KB256 * 8; // 2 MB للملفات المتوسطة (8 MB إلى 32 MB)
+    }
 
     // تهيئة جلسة رفع مجزأة قابلة للاستئناف في Google Drive لجميع الملفات (> 0 بايت)
     if (file.size > 0) {
@@ -690,10 +737,47 @@ export default function FilesPage() {
         let chunkSent = false;
         let lastErr: any = null;
 
-        for (let attempt = 0; attempt < 3; attempt++) {
+        for (let attempt = 0; attempt < 4; attempt++) {
           if (transferAbortedRef.current) {
             throw new Error('تم إلغاء العملية');
           }
+
+          // إذا كانت محاولة إعادة إرسال بعد انقطاع مؤقت، نستفسر من Google Drive عن البايتات المستلمة فعلياً
+          if (attempt > 0) {
+            try {
+              const statusCheckRes = await fetch('/api/drive/files', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  action: 'CHECK_UPLOAD_STATUS',
+                  sessionUri,
+                  totalSize: file.size,
+                }),
+              });
+              const statusData = await statusCheckRes.json();
+              if (statusData.success) {
+                if (statusData.done && statusData.file) {
+                  uploadedFileResult = statusData.file;
+                  offset = file.size;
+                  chunkSent = true;
+                  if (onByteProgress) {
+                    onByteProgress(file.size, totalSize, chunkInfo);
+                  }
+                  break;
+                } else if (typeof statusData.nextOffset === 'number' && statusData.nextOffset > offset) {
+                  offset = statusData.nextOffset;
+                  chunkSent = true;
+                  if (onByteProgress) {
+                    onByteProgress(offset, totalSize, chunkInfo);
+                  }
+                  break;
+                }
+              }
+            } catch (chkErr) {
+              console.warn('Could not query upload status, retrying chunk send:', chkErr);
+            }
+          }
+
           try {
             const chunkForm = new FormData();
             chunkForm.append('action', 'UPLOAD_CHUNK');
@@ -708,9 +792,9 @@ export default function FilesPage() {
               chunkForm,
               (loaded, total) => {
                 if (onByteProgress) {
-                  // أثناء إرسال الجزء للخادم الوسيط نصل إلى 88% من حجم الجزء، وعند تأكيد استلام Google Drive نصل لـ 100% من الجزء
+                  // أثناء إرسال الجزء للخادم نصل إلى 90% من حجم الجزء، وعند تأكيد استلام السحابة نصل لـ 100%
                   const ratio = total > 0 ? Math.min(1, loaded / total) : 0;
-                  const effectiveInChunk = Math.round(chunkByteLen * ratio * 0.88);
+                  const effectiveInChunk = Math.round(chunkByteLen * ratio * 0.90);
                   onByteProgress(
                     Math.min(file.size, offset + effectiveInChunk),
                     totalSize,
@@ -729,12 +813,16 @@ export default function FilesPage() {
               throw err;
             }
             lastErr = err;
-            await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
+            await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
           }
         }
 
         if (!chunkSent) {
-          throw lastErr || new Error('تعذر رفع جزء من الملف إلى السحابة');
+          throw lastErr || new Error('تعذر رفع جزء من الملف إلى السحابة بعد عدة محاولات');
+        }
+
+        if (uploadedFileResult && offset >= file.size) {
+          break;
         }
 
         offset = endExclusive;
@@ -824,247 +912,278 @@ export default function FilesPage() {
     }
   };
 
+  // دالة ذكية لمسح واستخراج الملفات والمجلدات المسحوبة (Drag & Drop) مع الحفاظ على الهيكلية الشجرية
+  const scanFilesFromDataTransfer = async (
+    items: DataTransferItemList
+  ): Promise<{ file: File; relativePath: string }[]> => {
+    const result: { file: File; relativePath: string }[] = [];
+
+    const readEntriesAsync = (dirReader: any): Promise<any[]> => {
+      return new Promise((resolve) => {
+        dirReader.readEntries(
+          (entries: any[]) => resolve(entries || []),
+          () => resolve([])
+        );
+      });
+    };
+
+    const traverseEntry = async (entry: any, path = ''): Promise<void> => {
+      if (!entry) return;
+      if (entry.isFile) {
+        await new Promise<void>((resolve) => {
+          entry.file(
+            (file: File) => {
+              if (!isIgnoredUploadFile(file.name)) {
+                result.push({
+                  file,
+                  relativePath: path ? `${path}/${file.name}` : file.name,
+                });
+              }
+              resolve();
+            },
+            () => resolve()
+          );
+        });
+      } else if (entry.isDirectory) {
+        const dirReader = entry.createReader();
+        let allBatchEntries: any[] = [];
+        let batch: any[] = [];
+        do {
+          batch = await readEntriesAsync(dirReader);
+          allBatchEntries = allBatchEntries.concat(batch);
+        } while (batch.length > 0);
+
+        const nextPath = path ? `${path}/${entry.name}` : entry.name;
+        for (const child of allBatchEntries) {
+          await traverseEntry(child, nextPath);
+        }
+      }
+    };
+
+    const promises: Promise<void>[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.kind === 'file') {
+        const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
+        if (entry) {
+          promises.push(traverseEntry(entry));
+        } else {
+          const file = item.getAsFile();
+          if (file && !isIgnoredUploadFile(file.name)) {
+            result.push({ file, relativePath: file.name });
+          }
+        }
+      }
+    }
+
+    await Promise.all(promises);
+    return result;
+  };
+
+  // معالج رفع موحد فائق القوة للملفات والمجلدات والسحب والإفلات مع مؤشر دقيق ولحظي
+  const processUploadedFiles = async (
+    items: { file: File; relativePath: string }[],
+    isCameraCapture = false
+  ) => {
+    if (!items || items.length === 0) return;
+
+    const activeUploadPath = currentFolder || (selectedDept !== '__ALL__' ? selectedDept : '');
+    if (activeUploadPath && !canUploadFolder(activeUploadPath)) {
+      alert(`⛔ عذراً، صلاحية رفع الملفات والمجلدات معطلة لهذا القسم من قِبل الإدارة.`);
+      return;
+    }
+
+    const rawFiles = items.filter((item) => {
+      if (isCameraCapture) return true;
+      const baseName = item.relativePath.split('/').pop() || item.file.name;
+      return !isIgnoredUploadFile(baseName);
+    });
+
+    if (rawFiles.length === 0) return;
+
+    const total = rawFiles.length;
+    const totalBatchBytes = rawFiles.reduce((acc, it) => acc + it.file.size, 0);
+
+    const initialStatus = total > 1
+      ? 'جاري بدء رفع حزمة المستندات والمجلدات...'
+      : 'جاري بدء الرفع السحابي للمستند...';
+
+    const progressUpdater = createProgressUpdater(total, totalBatchBytes, 'upload', initialStatus);
+    progressUpdater(0, rawFiles[0].file.name, rawFiles[0].file.size, 0);
+
+    try {
+      setActionLoading(true);
+      const resolvedFolderIds: Record<string, string> = { ...folderMap };
+
+      // استخراج كافة مسارات المجلدات الفرعية إن وجدت لإنشائها دفعة واحدة في السحابة
+      const uniqueFolderPaths = new Set<string>();
+      for (const item of rawFiles) {
+        const parts = item.relativePath.replace(/\\/g, '/').split('/').filter(Boolean);
+        parts.pop();
+        const relSubFolder = parts.join('/');
+        const fullCloudFolderPath = activeUploadPath
+          ? (relSubFolder ? `${activeUploadPath}/${relSubFolder}` : activeUploadPath)
+          : relSubFolder;
+        if (fullCloudFolderPath && !resolvedFolderIds[fullCloudFolderPath]) {
+          uniqueFolderPaths.add(fullCloudFolderPath);
+        }
+      }
+
+      if (uniqueFolderPaths.size > 0) {
+        progressUpdater(
+          0,
+          'جاري تهيئة وهيكلة المجلدات في Google Drive...',
+          rawFiles[0].file.size,
+          0,
+          undefined,
+          false,
+          false,
+          'جاري إنشاء المجلدات السحابية...'
+        );
+        try {
+          const batchFolderRes = await fetch('/api/drive/files', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'ENSURE_FOLDER_PATHS_BATCH',
+              folderPaths: Array.from(uniqueFolderPaths),
+            }),
+          });
+          const batchFolderData = await batchFolderRes.json();
+          if (batchFolderData.success && batchFolderData.folderMap) {
+            Object.assign(resolvedFolderIds, batchFolderData.folderMap);
+          }
+        } catch (e) {
+          console.warn('Batch folder path creation fallback:', e);
+        }
+      }
+
+      let successCount = 0;
+      const failedFiles: string[] = [];
+
+      for (let i = 0; i < total; i++) {
+        const item = rawFiles[i];
+        const file = item.file;
+        const parts = item.relativePath.replace(/\\/g, '/').split('/').filter(Boolean);
+        const originalName = parts.pop() || file.name;
+        let fileName = cleanFileNameString(originalName);
+
+        if (isCameraCapture) {
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+          fileName = `كتاب_رسمي_مصور_${timestamp}.jpg`;
+        }
+
+        const relSubFolder = parts.join('/');
+        const fullCloudFolderPath = activeUploadPath
+          ? (relSubFolder ? `${activeUploadPath}/${relSubFolder}` : activeUploadPath)
+          : relSubFolder;
+
+        const displayPath = fullCloudFolderPath ? `${fullCloudFolderPath} / ${fileName}` : fileName;
+        progressUpdater(i, displayPath, file.size, 0);
+
+        let targetFolderId = fullCloudFolderPath ? resolvedFolderIds[fullCloudFolderPath] : '';
+        if (fullCloudFolderPath && !targetFolderId) {
+          try {
+            const ensureRes = await fetch('/api/drive/files', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                action: 'ENSURE_FOLDER_PATH',
+                folderPath: fullCloudFolderPath,
+              }),
+            });
+            const ensureData = await ensureRes.json();
+            if (ensureData.success && ensureData.folderId) {
+              targetFolderId = ensureData.folderId;
+              resolvedFolderIds[fullCloudFolderPath] = targetFolderId;
+            }
+          } catch (folderErr) {
+            console.error('Error ensuring folder path:', fullCloudFolderPath, folderErr);
+          }
+        }
+
+        try {
+          await uploadFileRobustly(
+            file,
+            fileName,
+            {
+              folderId: targetFolderId || undefined,
+              folderPath: fullCloudFolderPath || undefined,
+            },
+            (uploadedB, totalB, chunkInfo) => {
+              progressUpdater(i, displayPath, file.size, uploadedB, chunkInfo);
+            }
+          );
+          successCount++;
+          progressUpdater(i, displayPath, file.size, file.size, undefined, true);
+        } catch (err: any) {
+          console.error('Error uploading file:', fileName, err);
+          failedFiles.push(`${fileName} (${err?.message || 'خطأ'})`);
+          progressUpdater(i, displayPath, file.size, 0, undefined, true, true);
+        }
+      }
+
+      notifyLocalDesktopSync();
+      await loadData();
+
+      if (failedFiles.length > 0) {
+        setTimeout(() => {
+          setUploadProgress(null);
+        }, 3500);
+        setToastMessage({
+          text: `❌ تعذر رفع (${failedFiles.length}) مستند إلى السحابة`,
+          type: 'error',
+        });
+        alert(
+          `⚠️ تم رفع ${successCount} من أصل ${total} مستند إلى السحابة.\n` +
+          `تعذر رفع:\n- ${failedFiles.slice(0, 5).join('\n- ')}`
+        );
+      } else if (successCount > 0) {
+        setTimeout(() => {
+          setUploadProgress(null);
+        }, 2200);
+        setToastMessage({
+          text: total > 1
+            ? `✅ تم رفع الدفعة بالكامل (${successCount} مستند) وحفظها في السحابة ومزامنتها بنجاح!`
+            : `✅ تم رفع وحفظ المستند (${rawFiles[0].file.name}) بنجاح ومزامنته سحابياً!`,
+          type: 'success',
+        });
+      } else {
+        setUploadProgress(null);
+      }
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   // رفع ملفات متعددة مع شريط تقدم مباشر ومزامنة سحابية مؤكدة
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>, isCameraCapture = false) => {
     const fileList = event.target.files;
     if (!fileList || fileList.length === 0) return;
-
-    const activeUploadPath = currentFolder || (selectedDept !== '__ALL__' ? selectedDept : '');
-    if (activeUploadPath && !canUploadFolder(activeUploadPath)) {
-      alert(`⛔ عذراً، صلاحية رفع الملفات معطلة لهذا القسم من قِبل الإدارة.`);
+    try {
+      const items = Array.from(fileList).map((f) => ({
+        file: f,
+        relativePath: f.name,
+      }));
+      await processUploadedFiles(items, isCameraCapture);
+    } finally {
       if (event.target) event.target.value = '';
-      return;
     }
-
-    const rawFiles = Array.from(fileList).filter((f) => isCameraCapture || !isIgnoredUploadFile(f.name));
-    if (rawFiles.length === 0) {
-      if (event.target) event.target.value = '';
-      return;
-    }
-
-    const total = rawFiles.length;
-    const totalBatchBytes = rawFiles.reduce((acc, f) => acc + f.size, 0);
-    const targetFolderId = activeUploadPath ? (folderMap[activeUploadPath] || '') : '';
-
-    const progressUpdater = createProgressUpdater(total, totalBatchBytes);
-    progressUpdater(0, rawFiles[0].name, rawFiles[0].size, 0);
-
-    let successCount = 0;
-    const failedFiles: string[] = [];
-
-    for (let i = 0; i < total; i++) {
-      const file = rawFiles[i];
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      let fileName = cleanFileNameString(file.name);
-
-      if (isCameraCapture) {
-        fileName = `كتاب_رسمي_مصور_${timestamp}.jpg`;
-      }
-
-      progressUpdater(i, fileName, file.size, 0);
-
-      try {
-        await uploadFileRobustly(
-          file,
-          fileName,
-          {
-            folderId: targetFolderId || undefined,
-            folderPath: activeUploadPath || undefined,
-          },
-          (uploadedB, totalB, chunkInfo) => {
-            progressUpdater(i, fileName, file.size, uploadedB, chunkInfo);
-          }
-        );
-        successCount++;
-        progressUpdater(i, fileName, file.size, file.size, undefined, true);
-      } catch (err: any) {
-        console.error('Error uploading file:', fileName, err);
-        failedFiles.push(`${fileName} (${err?.message || 'خطأ بالاتصال'})`);
-        progressUpdater(i, fileName, file.size, 0, undefined, true, true);
-      }
-    }
-
-    notifyLocalDesktopSync();
-    await loadData();
-
-    if (failedFiles.length > 0) {
-      setTimeout(() => {
-        setUploadProgress(null);
-      }, 3500);
-      setToastMessage({
-        text: `❌ تعذر رفع (${failedFiles.length}) مستند إلى السحابة`,
-        type: 'error',
-      });
-      alert(
-        `⚠️ تم رفع ${successCount} من أصل ${total} مستند إلى السحابة.\n` +
-        `تعذر رفع الملفات التالية:\n- ${failedFiles.slice(0, 5).join('\n- ')}`
-      );
-    } else if (successCount > 0) {
-      setTimeout(() => {
-        setUploadProgress(null);
-      }, 2200);
-      setToastMessage({
-        text: `✅ تم رفع وحفظ (${successCount}) مستند في السحابة بنجاح ومزامنتها مع كافة الأجهزة!`,
-        type: 'success',
-      });
-    } else {
-      setUploadProgress(null);
-    }
-
-    if (event.target) event.target.value = '';
   };
 
   // رفع مجلد كامل مع الحفاظ على هيكلية المجلدات الفرعية ومزامنتها بالكامل في Google Drive
   const handleFolderUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const fileList = event.target.files;
     if (!fileList || fileList.length === 0) return;
-
-    const activeUploadPath = currentFolder || (selectedDept !== '__ALL__' ? selectedDept : '');
-    if (activeUploadPath && !canUploadFolder(activeUploadPath)) {
-      alert(`⛔ عذراً، صلاحية رفع المجلدات والملفات معطلة لهذا القسم من قِبل الإدارة.`);
+    try {
+      const items = Array.from(fileList).map((f) => ({
+        file: f,
+        relativePath: (f as any).webkitRelativePath || f.name,
+      }));
+      await processUploadedFiles(items, false);
+    } finally {
       if (event.target) event.target.value = '';
-      return;
     }
-
-    const rawFiles = Array.from(fileList).filter((f) => {
-      const rel = (f as any).webkitRelativePath || f.name;
-      const baseName = rel.split('/').pop() || f.name;
-      return !isIgnoredUploadFile(baseName);
-    });
-
-    if (rawFiles.length === 0) {
-      if (event.target) event.target.value = '';
-      return;
-    }
-
-    const total = rawFiles.length;
-    const totalBatchBytes = rawFiles.reduce((acc, f) => acc + f.size, 0);
-
-    const progressUpdater = createProgressUpdater(total, totalBatchBytes);
-    progressUpdater(0, 'جاري تهيئة هيكل المجلدات في السحابة...', rawFiles[0].size, 0);
-
-    const resolvedFolderIds: Record<string, string> = { ...folderMap };
-
-    // استخراج كافة مسارات المجلدات الفريدة وإنشاؤها دفعة واحدة لتسريع رفع المجلدات
-    const uniqueFolderPaths = new Set<string>();
-    for (const file of rawFiles) {
-      const relPath = ((file as any).webkitRelativePath || file.name).replace(/\\/g, '/');
-      const parts = relPath.split('/').filter(Boolean);
-      parts.pop();
-      const relSubFolder = parts.join('/');
-      const fullCloudFolderPath = activeUploadPath
-        ? (relSubFolder ? `${activeUploadPath}/${relSubFolder}` : activeUploadPath)
-        : relSubFolder;
-      if (fullCloudFolderPath && !resolvedFolderIds[fullCloudFolderPath]) {
-        uniqueFolderPaths.add(fullCloudFolderPath);
-      }
-    }
-
-    if (uniqueFolderPaths.size > 0) {
-      try {
-        const batchFolderRes = await fetch('/api/drive/files', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'ENSURE_FOLDER_PATHS_BATCH',
-            folderPaths: Array.from(uniqueFolderPaths),
-          }),
-        });
-        const batchFolderData = await batchFolderRes.json();
-        if (batchFolderData.success && batchFolderData.folderMap) {
-          Object.assign(resolvedFolderIds, batchFolderData.folderMap);
-        }
-      } catch (e) {
-        console.warn('Batch folder path creation fallback:', e);
-      }
-    }
-
-    let successCount = 0;
-    const failedFiles: string[] = [];
-
-    for (let i = 0; i < total; i++) {
-      const file = rawFiles[i];
-      const relPath = ((file as any).webkitRelativePath || file.name).replace(/\\/g, '/');
-      const parts = relPath.split('/').filter(Boolean);
-      const fileName = cleanFileNameString(parts.pop() || file.name);
-      const relSubFolder = parts.join('/');
-      const fullCloudFolderPath = activeUploadPath
-        ? (relSubFolder ? `${activeUploadPath}/${relSubFolder}` : activeUploadPath)
-        : relSubFolder;
-
-      const displayPath = fullCloudFolderPath ? `${fullCloudFolderPath} / ${fileName}` : fileName;
-      progressUpdater(i, displayPath, file.size, 0);
-
-      let targetFolderId = fullCloudFolderPath ? resolvedFolderIds[fullCloudFolderPath] : '';
-      if (fullCloudFolderPath && !targetFolderId) {
-        try {
-          const ensureRes = await fetch('/api/drive/files', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'ENSURE_FOLDER_PATH',
-              folderPath: fullCloudFolderPath,
-            }),
-          });
-          const ensureData = await ensureRes.json();
-          if (ensureData.success && ensureData.folderId) {
-            targetFolderId = ensureData.folderId;
-            resolvedFolderIds[fullCloudFolderPath] = targetFolderId;
-          }
-        } catch (folderErr) {
-          console.error('Error ensuring folder path:', fullCloudFolderPath, folderErr);
-        }
-      }
-
-      try {
-        await uploadFileRobustly(
-          file,
-          fileName,
-          {
-            folderId: targetFolderId || undefined,
-            folderPath: fullCloudFolderPath || undefined,
-          },
-          (uploadedB, totalB, chunkInfo) => {
-            progressUpdater(i, displayPath, file.size, uploadedB, chunkInfo);
-          }
-        );
-        successCount++;
-        progressUpdater(i, displayPath, file.size, file.size, undefined, true);
-      } catch (err: any) {
-        console.error('Error uploading file in folder:', fileName, err);
-        failedFiles.push(`${fileName} (${err?.message || 'خطأ'})`);
-        progressUpdater(i, displayPath, file.size, 0, undefined, true, true);
-      }
-    }
-
-    notifyLocalDesktopSync();
-    await loadData();
-
-    if (failedFiles.length > 0) {
-      setTimeout(() => {
-        setUploadProgress(null);
-      }, 3500);
-      setToastMessage({
-        text: `❌ تعذر رفع (${failedFiles.length}) مستند ضمن المجلد إلى السحابة`,
-        type: 'error',
-      });
-      alert(
-        `⚠️ تم رفع ${successCount} من أصل ${total} مستند ضمن المجلد إلى السحابة.\n` +
-        `تعذر رفع:\n- ${failedFiles.slice(0, 5).join('\n- ')}`
-      );
-    } else if (successCount > 0) {
-      setTimeout(() => {
-        setUploadProgress(null);
-      }, 2200);
-      setToastMessage({
-        text: `✅ تم رفع المجلد بالكامل (${successCount} مستند) وحفظه في السحابة ومزامنته مع جميع الأجهزة!`,
-        type: 'success',
-      });
-    } else {
-      setUploadProgress(null);
-    }
-
-    if (event.target) event.target.value = '';
   };
 
   // دوال التحديد المتعدد للملفات والمجلدات
@@ -2029,7 +2148,66 @@ export default function FilesPage() {
   };
 
   return (
-    <div className="p-3 sm:p-6 md:p-8 space-y-4 max-w-7xl mx-auto w-full">
+    <div
+      className="p-3 sm:p-6 md:p-8 space-y-4 max-w-7xl mx-auto w-full relative"
+      onDragEnter={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dragCounterRef.current++;
+        if (e.dataTransfer && e.dataTransfer.types && Array.from(e.dataTransfer.types).includes('Files')) {
+          setIsDraggingOver(true);
+        }
+      }}
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      onDragLeave={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dragCounterRef.current--;
+        if (dragCounterRef.current <= 0) {
+          dragCounterRef.current = 0;
+          setIsDraggingOver(false);
+        }
+      }}
+      onDrop={async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dragCounterRef.current = 0;
+        setIsDraggingOver(false);
+        if (e.dataTransfer && e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+          try {
+            const droppedItems = await scanFilesFromDataTransfer(e.dataTransfer.items);
+            if (droppedItems.length > 0) {
+              await processUploadedFiles(droppedItems);
+            }
+          } catch (err: any) {
+            console.error('Error processing dropped files:', err);
+          }
+        } else if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+          const rawFiles = Array.from(e.dataTransfer.files).map((f) => ({
+            file: f,
+            relativePath: f.name,
+          }));
+          await processUploadedFiles(rawFiles);
+        }
+      }}
+    >
+      {/* شاشة السحب والإفلات التفاعلية الفورية (Drag and Drop Visual Overlay) */}
+      {isDraggingOver && (
+        <div className="fixed inset-0 z-50 bg-[#14372e]/85 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-white border-4 border-dashed border-emerald-400 m-4 rounded-3xl animate-in fade-in duration-200 pointer-events-none" dir="rtl">
+          <div className="bg-emerald-500/20 p-6 rounded-3xl mb-4 border border-emerald-400/30 animate-bounce">
+            <UploadCloud className="w-16 h-16 text-amber-300" />
+          </div>
+          <h3 className="text-2xl font-black mb-2 text-white">
+            أفلت الملفات أو المجلدات هنا للرفع السحابي الفوري
+          </h3>
+          <p className="text-emerald-100 text-sm max-w-lg text-center font-bold leading-relaxed">
+            يدعم النظام سحب الملفات الفردية، المجموعات، والمجلدات الكاملة بهيكليتها مع مؤشر دقيق للسرعة والميغابايت ودعم كامل للملفات الكبيرة.
+          </p>
+        </div>
+      )}
       {/* 1. الترويسة وأزرار الإجراءات السريعة (متجاوبة تماماً مع الجوال) */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
         <div className="min-w-0">
@@ -3072,9 +3250,13 @@ export default function FilesPage() {
                       ? uploadProgress.mode === 'download'
                         ? '✅ اكتمل تنزيل المستند بنجاح!'
                         : '✅ اكتمل الرفع والمزامنة بنجاح!'
+                      : uploadProgress.statusText
+                      ? uploadProgress.statusText
                       : uploadProgress.mode === 'download'
                       ? 'جاري تنزيل المستند من السحابة بحجمه وسرعته الحقيقية...'
-                      : 'جاري رفع المستندات إلى السحابة بحجمها وسرعتها الحقيقية...'}
+                      : uploadProgress.total > 1
+                      ? `جاري رفع المجلد والملفات (${uploadProgress.current} من ${uploadProgress.total})...`
+                      : 'جاري رفع المستند إلى السحابة بحجمه وسرعته الحقيقية...'}
                   </h4>
                   <div className="inline-flex items-center justify-center px-3.5 py-1.5 bg-slate-100 rounded-xl text-xs font-bold text-slate-800 max-w-full break-words whitespace-normal leading-relaxed border border-slate-200/80">
                     <span className="break-words whitespace-normal">{uploadProgress.currentFileName}</span>
@@ -3082,34 +3264,87 @@ export default function FilesPage() {
                 </div>
               </div>
 
-              {/* النسبة المئوية وشريط التحميل الدقيق */}
-              <div className="space-y-2">
-                <div className="flex justify-between items-baseline px-1">
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-3xl font-black text-[#14372e] tracking-tight font-mono">
-                      {uploadProgress.percentage}%
-                    </span>
-                    <span className="text-xs font-black text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-200">
-                      نسبة الإنجاز الحقيقية
-                    </span>
-                  </div>
-                  <span className="text-xs font-bold text-slate-600">
-                    مستند {uploadProgress.current} من {uploadProgress.total}
-                  </span>
-                </div>
+              {/* النسبة المئوية وأشرطة التحميل الدقيقة (إجمالي الدفعة + الملف الفردي النشط) */}
+              {uploadProgress.total > 1 ? (
+                <div className="space-y-3 bg-slate-50 p-3.5 rounded-2xl border border-slate-200/80">
+                  {/* شريط تقدم المجلد أو الدفعة بالكامل */}
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between items-baseline px-1">
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-2xl font-black text-[#14372e] tracking-tight font-mono">
+                          {uploadProgress.percentage}%
+                        </span>
+                        <span className="text-[11px] font-black text-emerald-850 bg-emerald-100 px-2 py-0.5 rounded-lg border border-emerald-300">
+                          إنجاز المجلد بالكامل
+                        </span>
+                      </div>
+                      <span className="text-xs font-bold text-slate-600 font-mono">
+                        مستند {uploadProgress.current} من {uploadProgress.total}
+                      </span>
+                    </div>
 
-                {/* شريط التحميل المتدرج مع وميض حيوي */}
-                <div className="w-full bg-slate-100 rounded-full h-4 overflow-hidden p-0.5 border border-slate-200/90 shadow-inner relative">
-                  <div
-                    className="bg-gradient-to-r from-emerald-600 via-teal-500 to-amber-500 h-full rounded-full transition-all duration-150 ease-out shadow-sm relative overflow-hidden"
-                    style={{ width: `${Math.max(2, uploadProgress.percentage)}%` }}
-                  >
-                    {!uploadProgress.completed && (
-                      <div className="absolute inset-0 bg-white/25 animate-pulse" />
-                    )}
+                    <div className="w-full bg-slate-200 rounded-full h-3.5 overflow-hidden p-0.5 border border-slate-300 shadow-inner relative">
+                      <div
+                        className="bg-gradient-to-r from-emerald-600 via-teal-500 to-amber-500 h-full rounded-full transition-all duration-150 ease-out shadow-sm relative overflow-hidden"
+                        style={{ width: `${Math.max(2, uploadProgress.percentage)}%` }}
+                      >
+                        {!uploadProgress.completed && (
+                          <div className="absolute inset-0 bg-white/25 animate-pulse" />
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* شريط تقدم الملف الفردي النشط حالياً */}
+                  <div className="space-y-1 pt-1 border-t border-slate-200/70">
+                    <div className="flex justify-between items-center text-xs px-1">
+                      <span className="font-bold text-slate-700 flex items-center gap-1.5">
+                        <FileText className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>الملف الحالي:</span>
+                        <span className="font-black text-emerald-900 font-mono">{uploadProgress.currentFilePercentage}%</span>
+                      </span>
+                      <span className="text-[11px] text-slate-500 font-mono" dir="ltr">
+                        {uploadProgress.megabytesFormatted}
+                      </span>
+                    </div>
+
+                    <div className="w-full bg-slate-200/70 rounded-full h-2 overflow-hidden">
+                      <div
+                        className="bg-emerald-600 h-full rounded-full transition-all duration-150"
+                        style={{ width: `${Math.max(2, uploadProgress.currentFilePercentage)}%` }}
+                      />
+                    </div>
                   </div>
                 </div>
-              </div>
+              ) : (
+                /* شريط التحميل الدقيق لملف فردي */
+                <div className="space-y-2">
+                  <div className="flex justify-between items-baseline px-1">
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-3xl font-black text-[#14372e] tracking-tight font-mono">
+                        {uploadProgress.percentage}%
+                      </span>
+                      <span className="text-xs font-black text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-200">
+                        نسبة الإنجاز الحقيقية
+                      </span>
+                    </div>
+                    <span className="text-xs font-bold text-slate-600 font-mono" dir="ltr">
+                      {uploadProgress.megabytesFormatted}
+                    </span>
+                  </div>
+
+                  <div className="w-full bg-slate-100 rounded-full h-4 overflow-hidden p-0.5 border border-slate-200/90 shadow-inner relative">
+                    <div
+                      className="bg-gradient-to-r from-emerald-600 via-teal-500 to-amber-500 h-full rounded-full transition-all duration-150 ease-out shadow-sm relative overflow-hidden"
+                      style={{ width: `${Math.max(2, uploadProgress.percentage)}%` }}
+                    >
+                      {!uploadProgress.completed && (
+                        <div className="absolute inset-0 bg-white/25 animate-pulse" />
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* بطاقات الإحصاءات الحية (Stat Cards): الميغات + سرعة الإنترنت + الوقت المتبقي + الحالة */}
               <div className="grid grid-cols-2 gap-3 pt-1">
@@ -3249,8 +3484,10 @@ export default function FilesPage() {
             </div>
 
             <div className="flex justify-between items-center text-[11px] font-bold text-slate-300 pt-0.5 font-mono">
-              <span className="text-emerald-400 text-xs font-black">{uploadProgress.percentage}%</span>
-              <span dir="ltr">{uploadProgress.megabytesFormatted}</span>
+              <span className="text-emerald-400 text-xs font-black">
+                {uploadProgress.percentage}% {uploadProgress.total > 1 ? `(${uploadProgress.current}/${uploadProgress.total})` : ''}
+              </span>
+              <span dir="ltr">{uploadProgress.total > 1 ? uploadProgress.batchMegabytesFormatted : uploadProgress.megabytesFormatted}</span>
               <span>{uploadProgress.completed ? 'اكتمل' : uploadProgress.timeRemainingFormatted}</span>
             </div>
           </div>

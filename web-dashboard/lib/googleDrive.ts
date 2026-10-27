@@ -917,6 +917,54 @@ export async function uploadResumableChunk(params: {
 }
 
 /**
+ * استعلام حالة واستئناف جلسة رفع مجزأ للملفات الكبيرة من Google Drive (Resume Status Query)
+ */
+export async function getResumableUploadStatus(sessionUri: string, totalSize: number) {
+  const res = await fetch(sessionUri, {
+    method: 'PUT',
+    headers: {
+      'Content-Length': '0',
+      'Content-Range': `bytes */${totalSize}`,
+    },
+  });
+
+  if (res.status === 308) {
+    const range = res.headers.get('range'); // e.g. "bytes=0-4194303"
+    let nextOffset = 0;
+    if (range) {
+      const match = range.match(/bytes=0-(\d+)/);
+      if (match) {
+        nextOffset = parseInt(match[1], 10) + 1;
+      }
+    }
+    return {
+      done: false,
+      status: 308,
+      nextOffset,
+      range,
+    };
+  }
+
+  if (res.status === 200 || res.status === 201) {
+    let data: any = null;
+    try {
+      data = await res.json();
+    } catch {
+      data = null;
+    }
+    return {
+      done: true,
+      status: res.status,
+      nextOffset: totalSize,
+      file: data,
+    };
+  }
+
+  const errText = await res.text();
+  throw new Error(`تعذر استعلام حالة جلسة الرفع (${res.status}): ${errText}`);
+}
+
+/**
  * نقل ملف أو مجلد إلى سلة المحذوفات
  */
 export async function deleteDriveItem(fileId: string) {

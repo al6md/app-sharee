@@ -7,6 +7,7 @@ import {
   uploadFileToDrive, 
   initResumableUpload,
   uploadResumableChunk,
+  getResumableUploadStatus,
   deleteDriveItem, 
   restoreDriveItem, 
   permanentDeleteDriveItem, 
@@ -82,6 +83,15 @@ export async function POST(req: NextRequest) {
           origin,
         });
         return NextResponse.json({ success: true, ...initData });
+      }
+
+      if (body.action === 'CHECK_UPLOAD_STATUS') {
+        const { sessionUri, totalSize } = body;
+        if (!sessionUri || typeof totalSize !== 'number') {
+          return NextResponse.json({ success: false, error: 'بيانات استعلام الجلسة غير مكتملة' }, { status: 400 });
+        }
+        const statusData = await getResumableUploadStatus(sessionUri, totalSize);
+        return NextResponse.json({ success: true, ...statusData });
       }
 
       if (body.action === 'RENAME') {
