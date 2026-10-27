@@ -199,15 +199,16 @@ export default function AdminControlPage() {
 
         mappedFiles.forEach(f => {
           if (!f.isDeleted && f.folder && f.folder !== 'كافة الملفات') {
-            if (!folderMap.has(f.folder)) {
-              folderMap.set(f.folder, {
-                id: f.folder,
-                name: f.folder,
+            const deptName = f.folder.split('/')[0];
+            if (!folderMap.has(deptName)) {
+              folderMap.set(deptName, {
+                id: deptName,
+                name: deptName,
                 fileCount: 0,
                 totalSize: 0
               });
             }
-            const item = folderMap.get(f.folder)!;
+            const item = folderMap.get(deptName)!;
             item.fileCount += 1;
             item.totalSize += f.rawSize;
           }
@@ -464,8 +465,8 @@ export default function AdminControlPage() {
 
   // تصفية الملفات في تبويب الملفات
   const filteredFiles = files.filter(f => {
-    const matchDept = selectedDeptFilter === '__ALL__' || f.folder === selectedDeptFilter;
-    const matchSearch = f.name.toLowerCase().includes(fileSearch.toLowerCase());
+    const matchDept = selectedDeptFilter === '__ALL__' || f.folder === selectedDeptFilter || f.folder.startsWith(selectedDeptFilter + '/');
+    const matchSearch = f.name.toLowerCase().includes(fileSearch.toLowerCase()) || f.folder.toLowerCase().includes(fileSearch.toLowerCase());
     return matchDept && matchSearch;
   });
 

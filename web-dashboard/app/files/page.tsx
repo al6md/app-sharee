@@ -39,6 +39,8 @@ interface FileItem {
   id: string;
   name: string;
   folder: string;
+  department: string;
+  subFolder: string;
   type: 'word' | 'excel' | 'access' | 'pdf' | 'image' | 'file';
   size: string;
   rawSize: number;
@@ -49,6 +51,14 @@ interface FileItem {
   isDeleted: boolean;
   previewUrl?: string;
   downloadUrl?: string;
+}
+
+interface CloudFolderItem {
+  id: string;
+  name: string;
+  path: string;
+  parentPath: string;
+  department: string;
 }
 
 const MIME_MAP: Record<string, string> = {
@@ -94,6 +104,7 @@ export default function FilesPage() {
 
   const [files, setFiles] = useState<FileItem[]>([]);
   const [folderMap, setFolderMap] = useState<Record<string, string>>({});
+  const [allFolders, setAllFolders] = useState<CloudFolderItem[]>([]);
   const [folders, setFolders] = useState<string[]>([]);
   const [departments, setDepartments] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -187,7 +198,19 @@ export default function FilesPage() {
         (data.folders || []).forEach((f: any) => {
           if (f.name && f.id) fMap[f.name] = f.id;
         });
+        const fullFolders: CloudFolderItem[] = (data.allFolders || []).map((f: any) => ({
+          id: f.id,
+          name: f.name,
+          path: f.path || f.name,
+          parentPath: f.parentPath || '',
+          department: f.department || (f.path ? f.path.split('/')[0] : f.name),
+        }));
+        fullFolders.forEach((f) => {
+          if (f.path && f.id) fMap[f.path] = f.id;
+          if (!f.parentPath && f.name && f.id) fMap[f.name] = f.id;
+        });
         setFolderMap(fMap);
+        setAllFolders(fullFolders);
         setFolders(loadedFolders);
         setDepartments(loadedFolders);
         setSelectedDept(prev => (prev === '__ALL__' || loadedFolders.includes(prev)) ? prev : '__ALL__');
@@ -196,6 +219,8 @@ export default function FilesPage() {
           id: f.id,
           name: f.name,
           folder: f.folder || 'القسم العام',
+          department: f.department || (f.folder ? String(f.folder).split('/')[0] : 'القسم العام'),
+          subFolder: f.subFolder || (f.folder && String(f.folder).includes('/') ? String(f.folder).split('/').slice(1).join('/') : ''),
           type: getFileType(f.name),
           size: formatSize(f.size || 0),
           rawSize: f.size || 0,
@@ -290,7 +315,7 @@ export default function FilesPage() {
     const filesToUpload = Array.from(fileList);
     const total = filesToUpload.length;
 
-    const activeUploadDept = selectedDept !== '__ALL__' ? selectedDept : (currentFolder || 'القسم العام');
+    const activeUploadDept = currentFolder || (selectedDept !== '__ALL__' ? selectedDept : 'القسم العام');
     const targetFolderId = folderMap[activeUploadDept] || '';
 
     setUploadProgress({
@@ -367,7 +392,7 @@ export default function FilesPage() {
     const filesToUpload = Array.from(fileList);
     const total = filesToUpload.length;
 
-    const activeUploadDept = selectedDept !== '__ALL__' ? selectedDept : (currentFolder || 'القسم العام');
+    const activeUploadDept = currentFolder || (selectedDept !== '__ALL__' ? selectedDept : 'القسم العام');
     const baseParentId = folderMap[activeUploadDept] || '';
 
     setUploadProgress({
@@ -794,16 +819,18 @@ export default function FilesPage() {
     });
   };
 
-  // إنشاء مجلد جديد
+  // إنشاء مجلد جديد (في القسم الرئيسي أو داخل المجلد الفرعي المفتوح حالياً)
   const handleCreateFolder = async () => {
     const fName = newFolderName.trim();
     if (!fName) return;
     try {
       setActionLoading(true);
+      const targetParentPath = currentFolder || (selectedDept !== '__ALL__' ? selectedDept : '');
+      const parentId = targetParentPath ? folderMap[targetParentPath] : undefined;
       const res = await fetch('/api/drive/files', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'CREATE_FOLDER', name: fName }),
+        body: JSON.stringify({ action: 'CREATE_FOLDER', name: fName, parentId }),
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error);
@@ -819,16 +846,39 @@ export default function FilesPage() {
     }
   };
 
-  // تعديل اسم المستند
+  // نقل مجلد إلى سلة المحذوفات
+  const handleMoveFolderToTrash = async (folder: CloudFolderItem) => {
+    if (!confirm(`هل أنت متأكد من نقل المجلد "${folder.name}" ومحتوياته إلى سلة المحذوفات؟`)) return;
+    try {
+      setActionLoading(true);
+      const res = await fetch(`/api/drive/files?id=${folder.id}&permanent=false`, {
+        method: 'DELETE',
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error);
+      if (currentFolder === folder.path || (currentFolder && currentFolder.startsWith(folder.path + '/'))) {
+        setCurrentFolder(folder.parentPath || null);
+      }
+      await loadData();
+    } catch (e: any) {
+      alert(`تعذر حذف المجلد: ${e.message || e}`);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // تعديل اسم المستند أو المجلد
   const handleSaveRename = async () => {
     if (!itemToRename || !newRenameValue.trim()) return;
     const oldName = itemToRename.name;
     let newName = newRenameValue.trim();
 
-    // الحفاظ على الامتداد
-    const oldExt = oldName.includes('.') ? '.' + oldName.split('.').pop() : '';
-    if (oldExt && !newName.includes('.')) {
-      newName += oldExt;
+    // الحفاظ على الامتداد للمستندات فقط (وليس المجلدات)
+    if (!itemToRename.isFolder) {
+      const oldExt = oldName.includes('.') ? '.' + oldName.split('.').pop() : '';
+      if (oldExt && !newName.includes('.')) {
+        newName += oldExt;
+      }
     }
 
     if (newName === oldName) {
@@ -856,15 +906,40 @@ export default function FilesPage() {
       setActionLoading(false);
     }
   };
-  // تصفية الملفات حسب التبويب (نشط / محذوف)، القسم، البحث، والنوع
+
+  // تصفية الملفات والمجلدات حسب التبويب (نشط / محذوف)، القسم، المجلد المفتوح، البحث، والنوع
   const activeFiles = files.filter(f => !f.isDeleted);
   const trashFiles = files.filter(f => f.isDeleted);
 
+  const activeBrowsePath = currentFolder || (selectedDept !== '__ALL__' ? selectedDept : '');
+  const visibleSubfolders = activeTab === 'ACTIVE' && !searchTerm.trim()
+    ? allFolders.filter(folder => folder.parentPath === activeBrowsePath)
+    : [];
+
   const displayedList = (activeTab === 'ACTIVE' ? activeFiles : trashFiles).filter(f => {
-    const matchDept = selectedDept === '__ALL__' || f.folder.includes(selectedDept) || f.name.includes(selectedDept);
-    const matchSearch = f.name.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchSearch = !searchTerm.trim() ||
+      f.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      f.folder.toLowerCase().includes(searchTerm.toLowerCase());
     const matchType = filterType === 'ALL' || f.type.toUpperCase() === filterType;
-    return matchDept && matchSearch && matchType;
+
+    if (searchTerm.trim()) {
+      const matchDeptSearch = selectedDept === '__ALL__' || f.department === selectedDept || f.folder === selectedDept || f.folder.startsWith(selectedDept + '/');
+      return matchDeptSearch && matchSearch && matchType;
+    }
+
+    if (currentFolder) {
+      return f.folder === currentFolder && matchType;
+    }
+
+    if (selectedDept !== '__ALL__') {
+      // في حال وجود مجلدات فرعية معروضة بالأعلى، اعرض المستندات المباشرة في هذا المستوى أو كافة المستندات إذا لم توجد مجلدات فرعية
+      if (visibleSubfolders.length > 0) {
+        return f.folder === selectedDept && matchType;
+      }
+      return (f.department === selectedDept || f.folder === selectedDept || f.folder.startsWith(selectedDept + '/')) && matchType;
+    }
+
+    return matchSearch && matchType;
   });
 
   const getFileBadge = (type: string) => {
@@ -1053,22 +1128,28 @@ export default function FilesPage() {
       {/* 3. شريط الأقسام الأفقية المخصصة للمس بالجوال (Horizontal Department Chips) */}
       <div className="flex items-center gap-2 overflow-x-auto pb-1.5 scrollbar-thin">
         <button
-          onClick={() => setSelectedDept('__ALL__')}
+          onClick={() => {
+            setSelectedDept('__ALL__');
+            setCurrentFolder(null);
+          }}
           className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition whitespace-nowrap shrink-0 border ${
             selectedDept === '__ALL__'
               ? 'bg-[#14372e] text-white border-[#14372e] shadow-sm'
               : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
           }`}
         >
-          🗂️ كافة الأقسام ({files.length})
+          🗂️ كافة الأقسام ({activeFiles.length})
         </button>
 
         {departments.map((dept) => {
-          const count = files.filter(f => f.folder.includes(dept) || f.name.includes(dept)).length;
+          const count = activeFiles.filter(f => f.department === dept || f.folder === dept || f.folder.startsWith(dept + '/')).length;
           return (
             <button
               key={dept}
-              onClick={() => setSelectedDept(dept)}
+              onClick={() => {
+                setSelectedDept(dept);
+                setCurrentFolder(null);
+              }}
               className={`px-3 py-1.5 rounded-xl text-xs font-bold transition whitespace-nowrap shrink-0 border flex items-center gap-1.5 ${
                 selectedDept === dept
                   ? 'bg-[#14372e] text-white border-[#14372e] shadow-sm'
@@ -1122,19 +1203,139 @@ export default function FilesPage() {
         </div>
       </div>
 
+      {/* 4.5. شريط مسار المجلدات (Breadcrumb) والمجلدات الفرعية المتداخلة */}
+      {activeTab === 'ACTIVE' && (currentFolder || visibleSubfolders.length > 0) && (
+        <div className="bg-white rounded-2xl border border-slate-200 p-3.5 space-y-3 shadow-xs">
+          {/* شريط المسار (Breadcrumb) */}
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-1.5 flex-wrap text-xs font-bold">
+              <button
+                onClick={() => {
+                  setSelectedDept('__ALL__');
+                  setCurrentFolder(null);
+                }}
+                className="text-slate-600 hover:text-[#14372e] px-2 py-1 rounded-lg hover:bg-slate-100 transition"
+              >
+                🗂️ كافة الأقسام
+              </button>
+              {activeBrowsePath && activeBrowsePath.split('/').map((part, idx, arr) => {
+                const targetPath = arr.slice(0, idx + 1).join('/');
+                const isLast = idx === arr.length - 1;
+                return (
+                  <div key={targetPath} className="flex items-center gap-1.5">
+                    <ChevronLeft className="w-3.5 h-3.5 text-slate-400" />
+                    <button
+                      onClick={() => {
+                        setSelectedDept(arr[0]);
+                        setCurrentFolder(idx === 0 ? null : targetPath);
+                      }}
+                      className={`px-2.5 py-1 rounded-lg transition ${
+                        isLast
+                          ? 'bg-[#14372e] text-white shadow-xs'
+                          : 'text-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      {idx === 0 ? `🏛️ ${part}` : `📁 ${part}`}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+
+            {currentFolder && (
+              <button
+                onClick={() => {
+                  const parts = currentFolder.split('/');
+                  if (parts.length <= 2) {
+                    setCurrentFolder(null);
+                  } else {
+                    setCurrentFolder(parts.slice(0, -1).join('/'));
+                  }
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition"
+              >
+                <ArrowRight className="w-3.5 h-3.5" />
+                <span>رجوع للمجلد السابق</span>
+              </button>
+            )}
+          </div>
+
+          {/* شبكة المجلدات الفرعية */}
+          {visibleSubfolders.length > 0 && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5 pt-1">
+              {visibleSubfolders.map((sub) => {
+                const subFilesCount = activeFiles.filter(
+                  f => f.folder === sub.path || f.folder.startsWith(sub.path + '/')
+                ).length;
+                const childFoldersCount = allFolders.filter(
+                  cf => cf.parentPath === sub.path
+                ).length;
+                return (
+                  <div
+                    key={sub.id}
+                    onClick={() => {
+                      setSelectedDept(sub.department);
+                      setCurrentFolder(sub.path);
+                    }}
+                    className="group cursor-pointer bg-amber-50/50 hover:bg-amber-50 border border-amber-200/80 hover:border-amber-400 rounded-xl p-3 flex items-center justify-between gap-2 transition shadow-2xs"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="p-2 bg-amber-100/80 text-amber-700 rounded-xl shrink-0">
+                        <Folder className="w-5 h-5 fill-amber-400/40" />
+                      </div>
+                      <div className="min-w-0">
+                        <h4 className="font-bold text-xs text-slate-800 truncate" title={sub.name}>
+                          {sub.name}
+                        </h4>
+                        <p className="text-[10px] text-slate-500 mt-0.5">
+                          {subFilesCount} مستند{childFoldersCount > 0 ? ` • ${childFoldersCount} مجلد فرعي` : ''}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        onClick={() => {
+                          setItemToRename({ id: sub.id, name: sub.name, isFolder: true });
+                          setNewRenameValue(sub.name);
+                          setShowRenameModal(true);
+                        }}
+                        className="p-1.5 text-slate-500 hover:text-emerald-700 hover:bg-white rounded-lg transition"
+                        title="تعديل اسم المجلد"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => handleMoveFolderToTrash(sub)}
+                        className="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-white rounded-lg transition"
+                        title="نقل المجلد للمحذوفات"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* 5. عرض الملفات: بطاقات للموبايل وجدول للشاشات الكبيرة */}
       {displayedList.length === 0 ? (
-        <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center flex flex-col items-center justify-center space-y-3">
-          <div className="p-4 bg-slate-50 rounded-full text-slate-400">
-            <Inbox className="w-10 h-10" />
+        visibleSubfolders.length === 0 ? (
+          <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center flex flex-col items-center justify-center space-y-3">
+            <div className="p-4 bg-slate-50 rounded-full text-slate-400">
+              <Inbox className="w-10 h-10" />
+            </div>
+            <h4 className="text-sm font-bold text-slate-700">لا توجد مستندات تطابق هذا الاختيار</h4>
+            <p className="text-xs text-slate-400 max-w-sm leading-relaxed">
+              {activeTab === 'TRASH' 
+                ? 'سلة المحذوفات فارغة حالياً.'
+                : 'يمكنك إضافة ملف جديد أو تصوير كتاب رسمي بالكاميرا فوراً من الأزرار بالأعلى.'}
+            </p>
           </div>
-          <h4 className="text-sm font-bold text-slate-700">لا توجد مستندات تطابق هذا الاختيار</h4>
-          <p className="text-xs text-slate-400 max-w-sm leading-relaxed">
-            {activeTab === 'TRASH' 
-              ? 'سلة المحذوفات فارغة حالياً.'
-              : 'يمكنك إضافة ملف جديد أو تصوير كتاب رسمي بالكاميرا فوراً من الأزرار بالأعلى.'}
-          </p>
-        </div>
+        ) : null
       ) : (
         <>
           {/* نمط بطاقات الجوال (Mobile Touch Cards) */}

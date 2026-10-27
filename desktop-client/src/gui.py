@@ -35,6 +35,7 @@ from autostart import is_windows_autostart_enabled, set_windows_autostart
 
 class StatusBridge(QObject):
     sync_updated = pyqtSignal(dict)
+    show_requested = pyqtSignal()
 
 
 class GovFileCard(QFrame):
@@ -391,8 +392,13 @@ class FileExchangeMainWindow(QMainWindow):
 
         self.bridge = StatusBridge()
         self.bridge.sync_updated.connect(self.handle_sync_update)
+        self.bridge.show_requested.connect(self.bring_to_front)
         if self.sync_engine:
             self.sync_engine.register_status_listener(lambda data: self.bridge.sync_updated.emit(data))
+
+        self._ui_refresh_timer = QTimer(self)
+        self._ui_refresh_timer.setSingleShot(True)
+        self._ui_refresh_timer.timeout.connect(self._refresh_file_list)
 
         self._setup_ui()
         self._setup_tray()
@@ -408,6 +414,31 @@ class FileExchangeMainWindow(QMainWindow):
         self.dept_cloud_timer.timeout.connect(self.trigger_async_departments_sync)
         self.dept_cloud_timer.start(25000)
         QTimer.singleShot(1500, self.trigger_async_departments_sync)
+
+    def bring_to_front(self):
+        """إظهار النافذة وتنشيطها بأمان على خيط Qt الرئيسي بدون أي تجميد أو شاشة بيضاء"""
+        try:
+            self.setWindowState((self.windowState() & ~Qt.WindowState.WindowMinimized) | Qt.WindowState.WindowActive)
+            self.show()
+            self.showNormal()
+            self.raise_()
+            self.activateWindow()
+            self.repaint()
+        except Exception as e:
+            print(f"[bring_to_front]: {e}")
+
+    def _run_cloud_async(self, fn, *args, **kwargs):
+        """تشغيل أي عملية سحابية في خيط خلفي حتى لا تتجمد واجهة المستخدم مطلقاً"""
+        import threading
+        def _worker():
+            try:
+                fn(*args, **kwargs)
+            except Exception as e:
+                print(f"[Async cloud op]: {e}")
+            finally:
+                if self.sync_engine:
+                    self.sync_engine.wake(delay=0.5)
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _setup_ui(self):
         central = QWidget()
@@ -1310,7 +1341,9 @@ class FileExchangeMainWindow(QMainWindow):
         
         def do_sync():
             try:
-                if self.sync_engine:
+                if self.sync_engine and hasattr(self.sync_engine, 'sync_now'):
+                    self.sync_engine.sync_now(timeout=60)
+                elif self.sync_engine:
                     self.sync_engine.pull_remote_changes()
             except Exception as e:
                 print(f"[Manual refresh error]: {e}")
@@ -1410,13 +1443,9 @@ class FileExchangeMainWindow(QMainWindow):
                 self.departments_list.append({"name": d_name, "icon": "🏛️"})
                 self.state_mgr.set_departments(self.departments_list)
 
-                # مزامنة إنشاء القسم فوراً إلى السحابة
-                if self.client and self.client.is_configured():
-                    try:
-                        if hasattr(self.client, 'create_folder'):
-                            self.client.create_folder(d_name)
-                    except Exception as ce:
-                        print(f"[Remote create dept]: {ce}")
+                # مزامنة إنشاء القسم فوراً إلى السحابة في خيط خلفي
+                if self.client and self.client.is_configured() and hasattr(self.client, 'create_folder'):
+                    self._run_cloud_async(self.client.create_folder, d_name)
 
                 dialog.accept()
 
@@ -1548,15 +1577,12 @@ class FileExchangeMainWindow(QMainWindow):
                     except Exception:
                         self.current_subpath = Path(new_name)
 
-            # 5. مزامنة تعديل المجلد مع السحابة فوراً
+            # 5. مزامنة تعديل اسم القسم مع السحابة في خيط خلفي (تغيير الاسم بدلاً من الحذف!)
             if self.client and self.client.is_configured():
-                try:
-                    if hasattr(self.client, 'create_folder'):
-                        self.client.create_folder(new_name)
-                    if hasattr(self.client, 'delete_folder'):
-                        self.client.delete_folder(old_dept_name)
-                except Exception as ce:
-                    print(f"[Remote dept rename sync]: {ce}")
+                if hasattr(self.client, 'rename_folder'):
+                    self._run_cloud_async(self.client.rename_folder, old_dept_name, new_name)
+                elif hasattr(self.client, 'create_folder'):
+                    self._run_cloud_async(self.client.create_folder, new_name)
 
             dialog.accept()
             self._refresh_departments_sidebar()
@@ -1595,14 +1621,11 @@ class FileExchangeMainWindow(QMainWindow):
             self.departments_list = [d for d in self.departments_list if d['name'] != dept_name]
             self.state_mgr.set_departments(self.departments_list)
 
-            if self.client and self.client.is_configured():
-                try:
-                    if hasattr(self.client, 'delete_folder'):
-                        self.client.delete_folder(dept_name)
-                    else:
-                        self.client.delete_file(dept_name)
-                except Exception as e:
-                    print(f"[Delete remote dept]: {e}")
+            if self.sync_engine and hasattr(self.sync_engine, 'note_local_delete'):
+                self.sync_engine.note_local_delete(dept_name, is_folder=True)
+            elif self.client and self.client.is_configured():
+                fn = self.client.delete_folder if hasattr(self.client, 'delete_folder') else self.client.delete_file
+                self._run_cloud_async(fn, dept_name)
 
             if self.active_dept_name == dept_name:
                 if self.departments_list:
@@ -1751,13 +1774,9 @@ class FileExchangeMainWindow(QMainWindow):
                 target_dir.mkdir(parents=True, exist_ok=True)
                 rel_folder = str(target_dir.relative_to(self.sync_folder)).replace("\\", "/")
                 
-                # مزامنة إنشاء المجلد فوراً إلى السحابة
-                if self.client and self.client.is_configured():
-                    try:
-                        if hasattr(self.client, 'create_folder'):
-                            self.client.create_folder(rel_folder)
-                    except Exception as ce:
-                        print(f"[Remote create folder]: {ce}")
+                # مزامنة إنشاء المجلد فوراً إلى السحابة في خيط خلفي
+                if self.client and self.client.is_configured() and hasattr(self.client, 'create_folder'):
+                    self._run_cloud_async(self.client.create_folder, rel_folder)
 
                 dialog.accept()
                 self._refresh_file_list()
@@ -1859,15 +1878,12 @@ class FileExchangeMainWindow(QMainWindow):
             new_rel = str(new_path.relative_to(self.sync_folder)).replace("\\", "/")
             self.state_mgr.rename_folder_prefix(old_rel, new_rel)
 
-            # 3. مزامنة التغيير في السحابة
+            # 3. مزامنة التغيير في السحابة في خيط خلفي (تغيير الاسم دون حذف المحتويات)
             if self.client and self.client.is_configured():
-                try:
-                    if hasattr(self.client, 'create_folder'):
-                        self.client.create_folder(new_rel)
-                    if hasattr(self.client, 'delete_folder'):
-                        self.client.delete_folder(old_rel)
-                except Exception as ce:
-                    print(f"[Remote folder rename sync]: {ce}")
+                if hasattr(self.client, 'rename_folder'):
+                    self._run_cloud_async(self.client.rename_folder, old_rel, new_name)
+                elif hasattr(self.client, 'create_folder'):
+                    self._run_cloud_async(self.client.create_folder, new_rel)
 
             dialog.accept()
             self._refresh_file_list()
@@ -1940,15 +1956,12 @@ class FileExchangeMainWindow(QMainWindow):
                 rel = str(target.relative_to(self.sync_folder)).replace("\\", "/")
                 self.state_mgr.add_to_trash(folder_name, rel, str(trash_dest), 0, item_type='folder', dept_name=self.active_dept_name or '')
                 
-                # مزامنة حذف المجلد من السحابة
-                if self.client and self.client.is_configured():
-                    try:
-                        if hasattr(self.client, 'delete_folder'):
-                            self.client.delete_folder(rel)
-                        else:
-                            self.client.delete_file(rel)
-                    except Exception as ce:
-                        print(f"[Remote delete folder]: {ce}")
+                # مزامنة حذف المجلد من السحابة في الخلفية
+                if self.sync_engine and hasattr(self.sync_engine, 'note_local_delete'):
+                    self.sync_engine.note_local_delete(rel, is_folder=True)
+                elif self.client and self.client.is_configured():
+                    fn = self.client.delete_folder if hasattr(self.client, 'delete_folder') else self.client.delete_file
+                    self._run_cloud_async(fn, rel)
 
                 self._refresh_file_list()
                 QMessageBox.information(self, "تم الحذف", f"تم نقل المجلد '{folder_name}' إلى سلة المحذوفات.")
@@ -1986,11 +1999,10 @@ class FileExchangeMainWindow(QMainWindow):
 
                 self.state_mgr.add_to_trash(file_name, rel_path, str(trash_dest), size, item_type='file', dept_name=self.active_dept_name or '')
 
-                if self.client and self.client.is_configured():
-                    try:
-                        self.client.delete_file(rel_path)
-                    except Exception as e:
-                        print(f"[Delete remote skip]: {e}")
+                if self.sync_engine and hasattr(self.sync_engine, 'note_local_delete'):
+                    self.sync_engine.note_local_delete(rel_path, is_folder=False)
+                elif self.client and self.client.is_configured():
+                    self._run_cloud_async(self.client.delete_file, rel_path)
 
                 self._refresh_file_list()
                 QMessageBox.information(self, "تم النقل للمحذوفات", f"تم نقل '{file_name}' إلى سلة محذوفات القسم بنجاح.")
@@ -2100,16 +2112,11 @@ class FileExchangeMainWindow(QMainWindow):
             new_rel = str(new_path.relative_to(self.sync_folder)).replace("\\", "/")
             self.state_mgr.rename_file_record(old_rel, new_rel, new_file_name)
 
-            # 3. مزامنة التعديل في السحابة فوراً (حذف القديم ورفع الجديد)
-            if self.client and self.client.is_configured():
-                try:
-                    self.client.delete_file(old_rel)
-                    self.client.upload_file(str(new_path), new_file_name)
-                except Exception as ce:
-                    print(f"[Remote file rename sync]: {ce}")
-
-            if self.sync_engine:
-                self.sync_engine.on_local_file_saved(str(new_path))
+            # 3. مزامنة التعديل في السحابة فوراً في الخلفية
+            if self.sync_engine and hasattr(self.sync_engine, 'note_local_move'):
+                self.sync_engine.note_local_move(old_rel, new_rel)
+            elif self.client and self.client.is_configured():
+                self._run_cloud_async(self.client.rename_file, old_rel, new_file_name)
 
             dialog.accept()
             self._refresh_file_list()
@@ -2261,42 +2268,14 @@ class FileExchangeMainWindow(QMainWindow):
                 self.departments_list.append({"name": dept_name, "icon": "🏛️"})
                 self.state_mgr.set_departments(self.departments_list)
             self._refresh_departments_sidebar()
-            if self.client and self.client.is_configured():
-                try:
-                    if hasattr(self.client, 'create_folder'):
-                        self.client.create_folder(dept_name)
-                except Exception as ce:
-                    print(f"[Restore dept cloud]: {ce}")
 
-        # 2. إذا كان مجلداً
-        elif row.get('item_type') == 'folder' or target_path.is_dir():
-            if self.client and self.client.is_configured():
-                try:
-                    if hasattr(self.client, 'create_folder'):
-                        self.client.create_folder(orig_rel)
-                except Exception as ce:
-                    print(f"[Restore folder cloud]: {ce}")
-
-        # 3. إذا كان مستنداً رسمياً (Word / Excel / Access / PDF)
+        # 2. إذا كان مستنداً رسمياً، إزالة الحالة القديمة ليتم رفعه تلقائياً بواسطة محرك المزامنة
         if target_path.exists() and target_path.is_file():
-            # إزالة الحالة القديمة لضمان الرفع النظيف للسحابة
             with self.state_mgr._get_connection() as conn:
-                conn.execute("DELETE FROM local_files WHERE relative_path = ? OR file_name = ?", (orig_rel, target_path.name))
+                conn.execute("DELETE FROM local_files WHERE relative_path = ?", (orig_rel,))
 
-            # إعادة الرفع الفوري والمباشر إلى السحابة
-            if self.client and self.client.is_configured():
-                try:
-                    user_name = self.state_mgr.get_setting("user_email", "موظف الغرفة")
-                    dev_name = self.state_mgr.get_setting("device_name", os.environ.get('COMPUTERNAME', 'جهاز الغرفة'))
-                    if hasattr(self.client, 'upload_file'):
-                        self.client.upload_file(str(target_path), file_name=target_path.name, user_name=user_name, device_name=dev_name)
-                    elif hasattr(self.client, 'upload_file_to_storage'):
-                        self.client.upload_file_to_storage(str(target_path), f"shared/{orig_rel}")
-                except Exception as ue:
-                    print(f"[Restore cloud upload error]: {ue}")
-
-            if self.sync_engine:
-                self.sync_engine.on_local_file_saved(str(target_path))
+        if self.sync_engine:
+            self.sync_engine.wake(delay=0.3)
 
         if show_msg:
             self._refresh_departments_sidebar()
@@ -2415,11 +2394,10 @@ class FileExchangeMainWindow(QMainWindow):
                             trash_path.unlink()
                     except Exception:
                         pass
-                if self.client and self.client.is_configured():
-                    try:
-                        self.client.delete_file(row['original_rel_path'])
-                    except Exception:
-                        pass
+                if self.sync_engine and hasattr(self.sync_engine, 'note_local_delete'):
+                    self.sync_engine.note_local_delete(row['original_rel_path'])
+                elif self.client and self.client.is_configured():
+                    self._run_cloud_async(self.client.delete_file, row['original_rel_path'])
             self._render_trash_table()
 
     def _empty_all_trash(self):
@@ -2449,11 +2427,10 @@ class FileExchangeMainWindow(QMainWindow):
                             trash_path.unlink()
                     except Exception:
                         pass
-                if self.client and self.client.is_configured():
-                    try:
-                        self.client.delete_file(r['original_rel_path'])
-                    except Exception:
-                        pass
+                if self.sync_engine and hasattr(self.sync_engine, 'note_local_delete'):
+                    self.sync_engine.note_local_delete(r['original_rel_path'])
+                elif self.client and self.client.is_configured():
+                    self._run_cloud_async(self.client.delete_file, r['original_rel_path'])
             self._refresh_file_list()
             self._render_trash_table()
             QMessageBox.information(self, "تم الإفراغ", f"تم إفراغ سلة محذوفات {title_target} نهائياً بنجاح.")
@@ -2554,33 +2531,38 @@ class FileExchangeMainWindow(QMainWindow):
                 return
             if hasattr(self, 'compact_scroll') and self.compact_scroll.verticalScrollBar().isSliderDown():
                 return
-            import re
-            def clean_bidi(s):
-                return re.sub(r'[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]', '', str(s)).strip()
+            from gdrive_client import is_ignored_name
 
-            # مزامنة سريعة للأقسام مع لوحة الأدمن بالسحابة والمجلدات المحلية
+            # مزامنة سريعة للأقسام مع المجلدات المحلية
             self._sync_departments_from_remote_and_disk(force=False)
 
             current_abs = self._get_current_abs_folder()
             if not current_abs.exists():
                 current_abs.mkdir(parents=True, exist_ok=True)
 
+            # جلب كافة الحالات من قاعدة البيانات باستعلام واحد فقط بدلاً من مئات الاستعلامات
+            states_map = self.state_mgr.get_all_states_map() if hasattr(self.state_mgr, 'get_all_states_map') else {}
+
             folders_list = []
             files_list = []
-            seen_file_names = set()
+            seen_rel_paths = set()
 
             for item in current_abs.iterdir():
                 if item.name.startswith(".") or item.name == ".trash":
                     continue
-                if item.name.startswith("~$") or item.name.endswith(".tmp") or item.name.endswith(".laccdb") or item.name.endswith(".ldb"):
+                if item.is_file() and is_ignored_name(item.name):
                     continue
 
                 if item.is_dir():
-                    clean_dir_name = clean_bidi(item.name)
                     rel_dir = str(item.relative_to(self.sync_folder)).replace("\\", "/")
-                    if self.state_mgr.is_in_trash(item.name, rel_dir) or self.state_mgr.is_in_trash(clean_dir_name, rel_dir):
-                        continue
-                    count = len([x for x in item.iterdir() if not x.name.startswith(".") and not x.name.startswith("~$")])
+                    try:
+                        count = sum(1 for x in item.iterdir()
+                                    if not x.name.startswith(".") and x.name != ".trash"
+                                    and (x.is_dir() or not is_ignored_name(x.name)))
+                        mtime_iso = datetime.fromtimestamp(item.stat().st_mtime).isoformat()
+                    except OSError:
+                        count = 0
+                        mtime_iso = ""
                     folders_list.append({
                         'file_name': item.name,
                         'is_folder': True,
@@ -2588,76 +2570,73 @@ class FileExchangeMainWindow(QMainWindow):
                         'relative_path': rel_dir,
                         'file_size': 0,
                         'sync_status': 'synced',
-                        'last_modified_local': datetime.fromtimestamp(item.stat().st_mtime).isoformat()
+                        'last_modified_local': mtime_iso
                     })
                 elif item.is_file():
-                    clean_name = clean_bidi(item.name)
                     rel = str(item.relative_to(self.sync_folder)).replace("\\", "/")
-                    clean_rel = clean_bidi(rel)
-
-                    # منع ظهور أي ملف محذوف أو موجود في سلة المهملات نهائياً
-                    if (self.state_mgr.is_in_trash(item.name, rel) or 
-                        self.state_mgr.is_in_trash(clean_name, clean_rel) or 
-                        self.state_mgr.is_in_trash(clean_name, rel)):
+                    if rel in seen_rel_paths:
                         continue
+                    seen_rel_paths.add(rel)
 
-                    # منع تكرار نفس المستند إطلاقاً
-                    norm_name = clean_name.lower()
-                    if norm_name in seen_file_names:
+                    st = states_map.get(rel)
+                    try:
+                        stat = item.stat()
+                        f_size = stat.st_size
+                        mtime_iso = datetime.fromtimestamp(stat.st_mtime).isoformat()
+                    except OSError:
                         continue
-                    seen_file_names.add(norm_name)
-
-                    st = self.state_mgr.get_file_state(rel) or self.state_mgr.get_file_state(clean_rel) or self.state_mgr.get_file_state(clean_name)
                     if not st:
                         st = {
                             'file_name': item.name,
                             'is_folder': False,
                             'relative_path': rel,
-                            'file_size': item.stat().st_size,
+                            'file_size': f_size,
                             'sync_status': 'synced',
-                            'last_modified_local': datetime.fromtimestamp(item.stat().st_mtime).isoformat()
+                            'last_modified_local': mtime_iso
                         }
                     else:
                         st = dict(st)
+                        st['file_name'] = item.name
+                        st['relative_path'] = rel
+                        st['file_size'] = f_size
                         st['is_folder'] = False
                     files_list.append(st)
 
-            # في وضع الأرشيف الشامل (كافة الملفات والمجلدات):
-            # نعرض أيضاً كافة المستندات في المجلدات الفرعية مع الحظر الصارم لأي تكرار
+            # في وضع الأرشيف الشامل (كافة الملفات والمجلدات): نعرض كافة المستندات في المجلدات الفرعية أيضاً
             if self.active_dept_name is None and self.current_subpath == Path("."):
                 for sub_item in self.sync_folder.rglob("*"):
                     if sub_item.is_file():
-                        if ".trash" in sub_item.parts or sub_item.name.startswith("."):
+                        if ".trash" in sub_item.parts or any(p.startswith(".") for p in sub_item.parts):
                             continue
-                        if sub_item.name.startswith("~$") or sub_item.name.endswith(".tmp") or sub_item.name.endswith(".laccdb") or sub_item.name.endswith(".ldb"):
+                        if is_ignored_name(sub_item.name):
                             continue
 
-                        clean_sub_name = clean_bidi(sub_item.name)
                         sub_rel = str(sub_item.relative_to(self.sync_folder)).replace("\\", "/")
-                        clean_sub_rel = clean_bidi(sub_rel)
-
-                        if (self.state_mgr.is_in_trash(sub_item.name, sub_rel) or 
-                            self.state_mgr.is_in_trash(clean_sub_name, clean_sub_rel) or 
-                            self.state_mgr.is_in_trash(clean_sub_name, sub_rel)):
+                        if sub_rel in seen_rel_paths:
                             continue
+                        seen_rel_paths.add(sub_rel)
 
-                        norm_sub_name = clean_sub_name.lower()
-                        if norm_sub_name in seen_file_names:
+                        st = states_map.get(sub_rel)
+                        try:
+                            stat = sub_item.stat()
+                            f_size = stat.st_size
+                            mtime_iso = datetime.fromtimestamp(stat.st_mtime).isoformat()
+                        except OSError:
                             continue
-                        seen_file_names.add(norm_sub_name)
-
-                        st = self.state_mgr.get_file_state(sub_rel) or self.state_mgr.get_file_state(clean_sub_rel) or self.state_mgr.get_file_state(clean_sub_name)
                         if not st:
                             st = {
                                 'file_name': sub_item.name,
                                 'is_folder': False,
                                 'relative_path': sub_rel,
-                                'file_size': sub_item.stat().st_size,
+                                'file_size': f_size,
                                 'sync_status': 'synced',
-                                'last_modified_local': datetime.fromtimestamp(sub_item.stat().st_mtime).isoformat()
+                                'last_modified_local': mtime_iso
                             }
                         else:
                             st = dict(st)
+                            st['file_name'] = sub_item.name
+                            st['relative_path'] = sub_rel
+                            st['file_size'] = f_size
                             st['is_folder'] = False
                         files_list.append(st)
 
@@ -2672,7 +2651,6 @@ class FileExchangeMainWindow(QMainWindow):
             self.lbl_trash_stat.setText(f"المحذوفات: {trash_cnt}")
             self.tab_trash.setText(f"المحذوفات 🗑️ ({trash_cnt})" if trash_cnt > 0 else "المحذوفات 🗑️")
 
-            # التحقق من بصمة المحتوى: إذا لم يطرأ أي تغيير على الملفات أو الحالات أو الفلاتر، نتجنب إعادة البناء تماماً لمنع قفز شريط التمرير
             current_sig = (
                 str(self.active_dept_name),
                 str(self.current_subpath),
@@ -2681,7 +2659,7 @@ class FileExchangeMainWindow(QMainWindow):
                 self.current_view_mode,
                 trash_cnt,
                 tuple((
-                    x.get('file_name'),
+                    x.get('relative_path') or x.get('file_name'),
                     x.get('is_folder', False),
                     x.get('file_size', 0),
                     x.get('sync_status', ''),
@@ -3165,12 +3143,8 @@ class FileExchangeMainWindow(QMainWindow):
             dest = target_dir / p.name
             try:
                 shutil.copy2(path, dest)
-                if hasattr(self, 'client') and self.client and self.client.is_configured():
-                    rel = str(dest.relative_to(self.sync_folder)).replace("\\", "/")
-                    self.client.upload_file(str(dest), file_name=p.name, rel_path=rel)
-
-                if hasattr(self, 'sync_engine') and self.sync_engine:
-                    self.sync_engine.on_local_file_saved(str(dest))
+                rel = str(dest.relative_to(self.sync_folder)).replace("\\", "/")
+                self.state_mgr.set_file_state(rel, p.name, "", dest.stat().st_size, 'syncing')
                 success_count += 1
             except Exception as e:
                 print(f"[Upload Error]: {p.name}: {e}")
@@ -3179,10 +3153,13 @@ class FileExchangeMainWindow(QMainWindow):
             QApplication.processEvents()
 
         progress.close()
+        if hasattr(self, 'sync_engine') and self.sync_engine:
+            self.sync_engine.wake(delay=0.2)
+        self._force_full_render = True
         self._refresh_file_list()
         QMessageBox.information(
-            self, "اكتمل الرفع بنجاح", 
-            f"✅ تم رفع {success_count} من أصل {total} مستند بنجاح ومزامنتها فورياً مع السحابة."
+            self, "اكتملت الإضافة وبدأت المزامنة السحابية", 
+            f"✅ تم استيراد {success_count} من أصل {total} مستند بنجاح وجارٍ رفعها تلقائياً في الخلفية إلى السحابة."
         )
 
     def _upload_custom_folder(self):
@@ -3198,10 +3175,17 @@ class FileExchangeMainWindow(QMainWindow):
         src_dir = Path(folder_path)
         target_base = self._get_current_abs_folder() / src_dir.name
 
-        all_files = [p for p in src_dir.rglob("*") if p.is_file() and not p.name.startswith(('~', '.', '$'))]
+        from gdrive_client import is_ignored_name
+        all_files = [p for p in src_dir.rglob("*") if p.is_file() and not is_ignored_name(p.name)]
+        # إنشاء كافة المجلدات الفرعية حتى الفارغة منها
+        for sub_dir in src_dir.rglob("*"):
+            if sub_dir.is_dir() and not sub_dir.name.startswith('.'):
+                (target_base / sub_dir.relative_to(src_dir)).mkdir(parents=True, exist_ok=True)
         total = len(all_files)
         if total == 0:
             target_base.mkdir(parents=True, exist_ok=True)
+            if hasattr(self, 'sync_engine') and self.sync_engine:
+                self.sync_engine.wake(delay=0.2)
             self._refresh_file_list()
             QMessageBox.information(self, "مجلد فارغ", f"تم إنشاء المجلد '{src_dir.name}' بنجاح.")
             return
@@ -3243,12 +3227,8 @@ class FileExchangeMainWindow(QMainWindow):
 
             try:
                 shutil.copy2(src_file, dest_file)
-                if hasattr(self, 'client') and self.client and self.client.is_configured():
-                    rel = str(dest_file.relative_to(self.sync_folder)).replace("\\", "/")
-                    self.client.upload_file(str(dest_file), file_name=dest_file.name, rel_path=rel)
-
-                if hasattr(self, 'sync_engine') and self.sync_engine:
-                    self.sync_engine.on_local_file_saved(str(dest_file))
+                rel = str(dest_file.relative_to(self.sync_folder)).replace("\\", "/")
+                self.state_mgr.set_file_state(rel, dest_file.name, "", dest_file.stat().st_size, 'syncing')
                 success_count += 1
             except Exception as e:
                 print(f"[Folder Upload Error]: {src_file}: {e}")
@@ -3257,11 +3237,14 @@ class FileExchangeMainWindow(QMainWindow):
             QApplication.processEvents()
 
         progress.close()
+        if hasattr(self, 'sync_engine') and self.sync_engine:
+            self.sync_engine.wake(delay=0.2)
+        self._force_full_render = True
         self._refresh_file_list()
         self._refresh_departments_sidebar()
         QMessageBox.information(
-            self, "اكتمل رفع المجلد بنجاح", 
-            f"✅ تم رفع مجلد '{src_dir.name}' بالكامل ({success_count} مستند) بنجاح إلى السحابة."
+            self, "اكتملت إضافة المجلد وبدأت المزامنة السحابية", 
+            f"✅ تم استيراد مجلد '{src_dir.name}' بالكامل ({success_count} مستند) بنجاح وجارٍ رفعه بجميع مجلداته الفرعية إلى السحابة في الخلفية."
         )
 
     def _open_cloud_settings(self):
@@ -3311,7 +3294,15 @@ class FileExchangeMainWindow(QMainWindow):
         dialog.exec()
 
     def handle_sync_update(self, data):
-        self._refresh_file_list()
+        if isinstance(data, dict) and hasattr(self, 'lbl_watcher'):
+            status_txt = data.get('status')
+            file_txt = data.get('file')
+            if status_txt and file_txt:
+                self.lbl_watcher.setText(f"⚡ {status_txt} ({os.path.basename(str(file_txt))})")
+            elif status_txt:
+                self.lbl_watcher.setText(f"⚡ المزامنة: {status_txt}")
+        if hasattr(self, '_ui_refresh_timer') and not self._ui_refresh_timer.isActive():
+            self._ui_refresh_timer.start(350)
 
     def _setup_tray(self):
         """أيقونة شريط المهام بجانب الساعة في ويندوز"""
@@ -3323,28 +3314,36 @@ class FileExchangeMainWindow(QMainWindow):
 
         menu = QMenu()
         open_action = menu.addAction("عرض النافذة الرئيسية")
-        open_action.triggered.connect(self.showNormal)
+        open_action.triggered.connect(self.bring_to_front)
 
         open_folder_action = menu.addAction("فتح المجلد المشترك")
         open_folder_action.triggered.connect(lambda: os.startfile(str(self.sync_folder)))
 
         menu.addSeparator()
         quit_action = menu.addAction("إغلاق البرنامج")
-        quit_action.triggered.connect(QApplication.instance().quit)
+        quit_action.triggered.connect(self.close)
 
         self.tray.setContextMenu(menu)
+        self.tray.activated.connect(
+            lambda reason: self.bring_to_front() if reason == QSystemTrayIcon.ActivationReason.Trigger else None
+        )
         self.tray.show()
 
     def closeEvent(self, event):
-        """تصغير إلى شريط المهام بدلاً من الإغلاق الكامل"""
-        if self.tray.isVisible():
-            self.hide()
-            self.tray.showMessage(
-                "غرفة تجارة كربلاء المقدسة",
-                "المنظومة تعمل في الخلفية وتراقب التعديلات عند الضغط على Ctrl+S.",
-                QSystemTrayIcon.MessageIcon.Information,
-                2000
-            )
-            event.ignore()
-        else:
-            event.accept()
+        """إغلاق البرنامج بشكل كامل وسلس عند الضغط على زر X دون ترك أي نافذة معلقة"""
+        try:
+            if hasattr(self, 'timer'):
+                self.timer.stop()
+            if hasattr(self, 'dept_cloud_timer'):
+                self.dept_cloud_timer.stop()
+            if hasattr(self, '_ui_refresh_timer'):
+                self._ui_refresh_timer.stop()
+            if hasattr(self, 'tray') and self.tray:
+                self.tray.hide()
+            if hasattr(self, 'sync_engine') and self.sync_engine:
+                import threading
+                threading.Thread(target=self.sync_engine.stop, daemon=True).start()
+        except Exception:
+            pass
+        event.accept()
+        QApplication.instance().quit()

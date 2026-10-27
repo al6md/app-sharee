@@ -6,9 +6,10 @@ Local Companion Bridge Server (Port 18290)
 import os
 import sys
 import json
+import subprocess
 import urllib.parse
 import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 import winreg
 
@@ -16,9 +17,12 @@ from office_handler import OfficeHandler
 
 BRIDGE_PORT = 18290
 
+
 class LocalBridgeHandler(BaseHTTPRequestHandler):
     sync_folder = None
     cloud_client = None
+    sync_engine = None
+    show_window_callback = None
 
     def _set_headers(self, status=200, content_type='application/json'):
         self.send_response(status)
@@ -41,10 +45,33 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
             data = {
                 "status": "ok",
                 "app": "share coc",
-                "version": "2.0",
+                "version": "3.0",
+                "pid": os.getpid(),
                 "sync_folder": str(self.sync_folder) if self.sync_folder else None
             }
             self.wfile.write(json.dumps(data, ensure_ascii=False).encode('utf-8'))
+            return
+
+        if path == '/show':
+            try:
+                if callable(self.show_window_callback):
+                    self.show_window_callback()
+                self._set_headers(200)
+                self.wfile.write(json.dumps({"success": True}).encode('utf-8'))
+            except Exception as e:
+                self._set_headers(500)
+                self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode('utf-8'))
+            return
+
+        if path == '/sync':
+            try:
+                if self.sync_engine:
+                    self.sync_engine.wake(delay=0.1)
+                self._set_headers(200)
+                self.wfile.write(json.dumps({"success": True}).encode('utf-8'))
+            except Exception as e:
+                self._set_headers(500)
+                self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode('utf-8'))
             return
 
         if path == '/open':
@@ -62,12 +89,11 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
                 if not target_path or not target_path.exists():
                     self._set_headers(404)
                     self.wfile.write(json.dumps({
-                        "success": False, 
+                        "success": False,
                         "error": f"الملف '{file_name}' غير موجود ولم نتمكن من تنزيله من السحابة."
                     }, ensure_ascii=False).encode('utf-8'))
                     return
 
-                # تشغيل البرنامج الأصلي عبر OfficeHandler
                 OfficeHandler.open_native_file(str(target_path))
 
                 self._set_headers(200)
@@ -101,7 +127,7 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
             storage_path = params.get('storage_path', [''])[0].strip()
             target_path = self._find_or_download_file(file_name, folder_name, storage_path)
             if target_path and target_path.exists():
-                os.system(f'explorer.exe /select,"{str(target_path)}"')
+                subprocess.Popen(['explorer.exe', f'/select,{str(target_path)}'])
                 self._set_headers(200)
                 self.wfile.write(json.dumps({"success": True}).encode('utf-8'))
             else:
@@ -122,56 +148,46 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
 
         clean_file = clean_bidi(file_name)
         base = Path(self.sync_folder)
+        norm_folder = folder_name.replace("\\", "/").strip("/") if folder_name and folder_name not in ('__ALL__', 'المجلد العام') else ""
 
-        # 1. فحص المسار المباشر داخل المجلد المحدد
-        if folder_name and folder_name != '__ALL__':
-            clean_folder = clean_bidi(folder_name)
-            for cand in [base / folder_name / file_name, base / clean_folder / clean_file, base / folder_name / clean_file]:
-                if cand.exists():
+        # 1. فحص المسار المباشر داخل المجلد المحدد (يدعم المجلدات الفرعية المتداخلة)
+        if norm_folder:
+            clean_folder = "/".join(clean_bidi(p) for p in norm_folder.split("/"))
+            for cand in [base / norm_folder / file_name, base / clean_folder / clean_file, base / norm_folder / clean_file]:
+                if cand.exists() and cand.is_file():
                     return cand
 
         # 2. فحص المسار المباشر في جذر مجلد المزامنة
         for cand in [base / file_name, base / clean_file]:
-            if cand.exists():
+            if cand.exists() and cand.is_file():
                 return cand
 
         # 3. بحث متكرر عن الملف في المجلدات الفرعية
         target_lower = clean_file.lower()
         for sub in base.rglob("*"):
-            if sub.is_file():
-                if clean_bidi(sub.name).lower() == target_lower or sub.name == file_name:
+            if sub.is_file() and ".trash" not in sub.parts:
+                if sub.name == file_name or clean_bidi(sub.name).lower() == target_lower:
                     return sub
 
-        # 4. إذا لم يكن موجوداً محلياً، جلبه من السحابة فوراً
+        # 4. إذا لم يكن موجوداً محلياً، جلبه من السحابة فوراً إلى نفس المجلد الفرعي
         if self.cloud_client:
             try:
-                target_sub = folder_name if (folder_name and folder_name != '__ALL__') else ""
-                dest_dir = base / target_sub if target_sub else base
+                dest_dir = base / norm_folder if norm_folder else base
                 dest_dir.mkdir(parents=True, exist_ok=True)
-                local_file = dest_dir / clean_file
+                local_file = dest_dir / file_name
 
                 safe_sp = storage_path
-                # إذا لم يُرسل مسار التخزين، نبحث عنه في قاعدة البيانات
                 if not safe_sp and hasattr(self.cloud_client, 'get_file_by_name'):
-                    f_info = self.cloud_client.get_file_by_name(file_name)
+                    f_info = self.cloud_client.get_file_by_name(file_name, folder=norm_folder)
                     if f_info and f_info.get('storage_path'):
                         safe_sp = f_info['storage_path']
 
                 if hasattr(self.cloud_client, 'download_file'):
-                    res = self.cloud_client.download_file(clean_file, str(local_file), storage_path=safe_sp)
+                    res = self.cloud_client.download_file(file_name, str(local_file), storage_path=safe_sp)
                     success = res[0] if isinstance(res, tuple) else bool(res)
                     if success and local_file.exists():
-                        return local_file
-
-                    # محاولة بديلة بالاسم الأصلي
-                    if clean_file != file_name:
-                        res2 = self.cloud_client.download_file(file_name, str(local_file), storage_path=safe_sp)
-                        success2 = res2[0] if isinstance(res2, tuple) else bool(res2)
-                        if success2 and local_file.exists():
-                            return local_file
-                elif hasattr(self.cloud_client, 'download_file_from_storage') and safe_sp:
-                    ok = self.cloud_client.download_file_from_storage(safe_sp, str(local_file))
-                    if ok and local_file.exists():
+                        if self.sync_engine:
+                            self.sync_engine.wake(delay=1.0)
                         return local_file
             except Exception as dl_err:
                 print(f"[LocalBridge] Cloud download on-demand failed: {dl_err}")
@@ -179,7 +195,6 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
         return None
 
     def log_message(self, format, *args):
-        # صامت لتجنب إغراق شاشات السجلات
         pass
 
 
@@ -189,7 +204,6 @@ def register_sharecoc_protocol():
         if getattr(sys, 'frozen', False):
             target_exe = sys.executable
         else:
-            # مسار النسخة القابلة للتشغيل المعتمدة
             installed_exe = Path(os.environ.get('LOCALAPPDATA', '')) / "Programs" / "ShareCOC" / "share coc.exe"
             desktop_exe = Path(os.environ.get('USERPROFILE', '')) / "OneDrive" / "Desktop" / "share coc.exe"
             if installed_exe.exists():
@@ -210,22 +224,22 @@ def register_sharecoc_protocol():
         print(f"[LocalBridge] Failed to register protocol: {e}")
 
 
-def start_local_bridge(sync_folder, cloud_client=None):
+def start_local_bridge(sync_folder, cloud_client=None, sync_engine=None, show_window_callback=None):
     """تشغيل خادم الجسر المحلي في خلفية التطبيق"""
     LocalBridgeHandler.sync_folder = sync_folder
     LocalBridgeHandler.cloud_client = cloud_client
+    LocalBridgeHandler.sync_engine = sync_engine
+    LocalBridgeHandler.show_window_callback = show_window_callback
 
-    # تسجيل البروتوكول في الريجستري أولاً
-    register_sharecoc_protocol()
+    threading.Thread(target=register_sharecoc_protocol, daemon=True).start()
 
     def run_server():
         try:
-            server = HTTPServer(('127.0.0.1', BRIDGE_PORT), LocalBridgeHandler)
+            server = ThreadingHTTPServer(('127.0.0.1', BRIDGE_PORT), LocalBridgeHandler)
             print(f"[LocalBridge] Running on http://127.0.0.1:{BRIDGE_PORT}")
             server.serve_forever()
         except OSError as e:
-            # المنفذ مستخدم مسبقاً من نسخة سابقة تعمل بالفعل
-            print(f"[LocalBridge] Port {BRIDGE_PORT} is already in use (app already running): {e}")
+            print(f"[LocalBridge] Port {BRIDGE_PORT} is already in use: {e}")
 
     thread = threading.Thread(target=run_server, daemon=True)
     thread.start()

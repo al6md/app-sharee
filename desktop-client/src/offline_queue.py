@@ -1,11 +1,13 @@
 """
 تبادل الملفات – File Exchange System
-قاعدة البيانات المحلية وإدارة قائمة الانتظار في وضع عدم الاتصال (Offline Queue)
+قاعدة البيانات المحلية وإدارة الحالة المحلية (Local State Manager)
 """
 import sqlite3
 import os
+import threading
 from pathlib import Path
 from datetime import datetime
+
 
 class LocalStateManager:
     def __init__(self, db_dir=None):
@@ -14,11 +16,20 @@ class LocalStateManager:
         self.db_dir = Path(db_dir)
         self.db_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = self.db_dir / 'local_state.db'
+        self._local = threading.local()
         self._init_db()
 
     def _get_connection(self):
-        conn = sqlite3.connect(str(self.db_path), timeout=15)
-        conn.row_factory = sqlite3.Row
+        conn = getattr(self._local, 'conn', None)
+        if conn is None:
+            conn = sqlite3.connect(str(self.db_path), timeout=30)
+            conn.row_factory = sqlite3.Row
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+            except Exception:
+                pass
+            self._local.conn = conn
         return conn
 
     def _init_db(self):
@@ -32,7 +43,9 @@ class LocalStateManager:
                     server_file_id TEXT,
                     sync_status TEXT NOT NULL, -- 'synced', 'syncing', 'pending_upload', 'conflict', 'locked'
                     last_synced_at TEXT,
-                    last_modified_local TEXT NOT NULL
+                    last_modified_local TEXT NOT NULL,
+                    remote_md5 TEXT,
+                    local_mtime REAL
                 )
             """)
             conn.execute("""
@@ -64,16 +77,24 @@ class LocalStateManager:
                     dept_name TEXT DEFAULT ''
                 )
             """)
+            for ddl in (
+                "ALTER TABLE deleted_files ADD COLUMN item_type TEXT DEFAULT 'file'",
+                "ALTER TABLE deleted_files ADD COLUMN dept_name TEXT DEFAULT ''",
+                "ALTER TABLE local_files ADD COLUMN remote_md5 TEXT",
+                "ALTER TABLE local_files ADD COLUMN local_mtime REAL",
+            ):
+                try:
+                    conn.execute(ddl)
+                except Exception:
+                    pass
+            # تنظيف ملفات قفل أوفيس المؤقتة (~$) إن وجدت سابقاً في سجل المحذوفات
             try:
-                conn.execute("ALTER TABLE deleted_files ADD COLUMN item_type TEXT DEFAULT 'file'")
-            except Exception:
-                pass
-            try:
-                conn.execute("ALTER TABLE deleted_files ADD COLUMN dept_name TEXT DEFAULT ''")
+                conn.execute("DELETE FROM deleted_files WHERE file_name LIKE '~$%' OR file_name LIKE '%.tmp'")
             except Exception:
                 pass
 
     def set_file_state(self, relative_path, file_name, sha256_hash, file_size, sync_status, server_file_id=None):
+        relative_path = str(relative_path).replace("\\", "/").strip("/")
         now = datetime.now().isoformat()
         with self._get_connection() as conn:
             conn.execute("""
@@ -89,10 +110,17 @@ class LocalStateManager:
             """, (relative_path, file_name, sha256_hash, file_size, server_file_id, sync_status, now, now))
 
     def get_file_state(self, relative_path):
+        relative_path = str(relative_path).replace("\\", "/").strip("/")
         with self._get_connection() as conn:
             cur = conn.execute("SELECT * FROM local_files WHERE relative_path = ?", (relative_path,))
             row = cur.fetchone()
             return dict(row) if row else None
+
+    def get_all_states_map(self):
+        """جلب كافة حالات الملفات بدفعة واحدة سريعة لتجنب مئات الاستعلامات في الواجهة"""
+        with self._get_connection() as conn:
+            cur = conn.execute("SELECT * FROM local_files")
+            return {str(r['relative_path']).replace("\\", "/").strip("/"): dict(r) for r in cur.fetchall()}
 
     def get_all_files(self):
         with self._get_connection() as conn:
@@ -100,6 +128,7 @@ class LocalStateManager:
             return [dict(r) for r in cur.fetchall()]
 
     def enqueue_upload(self, relative_path, local_abs_path, sha256_hash):
+        relative_path = str(relative_path).replace("\\", "/").strip("/")
         now = datetime.now().isoformat()
         with self._get_connection() as conn:
             conn.execute("""
@@ -118,10 +147,12 @@ class LocalStateManager:
             return [dict(r) for r in cur.fetchall()]
 
     def dequeue_upload(self, relative_path):
+        relative_path = str(relative_path).replace("\\", "/").strip("/")
         with self._get_connection() as conn:
             conn.execute("DELETE FROM upload_queue WHERE relative_path = ?", (relative_path,))
 
     def mark_upload_failed(self, relative_path, error_msg):
+        relative_path = str(relative_path).replace("\\", "/").strip("/")
         with self._get_connection() as conn:
             conn.execute("""
                 UPDATE upload_queue 
@@ -165,15 +196,17 @@ class LocalStateManager:
 
     def rename_file_record(self, old_rel_path, new_rel_path, new_file_name):
         """تحديث مسار واسم ملف في قاعدة البيانات المحلية وقائمة الرفع"""
-        old_rel_path = old_rel_path.replace("\\", "/")
-        new_rel_path = new_rel_path.replace("\\", "/")
+        old_rel_path = old_rel_path.replace("\\", "/").strip("/")
+        new_rel_path = new_rel_path.replace("\\", "/").strip("/")
         now = datetime.now().isoformat()
         with self._get_connection() as conn:
+            conn.execute("DELETE FROM local_files WHERE relative_path = ? AND relative_path != ?", (new_rel_path, old_rel_path))
             conn.execute("""
                 UPDATE local_files 
                 SET relative_path = ?, file_name = ?, last_modified_local = ?
                 WHERE relative_path = ?
             """, (new_rel_path, new_file_name, now, old_rel_path))
+            conn.execute("DELETE FROM upload_queue WHERE relative_path = ? AND relative_path != ?", (new_rel_path, old_rel_path))
             conn.execute("""
                 UPDATE upload_queue
                 SET relative_path = ?
@@ -191,19 +224,15 @@ class LocalStateManager:
             rows = [dict(r) for r in cur.fetchall()]
             for r in rows:
                 p = r['relative_path']
-                if p == old_clean:
-                    new_p = new_clean
-                else:
-                    new_p = new_prefix + p[len(old_prefix):]
+                new_p = new_clean if p == old_clean else new_prefix + p[len(old_prefix):]
+                conn.execute("DELETE FROM local_files WHERE relative_path = ? AND relative_path != ?", (new_p, p))
                 conn.execute("UPDATE local_files SET relative_path = ? WHERE relative_path = ?", (new_p, p))
-            
+
             cur_up = conn.execute("SELECT relative_path FROM upload_queue WHERE relative_path LIKE ? OR relative_path = ?", (old_prefix + "%", old_clean))
             for r in cur_up.fetchall():
                 p = r['relative_path']
-                if p == old_clean:
-                    new_p = new_clean
-                else:
-                    new_p = new_prefix + p[len(old_prefix):]
+                new_p = new_clean if p == old_clean else new_prefix + p[len(old_prefix):]
+                conn.execute("DELETE FROM upload_queue WHERE relative_path = ? AND relative_path != ?", (new_p, p))
                 conn.execute("UPDATE upload_queue SET relative_path = ? WHERE relative_path = ?", (new_p, p))
 
     def rename_department(self, old_dept_name, new_dept_name):
@@ -218,24 +247,26 @@ class LocalStateManager:
         self.rename_folder_prefix(old_dept_name, new_dept_name)
 
     def add_to_trash(self, file_name, original_rel_path, trash_path, file_size, item_type='file', dept_name=''):
-        """نقل ملف أو مجلد أو قسم إلى سجل سلة المحذوفات وحذفه من الملفات النشطة مع عزل القسم"""
+        """نقل ملف أو مجلد أو قسم إلى سجل سلة المحذوفات وحذفه من الملفات النشطة حسب المسار الدقيق فقط"""
+        if not file_name or str(file_name).startswith("~$") or str(file_name).lower().endswith(".tmp"):
+            return
+        original_rel_path = str(original_rel_path or file_name).replace("\\", "/").strip("/")
         now = datetime.now().isoformat()
         if not dept_name:
             if "/" in original_rel_path:
                 dept_name = original_rel_path.split("/")[0]
-            elif "\\" in original_rel_path:
-                dept_name = original_rel_path.split("\\")[0]
             elif item_type == 'department':
                 dept_name = file_name
 
         with self._get_connection() as conn:
+            conn.execute("DELETE FROM deleted_files WHERE original_rel_path = ?", (original_rel_path,))
             conn.execute("""
                 INSERT INTO deleted_files (file_name, original_rel_path, trash_path, file_size, deleted_at, item_type, dept_name)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (file_name, original_rel_path, str(trash_path), file_size, now, item_type, dept_name or ''))
-            conn.execute("DELETE FROM local_files WHERE relative_path = ? OR file_name = ? OR relative_path LIKE ?", 
-                         (original_rel_path, file_name, f"{original_rel_path}/%"))
-            conn.execute("DELETE FROM upload_queue WHERE relative_path = ? OR relative_path LIKE ?", 
+            conn.execute("DELETE FROM local_files WHERE relative_path = ? OR relative_path LIKE ?",
+                         (original_rel_path, f"{original_rel_path}/%"))
+            conn.execute("DELETE FROM upload_queue WHERE relative_path = ? OR relative_path LIKE ?",
                          (original_rel_path, f"{original_rel_path}/%"))
 
     def get_trash_files(self, dept_name=None):
@@ -265,12 +296,13 @@ class LocalStateManager:
             return row['count'] if row else 0
 
     def is_in_trash(self, file_name, rel_path=None):
-        """فحص ما إذا كان الملف أو المجلد موجوداً في سلة المحذوفات لتفادي إعادة تنزيله"""
+        """فحص ما إذا كان المسار النسبي محدداً في سلة المحذوفات"""
         with self._get_connection() as conn:
             if rel_path:
-                cur = conn.execute("SELECT 1 FROM deleted_files WHERE original_rel_path = ? OR file_name = ? LIMIT 1", (rel_path, file_name))
+                norm = str(rel_path).replace("\\", "/").strip("/")
+                cur = conn.execute("SELECT 1 FROM deleted_files WHERE original_rel_path = ? LIMIT 1", (norm,))
             else:
-                cur = conn.execute("SELECT 1 FROM deleted_files WHERE file_name = ? LIMIT 1", (file_name,))
+                cur = conn.execute("SELECT 1 FROM deleted_files WHERE original_rel_path = ? OR file_name = ? LIMIT 1", (file_name, file_name))
             return cur.fetchone() is not None
 
     def remove_from_trash(self, trash_id):
