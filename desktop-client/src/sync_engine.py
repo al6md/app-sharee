@@ -455,18 +455,7 @@ class SyncEngine:
                 and abs(float(state["local_mtime"]) - info["mtime"]) < 0.05 \
                 and int(state.get("file_size") or -1) == info["size"]:
             return state["sha256_hash"]
-        computed = self.calculate_hash(str(info["abs"]))
-        # حفظ البصمة المحسوبة فوراً لتفادي إعادة قراءة الملفات الضخمة في الدورات التالية
-        self._save_state(
-            rel,
-            computed,
-            info["size"],
-            info["mtime"],
-            state.get("server_file_id") if state else None,
-            state.get("remote_md5") if state else None,
-            status=state.get("sync_status", "pending_upload") if state else "pending_upload"
-        )
-        return computed
+        return self.calculate_hash(str(info["abs"]))
 
     def _is_open_in_office(self, path):
         p = str(path)
@@ -475,18 +464,16 @@ class SyncEngine:
         return OfficeHandler.is_file_locked_by_os(p)
 
     def _readable_and_stable(self, info):
-        if time.time() - info["mtime"] < 1.0:
-            return False
         p = info["abs"]
         if OfficeHandler.is_access_db(str(p)):
             lock = OfficeHandler.get_access_lock_file(str(p))
             if lock and lock.exists():
                 return False
         try:
-            with open(p, "rb"):
-                pass
+            with open(p, "rb") as f:
+                f.read(1024)
             return True
-        except OSError:
+        except (OSError, PermissionError):
             return False
 
     def _move_to_local_trash(self, rel, is_folder=False):
@@ -526,8 +513,6 @@ class SyncEngine:
         return False
 
     def _upload(self, rel, info, md5, existing_id=None):
-        if self._is_self_op(rel):
-            return True
         self.notify_status({"event": "syncing", "file": rel, "status": "جارٍ الرفع السحابي..."})
 
         last_notify_t = [0.0]
@@ -697,11 +682,15 @@ class SyncEngine:
                 remote_dirs.add(d)
                 changes += 1
 
-        # 3) الملفات الموجودة في السحابة
+        # 3) الملفات الموجودة في السحابة (تنزيل الملفات الصغيرة أولاً كملفات Word و Excel لملء المجلدات فورياً)
         pending_remote_deletes = []
         pending_modified_uploads = []
 
-        for rel, rmeta in list(remote_files.items()):
+        sorted_remote_files = sorted(
+            list(remote_files.items()),
+            key=lambda x: int(x[1].get("size", 0) or 0)
+        )
+        for rel, rmeta in sorted_remote_files:
             if rmeta.get("id") in handled_remote_ids:
                 continue
             linfo = local_files.get(rel)
@@ -839,7 +828,14 @@ class SyncEngine:
                 continue
             if not self._readable_and_stable(linfo):
                 continue
-            local_only_uploads.append((rel, linfo, st))
+            # فقط الملفات التي تم إضافتها حديثاً وتنتظر الرفع تُرفع، أما الملفات القديمة غير المتزامنة فتنقل للمحذوفات
+            if st and st.get("sync_status") in ("pending_upload", "syncing"):
+                local_only_uploads.append((rel, linfo, st))
+            else:
+                _safe_log(f"[Clean old file] Moving un-synced old local file to local trash: {rel}")
+                self._move_to_local_trash(rel)
+                self._delete_state(rel)
+                changes += 1
 
         # ترتيب الملفات الجديدة من الأصغر حجماً إلى الأكبر حتى تُرفع الملفات العادية فوراً قبل قواعد البيانات الضخمة
         for rel, linfo, st in sorted(local_only_uploads, key=lambda x: x[1]["size"]):

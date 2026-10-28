@@ -547,6 +547,7 @@ class GovFileCard(QFrame):
             status = self.file_data.get('sync_status', 'synced')
             status_map = {
                 'synced': ('● محفوظ ومؤمّن', 'background: #eaf7f0; color: #0d8a55; border: 1px solid #a8dfc4;'),
+                'cloud_only': ('☁️ متاح بالسحابة', 'background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe;'),
                 'syncing': ('● جارٍ الرفع...', 'background: #fffbeb; color: #b45309; border: 1px solid #fde68a;'),
                 'pending_upload': ('● بانتظار الاتصال', 'background: #f8fafc; color: #64748b; border: 1px solid #cbd5e1;'),
                 'conflict': ('● تم احتواء تعارض', 'background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa;'),
@@ -796,6 +797,7 @@ class GovCompactTile(QFrame):
             status = self.file_data.get('sync_status', 'synced')
             status_map = {
                 'synced': ('● محفوظ ومؤمّن', 'background: #eaf7f0; color: #0d8a55; border: 1px solid #a8dfc4;'),
+                'cloud_only': ('☁️ متاح بالسحابة', 'background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe;'),
                 'syncing': ('● جارٍ الرفع...', 'background: #fffbeb; color: #b45309; border: 1px solid #fde68a;'),
                 'pending_upload': ('● بانتظار الاتصال', 'background: #f8fafc; color: #64748b; border: 1px solid #cbd5e1;'),
                 'conflict': ('● تم احتواء تعارض', 'background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa;'),
@@ -2267,7 +2269,7 @@ class FileExchangeMainWindow(QMainWindow):
                 self.departments_list = [{"name": name, "icon": "📁"} for name in sorted(local_names)]
             else:
                 self.departments_list = [
-                    {"name": "السجل التجاري", "icon": "📁"},
+                    {"name": "سجل التجاري", "icon": "📁"},
                     {"name": "أمانة السر والإدارة العامة", "icon": "📁"},
                     {"name": "الاشتراكات", "icon": "📁"},
                     {"name": "القسم العام", "icon": "📁"}
@@ -2912,6 +2914,10 @@ class FileExchangeMainWindow(QMainWindow):
 
         new_path = self.current_subpath / folder_name
         target = (self.sync_folder / new_path).resolve()
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
         if target.exists() and target.is_dir():
             self.current_subpath = new_path
             self._reset_scroll_on_render = True
@@ -4560,187 +4566,285 @@ class FileExchangeMainWindow(QMainWindow):
             print(f"[Refresh Schedule Error]: {e}")
 
     def _background_scan_worker(self, scan_dept, scan_subpath, force_now):
-        """فحص المجلدات والملفات في خيط خلفي باستخدام os.scandir الفائق السرعة"""
+        """فحص شجرة السحابة الرسمية مباشرة من Google Drive لتوحيد العرض بين الويب وسطح المكتب"""
         try:
             from gdrive_client import is_ignored_name
 
-            # 1. فحص سريع للأقسام في الجذر وإحصاء عناصر كل قسم
-            local_dept_names = []
-            dept_counts = {}
-            total_root_items = 0
-            try:
-                with os.scandir(self.sync_folder) as root_it:
-                    for entry in root_it:
-                        if entry.name.startswith(".") or entry.name.startswith("~$") or entry.name == ".trash":
-                            continue
-                        total_root_items += 1
-                        if entry.is_dir(follow_symlinks=False):
-                            local_dept_names.append(entry.name)
-                            cnt = 0
-                            try:
-                                with os.scandir(entry.path) as d_it:
-                                    for sub_e in d_it:
-                                        if not sub_e.name.startswith(".") and not sub_e.name.startswith("~$") and sub_e.name != ".trash":
-                                            cnt += 1
-                            except OSError:
-                                pass
-                            dept_counts[entry.name] = cnt
-            except OSError:
-                pass
+            cloud_snap = None
+            if hasattr(self, 'client') and self.client and self.client.is_configured():
+                try:
+                    cloud_snap = self.client.snapshot(force=force_now, max_age=8)
+                except Exception as e:
+                    print(f"[Snapshot error]: {e}")
+                    cloud_snap = getattr(self.client, '_snapshot', None)
 
+            sync_root_str = str(self.sync_folder.resolve())
             current_abs = (self.sync_folder / scan_subpath).resolve()
             if not current_abs.exists():
-                current_abs.mkdir(parents=True, exist_ok=True)
+                try:
+                    current_abs.mkdir(parents=True, exist_ok=True)
+                except Exception:
+                    pass
 
             states_map = self.state_mgr.get_all_states_map() if hasattr(self.state_mgr, 'get_all_states_map') else {}
-            cloud_snap = getattr(self.client, '_snap', None) if hasattr(self, 'client') and self.client else None
-            cloud_files_map = getattr(cloud_snap, 'files', {}) if cloud_snap else {}
+            perms_map = {}
+            try:
+                if self.client and hasattr(self.client, 'get_folder_permissions'):
+                    perms_map = self.client.get_folder_permissions() or {}
+            except Exception:
+                perms_map = {}
+            unlocked_pins = getattr(self, '_unlocked_pin_depts', set())
+
+            def _can_show_dept(d_name):
+                if not isinstance(perms_map, dict) or d_name not in perms_map:
+                    return True
+                rule = perms_map.get(d_name) or {}
+                if not rule.get('canView', rule.get('can_view', True)):
+                    return False
+                pin_c = str(rule.get('pinCode') or rule.get('pin_code') or '').strip()
+                if pin_c and d_name not in unlocked_pins:
+                    return False
+                return True
 
             folders_list = []
             files_list = []
             seen_rel_paths = set()
-            sync_root_str = str(self.sync_folder.resolve())
+            local_dept_names = []
+            dept_counts = {}
+            total_root_items = 0
 
-            def _to_rel(abs_p_str):
-                rel_p = os.path.relpath(abs_p_str, sync_root_str).replace("\\", "/")
-                return "" if rel_p == "." else rel_p
+            norm_sub = str(scan_subpath).replace("\\", "/").strip("/").strip(".")
+            if norm_sub in (".", ""):
+                norm_sub = ""
 
-            try:
-                with os.scandir(current_abs) as cur_it:
-                    for entry in cur_it:
-                        name = entry.name
-                        if name.startswith(".") or name == ".trash":
-                            continue
-                        is_d = entry.is_dir(follow_symlinks=False)
-                        if not is_d and is_ignored_name(name):
-                            continue
+            if cloud_snap is not None and cloud_snap.folders:
+                # ---------------------------------------------------------- #
+                # الوضع السحابي الموحد: أخذ الملفات والمجلدات من السحابة حصراً
+                # ---------------------------------------------------------- #
+                # 1. قائمة الأقسام الرئيسية
+                cloud_root_dirs = sorted([fld for fld in cloud_snap.folders if fld and "/" not in fld])
+                for crd in cloud_root_dirs:
+                    if not is_ignored_name(crd) and _can_show_dept(crd):
+                        local_dept_names.append(crd)
+                        cnt = sum(1 for f_rel in cloud_snap.files if f_rel.startswith(crd + "/") or f_rel == crd)
+                        dept_counts[crd] = cnt
 
-                        rel = _to_rel(entry.path)
-                        if is_d:
-                            count = 0
-                            mtime_iso = ""
-                            try:
-                                st_info = entry.stat(follow_symlinks=False)
-                                mtime_iso = datetime.fromtimestamp(st_info.st_mtime).isoformat()
-                                with os.scandir(entry.path) as sub_it:
-                                    for x in sub_it:
-                                        if not x.name.startswith(".") and x.name != ".trash":
-                                            if x.is_dir(follow_symlinks=False) or not is_ignored_name(x.name):
+                total_root_items = len(cloud_snap.files)
+
+                # 2. المجلدات الفرعية في المسار الحالي
+                child_dirs = set()
+                for fld in cloud_snap.folders:
+                    if not fld or is_ignored_name(fld.split("/")[-1]):
+                        continue
+                    if norm_sub == "":
+                        if "/" not in fld and _can_show_dept(fld):
+                            child_dirs.add(fld)
+                    else:
+                        if fld.startswith(norm_sub + "/") and fld != norm_sub:
+                            rem = fld[len(norm_sub) + 1:]
+                            if "/" not in rem:
+                                child_dirs.add(fld)
+
+                for d_rel in sorted(child_dirs):
+                    d_name = d_rel.split("/")[-1]
+                    sub_files_cnt = sum(1 for f_rel in cloud_snap.files if f_rel.startswith(d_rel + "/"))
+                    sub_child_flds = sum(1 for cf in cloud_snap.folders if cf.startswith(d_rel + "/") and cf != d_rel and "/" not in cf[len(d_rel) + 1:])
+                    total_sub_items = sub_files_cnt + sub_child_flds
+
+                    local_dir_path = (self.sync_folder / d_rel).resolve()
+                    try:
+                        local_dir_path.mkdir(parents=True, exist_ok=True)
+                    except Exception:
+                        pass
+
+                    folders_list.append({
+                        'file_name': d_name,
+                        'is_folder': True,
+                        'item_count': total_sub_items,
+                        'relative_path': d_rel,
+                        'abs_path': str(local_dir_path),
+                        'file_size': 0,
+                        'sync_status': 'synced',
+                        'last_modified_local': ''
+                    })
+
+                # 3. الملفات السحابية في المسار الحالي (أو كافة الملفات في الأرشيف الشامل)
+                is_all_archive = (scan_dept is None and scan_subpath == Path("."))
+                cloud_target_files = []
+
+                if is_all_archive:
+                    for f_rel, meta in cloud_snap.files.items():
+                        dept_prefix = f_rel.split("/")[0] if "/" in f_rel else ""
+                        if not dept_prefix or _can_show_dept(dept_prefix):
+                            cloud_target_files.append((f_rel, meta))
+                else:
+                    for f_rel, meta in cloud_snap.files.items():
+                        if norm_sub == "":
+                            if "/" not in f_rel:
+                                cloud_target_files.append((f_rel, meta))
+                        else:
+                            if f_rel.startswith(norm_sub + "/"):
+                                rem = f_rel[len(norm_sub) + 1:]
+                                if "/" not in rem:
+                                    cloud_target_files.append((f_rel, meta))
+
+                for f_rel, meta in cloud_target_files:
+                    fname = meta.get('name', f_rel.split("/")[-1])
+                    if is_ignored_name(fname):
+                        continue
+                    if f_rel in seen_rel_paths:
+                        continue
+                    seen_rel_paths.add(f_rel)
+
+                    abs_f = (self.sync_folder / f_rel).resolve()
+                    f_size = int(meta.get('size', 0) or 0)
+                    mtime_iso = meta.get('modifiedTime', '')
+
+                    is_local = abs_f.exists() and abs_f.is_file()
+                    st = states_map.get(f_rel)
+                    if is_local:
+                        sync_stat = 'synced'
+                    elif st and st.get('sync_status') in ('syncing', 'downloading'):
+                        sync_stat = 'syncing'
+                    else:
+                        sync_stat = 'cloud_only'
+
+                    files_list.append({
+                        'file_name': fname,
+                        'is_folder': False,
+                        'relative_path': f_rel,
+                        'abs_path': str(abs_f),
+                        'file_size': f_size,
+                        'storage_path': meta.get('id'),
+                        'sync_status': sync_stat,
+                        'last_modified_local': mtime_iso
+                    })
+
+                # دمج أي ملفات جديدة أضافها المستخدم محلياً وما زالت قيد الرفع
+                if current_abs.exists():
+                    try:
+                        for entry in os.scandir(current_abs):
+                            if entry.is_file(follow_symlinks=False) and not entry.name.startswith(".") and not is_ignored_name(entry.name):
+                                rel_p = os.path.relpath(entry.path, sync_root_str).replace("\\", "/")
+                                if rel_p not in seen_rel_paths:
+                                    st = states_map.get(rel_p)
+                                    if st and st.get('sync_status') in ('pending_upload', 'syncing'):
+                                        seen_rel_paths.add(rel_p)
+                                        files_list.append({
+                                            'file_name': entry.name,
+                                            'is_folder': False,
+                                            'relative_path': rel_p,
+                                            'abs_path': entry.path,
+                                            'file_size': entry.stat().st_size,
+                                            'sync_status': 'pending_upload',
+                                            'last_modified_local': datetime.fromtimestamp(entry.stat().st_mtime).isoformat()
+                                        })
+                    except Exception:
+                        pass
+
+            else:
+                # ---------------------------------------------------------- #
+                # الوضع الاحتياطي غير المتصل (Offline Scan)
+                # ---------------------------------------------------------- #
+                try:
+                    with os.scandir(self.sync_folder) as root_it:
+                        for entry in root_it:
+                            if entry.name.startswith(".") or entry.name.startswith("~$") or entry.name == ".trash":
+                                continue
+                            total_root_items += 1
+                            if entry.is_dir(follow_symlinks=False) and _can_show_dept(entry.name):
+                                local_dept_names.append(entry.name)
+                                cnt = 0
+                                try:
+                                    with os.scandir(entry.path) as d_it:
+                                        for sub_e in d_it:
+                                            if not sub_e.name.startswith(".") and not sub_e.name.startswith("~$") and sub_e.name != ".trash":
+                                                cnt += 1
+                                except OSError:
+                                    pass
+                                dept_counts[entry.name] = cnt
+                except OSError:
+                    pass
+
+                def _to_rel(abs_p_str):
+                    rel_p = os.path.relpath(abs_p_str, sync_root_str).replace("\\", "/")
+                    return "" if rel_p == "." else rel_p
+
+                try:
+                    with os.scandir(current_abs) as cur_it:
+                        for entry in cur_it:
+                            name = entry.name
+                            if name.startswith(".") or name == ".trash" or is_ignored_name(name):
+                                continue
+                            is_d = entry.is_dir(follow_symlinks=False)
+                            rel = _to_rel(entry.path)
+                            if is_d:
+                                count = 0
+                                try:
+                                    with os.scandir(entry.path) as sub_it:
+                                        for x in sub_it:
+                                            if not x.name.startswith(".") and x.name != ".trash" and not is_ignored_name(x.name):
                                                 count += 1
-                            except OSError:
-                                pass
-                            folders_list.append({
-                                'file_name': name,
-                                'is_folder': True,
-                                'item_count': count,
-                                'relative_path': rel,
-                                'abs_path': entry.path,
-                                'file_size': 0,
-                                'sync_status': 'synced',
-                                'last_modified_local': mtime_iso
-                            })
-                        elif entry.is_file(follow_symlinks=False):
-                            if rel in seen_rel_paths:
-                                continue
-                            seen_rel_paths.add(rel)
-                            try:
-                                st_info = entry.stat(follow_symlinks=False)
-                                f_size = st_info.st_size
-                                mtime_iso = datetime.fromtimestamp(st_info.st_mtime).isoformat()
-                            except OSError:
-                                continue
-                            st = states_map.get(rel)
-                            c_meta = cloud_files_map.get(rel)
-                            if not st:
-                                st = {
+                                except OSError:
+                                    pass
+                                folders_list.append({
+                                    'file_name': name,
+                                    'is_folder': True,
+                                    'item_count': count,
+                                    'relative_path': rel,
+                                    'abs_path': entry.path,
+                                    'file_size': 0,
+                                    'sync_status': 'synced',
+                                    'last_modified_local': ''
+                                })
+                            elif entry.is_file(follow_symlinks=False):
+                                if rel in seen_rel_paths:
+                                    continue
+                                seen_rel_paths.add(rel)
+                                try:
+                                    st_info = entry.stat(follow_symlinks=False)
+                                    f_size = st_info.st_size
+                                    mtime_iso = datetime.fromtimestamp(st_info.st_mtime).isoformat()
+                                except OSError:
+                                    continue
+                                files_list.append({
                                     'file_name': name,
                                     'is_folder': False,
                                     'relative_path': rel,
                                     'abs_path': entry.path,
                                     'file_size': f_size,
-                                    'sync_status': 'synced' if c_meta else 'pending_upload',
+                                    'sync_status': 'synced',
                                     'last_modified_local': mtime_iso
-                                }
-                            else:
-                                st = dict(st)
-                                st['file_name'] = name
-                                st['relative_path'] = rel
-                                st['abs_path'] = entry.path
-                                st['file_size'] = f_size
-                                st['is_folder'] = False
-                            files_list.append(st)
-            except OSError:
-                pass
+                                })
+                except OSError:
+                    pass
 
-            # في وضع الأرشيف الشامل (كافة الملفات والمجلدات): فحص المجلدات الفرعية بسرعة عبر os.walk مع احترام صلاحية العرض والرمز السري
-            if scan_dept is None and scan_subpath == Path("."):
-                perms_map = {}
-                try:
-                    if self.client and hasattr(self.client, 'get_folder_permissions'):
-                        perms_map = self.client.get_folder_permissions() or {}
-                except Exception:
-                    perms_map = {}
-                unlocked_pins = getattr(self, '_unlocked_pin_depts', set())
-
-                def _can_show_dept_in_all(d_name):
-                    if not isinstance(perms_map, dict) or d_name not in perms_map:
-                        return True
-                    rule = perms_map.get(d_name) or {}
-                    if not rule.get('canView', rule.get('can_view', True)):
-                        return False
-                    pin_c = str(rule.get('pinCode') or rule.get('pin_code') or '').strip()
-                    if pin_c and d_name not in unlocked_pins:
-                        return False
-                    return True
-
-                # تصفية المجلدات الجذرية المحجوبة من العرض
-                folders_list = [
-                    fld for fld in folders_list
-                    if _can_show_dept_in_all(fld['file_name'])
-                ]
-
-                for root_dir, dirs, files in os.walk(sync_root_str):
-                    if os.path.abspath(root_dir) == os.path.abspath(sync_root_str):
-                        dirs[:] = [
-                            d for d in dirs
-                            if not d.startswith(".") and d != ".trash" and _can_show_dept_in_all(d)
-                        ]
-                    else:
-                        dirs[:] = [d for d in dirs if not d.startswith(".") and d != ".trash"]
-                    for f_name in files:
-                        if f_name.startswith(".") or is_ignored_name(f_name):
-                            continue
-                        full_p = os.path.join(root_dir, f_name)
-                        sub_rel = _to_rel(full_p)
-                        if sub_rel in seen_rel_paths:
-                            continue
-                        seen_rel_paths.add(sub_rel)
-                        try:
-                            st_info = os.stat(full_p)
-                            f_size = st_info.st_size
-                            mtime_iso = datetime.fromtimestamp(st_info.st_mtime).isoformat()
-                        except OSError:
-                            continue
-                        st = states_map.get(sub_rel)
-                        c_meta = cloud_files_map.get(sub_rel)
-                        if not st:
-                            st = {
+                if scan_dept is None and scan_subpath == Path("."):
+                    for root_dir, dirs, files in os.walk(sync_root_str):
+                        dirs[:] = [d for d in dirs if not d.startswith(".") and d != ".trash" and _can_show_dept(d)]
+                        for f_name in files:
+                            if f_name.startswith(".") or is_ignored_name(f_name):
+                                continue
+                            full_p = os.path.join(root_dir, f_name)
+                            sub_rel = _to_rel(full_p)
+                            if sub_rel in seen_rel_paths:
+                                continue
+                            seen_rel_paths.add(sub_rel)
+                            try:
+                                st_info = os.stat(full_p)
+                                f_size = st_info.st_size
+                                mtime_iso = datetime.fromtimestamp(st_info.st_mtime).isoformat()
+                            except OSError:
+                                continue
+                            files_list.append({
                                 'file_name': f_name,
                                 'is_folder': False,
                                 'relative_path': sub_rel,
                                 'abs_path': full_p,
                                 'file_size': f_size,
-                                'sync_status': 'synced' if c_meta else 'pending_upload',
+                                'sync_status': 'synced',
                                 'last_modified_local': mtime_iso
-                            }
-                        else:
-                            st = dict(st)
-                            st['file_name'] = f_name
-                            st['relative_path'] = sub_rel
-                            st['abs_path'] = full_p
-                            st['file_size'] = f_size
-                            st['is_folder'] = False
-                        files_list.append(st)
+                            })
 
             folders_list.sort(key=lambda x: x['file_name'].lower())
             files_list.sort(key=lambda x: x['file_name'].lower())
@@ -5020,6 +5124,7 @@ class FileExchangeMainWindow(QMainWindow):
 
                     status_map = {
                         'synced': '● محفوظ ومؤمّن',
+                        'cloud_only': '☁️ متاح بالسحابة',
                         'syncing': '● جارٍ الرفع...',
                         'pending_upload': '● بانتظار الاتصال',
                         'conflict': '● تم احتواء تعارض',
@@ -5028,9 +5133,10 @@ class FileExchangeMainWindow(QMainWindow):
                     }
                     status_text = status_map.get(f.get('sync_status', 'synced'), '● محفوظ')
                     status_color = STATUS_SYNCED if f.get('sync_status') == 'synced' else (
+                        "#0284c7" if f.get('sync_status') == 'cloud_only' else (
                         STATUS_LOCKED if f.get('sync_status') == 'locked' else (
                         "#ef4444" if f.get('sync_status') == 'failed' else STATUS_SYNCING
-                    ))
+                    )))
 
                 if selected_rel and (rel_path == selected_rel or name == selected_rel):
                     matched_selected_row = row
@@ -5257,12 +5363,38 @@ class FileExchangeMainWindow(QMainWindow):
                     if sub_clean == clean:
                         file_path = sub
                         break
-        if not file_path.exists():
-            QMessageBox.warning(
-                self, "تنبيه", 
-                f"الملف التالي غير موجود فعلياً في مجلد المشاركة:\n{file_name}"
-            )
-            return
+        if not file_path.exists() or file_path.stat().st_size == 0:
+            if self.client and self.client.is_configured():
+                try:
+                    file_path.parent.mkdir(parents=True, exist_ok=True)
+                except Exception:
+                    pass
+                fid = self.client.resolve_file_id(rel_path or file_name)
+                progress_dlg = QProgressDialog(f"جارٍ تنزيل المستند من السحابة للفتح الفوري:\n{file_name}", "إلغاء", 0, 100, self)
+                progress_dlg.setWindowTitle("Share COC – تنزيل سحابي فوري")
+                progress_dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
+                progress_dlg.setMinimumDuration(150)
+                progress_dlg.setValue(5)
+
+                def _on_prog(done_b, total_b):
+                    pct = int(min(100, (done_b / max(total_b, 1)) * 100))
+                    progress_dlg.setValue(pct)
+                    QApplication.processEvents()
+
+                ok, msg = self.client.download_file(file_name, str(file_path), storage_path=fid, progress_callback=_on_prog)
+                progress_dlg.close()
+                if not ok or not file_path.exists():
+                    QMessageBox.warning(
+                        self, "تنبيه", 
+                        f"تعذر تنزيل الملف من السحابة:\n{file_name}\n({msg})"
+                    )
+                    return
+            else:
+                QMessageBox.warning(
+                    self, "تنبيه", 
+                    f"الملف التالي غير متوفر محلياً دون اتصال بالسحابة:\n{file_name}"
+                )
+                return
 
         if file_path.is_dir():
             self._navigate_into_folder(file_name)
@@ -5296,11 +5428,40 @@ class FileExchangeMainWindow(QMainWindow):
 
         try:
             OfficeHandler.open_native_file(str(file_path))
+            self._watch_opened_file_for_changes(file_path, rel_path or file_name)
         except Exception as e:
             QMessageBox.critical(
                 self, "خطأ في فتح الملف", 
                 f"تعذر تشغيل البرنامج المقترن بالملف:\n{str(e)}"
             )
+
+    def _watch_opened_file_for_changes(self, file_path, rel_path):
+        """مراقبة مخصصة للمستند المفتوح لرصد أي حفظ بالضغط على Ctrl+S ومزامنته فوراً مع السحابة وبقية الأجهزة"""
+        import time, threading
+        def _monitor():
+            try:
+                p = Path(file_path)
+                if not p.exists():
+                    return
+                last_mtime = p.stat().st_mtime
+                last_size = p.stat().st_size
+                for _ in range(28800):  # فحص مستمر لمدة تصل إلى 8 ساعات أثناء جلسة العمل
+                    time.sleep(1.0)
+                    if not p.exists():
+                        break
+                    try:
+                        cur = p.stat()
+                        if cur.st_mtime != last_mtime or cur.st_size != last_size:
+                            last_mtime = cur.st_mtime
+                            last_size = cur.st_size
+                            time.sleep(0.5)
+                            if hasattr(self, 'sync_engine') and self.sync_engine:
+                                self.sync_engine.wake(delay=0.3)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        threading.Thread(target=_monitor, daemon=True).start()
 
     def _show_table_context_menu(self, pos):
         bulk_items = self._get_currently_selected_items()

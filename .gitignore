@@ -60,6 +60,8 @@ install_app.py
 
 # Web dashboard temporary exes
 web-dashboard/public/*.old
+web-dashboard/public/*.bak
+web-dashboard/public/FileExchangeSetup.exe
 web-dashboard/public/FileExchange_Latest.exe
 web-dashboard/public/FileExchange_Updated.exe
 web-dashboard/public/ShareCOC_Setup.exe

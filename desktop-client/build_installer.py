@@ -37,11 +37,14 @@ def build_exe():
     if not setup_exe.exists():
         raise RuntimeError(f"❌ تعذر العثور على معالج التثبيت: {setup_exe}")
 
-    print("[3/3] تحديث نسخة التحميل المباشر في لوحة الويب (web-dashboard/public/ShareCOC_Setup.exe)...")
-    web_public_setup = current_dir.parent / "web-dashboard" / "public" / "ShareCOC_Setup.exe"
-    if web_public_setup.parent.exists():
-        shutil.copy2(str(setup_exe), str(web_public_setup))
-        print(f"✅ تم تحديث ملف التحميل في منصة الويب: {web_public_setup}")
+    print("[3/3] تحديث نسخ التحميل المباشر في لوحة الويب (web-dashboard/public)...")
+    web_public = current_dir.parent / "web-dashboard" / "public"
+    if web_public.exists():
+        shutil.copy2(str(app_exe), str(web_public / "share coc.exe"))
+        shutil.copy2(str(setup_exe), str(web_public / "ShareCOC_Setup.exe"))
+        shutil.copy2(str(setup_exe), str(web_public / "FileExchangeSetup.exe"))
+        shutil.copy2(str(setup_exe), str(web_public / "FileExchange_Latest.exe"))
+        print(f"✅ تم تحديث كافة ملفات التحميل في منصة الويب بنجاح: {web_public}")
 
     size_mb = round(setup_exe.stat().st_size / (1024 * 1024), 2)
     print("=" * 65)

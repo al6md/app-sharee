@@ -1033,9 +1033,13 @@ class GoogleDriveClient:
         rel_path = norm_rel(rel_path)
         if not rel_path:
             return None
-        snap = self.snapshot(max_age=5)
-        if snap is not None and rel_path in snap.files:
-            return snap.files[rel_path]["id"]
+        snap = self.snapshot(max_age=10)
+        if snap is not None:
+            if rel_path in snap.files:
+                return snap.files[rel_path]["id"]
+            for f_rel, meta in snap.files.items():
+                if meta.get("name") == rel_path or f_rel.endswith("/" + rel_path):
+                    return meta.get("id")
         parent_rel = rel_path.rsplit("/", 1)[0] if "/" in rel_path else ""
         name = rel_path.split("/")[-1]
         parent_id = self.resolve_folder_id(parent_rel)
