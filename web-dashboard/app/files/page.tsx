@@ -1674,113 +1674,121 @@ export default function FilesPage() {
     }
   };
 
-  // رابط تنزيل/بث مباشر عبر خادم البث السحابي المدمج
+  // رابط تنزيل/بث مباشر عبر خادم البث السحابي المدمج (مطلق بالكامل ليتوافق مع برامج Office والهواتف)
   const getFileDirectUrl = async (file: FileItem): Promise<string> => {
-    return `/api/drive/stream?id=${encodeURIComponent(file.id)}`;
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    return `${origin}/api/drive/stream?id=${encodeURIComponent(file.id)}&file=${encodeURIComponent(file.name)}`;
   };
 
-  // 1. فتح المستند أو الصورة أو الوسائط مباشرة (معاينة فورية للصور وPDF والفيديو أو تشغيل Office)
+  // 1. فتح المستند في البرنامج الأصلي أو عرض وسائط المعاينة (صور وفيديو وصوت)
   const handleOpenFile = async (file: FileItem) => {
     if (!canDownloadFolder(file.folder)) {
       alert(`⛔ عذراً، صلاحية فتح وتنزيل الملفات معطلة لقسم "${file.department}" من قِبل الإدارة.`);
       return;
     }
 
-    // فتح نافذة المعاينة والتحكم فورياً أمام المستخدم على الشاشة
-    setPreviewFile(file);
-
-    // للوسائط و PDF، المعاينة كافية
-    if (['image', 'pdf', 'video', 'audio'].includes(file.type)) {
+    // للوسائط فقط (صور، فيديو، صوت)، فتح عارض الوسائط المدمج
+    if (['image', 'video', 'audio'].includes(file.type)) {
+      setPreviewFile(file);
       return;
     }
 
-    const officeName = file.type === 'word' ? 'Word' : file.type === 'excel' ? 'Excel' : file.type === 'access' ? 'Access' : 'البرنامج الأصلي';
+    // لكافة المستندات والملفات الأخرى (Word, Excel, Access, PowerPoint, PDF... إلخ):
+    // تشغيل فوري في البرنامج الأصلي على جهاز المستخدم بدون فتح أي نوافذ أو خانات زائدة
+    await openNativeFile(file);
+  };
 
-    // فحص ما إذا كان المستخدم يتصفح من هاتف محمول (Android أو iOS)
+  // فتح الملف في برنامجه الأصلي المثبت على جهاز الحاسوب أو الهاتف
+  const openNativeFile = async (file: FileItem) => {
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const ext = file.name.split('.').pop()?.toLowerCase() || '';
+
+    // روابط البث والتنزيل السحابي المباشرة من السحابة
+    const streamUrl = `${origin}/api/drive/stream?id=${encodeURIComponent(file.id)}&file=${encodeURIComponent(file.name)}`;
+    const downloadUrl = `${origin}/api/drive/stream?id=${encodeURIComponent(file.id)}&download=1&file=${encodeURIComponent(file.name)}`;
+
+    // 1. محاولة استدعاء الجسر المحلي (Local Bridge) في حال كان التطبيق المكتبي يعمل على الجهاز (خلال 300ms)
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 300);
+      const bridgeUrl = `http://127.0.0.1:18290/open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder)}&storage_path=${encodeURIComponent(file.storagePath || file.id)}`;
+      const res = await fetch(bridgeUrl, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      if (res.ok) {
+        const result = await res.json();
+        if (result.success) {
+          setToastMessage({
+            text: `🚀 تم فتح المستند "${file.name}" في البرنامج الأصلي بنجاح!`,
+            type: 'success'
+          });
+          return;
+        }
+      }
+    } catch {
+      // الجسر غير متوفر (وهذا طبيعي لمن يتصفح الموقع من المتصفح مباشرة)
+    }
+
+    // 2. إذا كان المستخدم على هاتف محمول
     const isMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-
     if (isMobile) {
       if (['word', 'excel'].includes(file.type)) {
         setSelectedMobileFile(file);
         handleOpenInMobileApp(file);
         return;
-      } else if (file.type === 'access') {
-        alert('ملفات Microsoft Access (.accdb) مخصصة لحواسيب الويندوز فقط.');
-        return;
       } else {
-        const inlineUrl = `/api/drive/stream?id=${encodeURIComponent(file.id)}`;
-        window.open(inlineUrl, '_blank');
+        window.open(streamUrl, '_blank');
         return;
       }
     }
 
-    // --- في حال العمل على جهاز حاسوب (Desktop Windows) ---
-    const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
-    const protocolUrl = `sharecoc://open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder)}&storage_path=${encodeURIComponent(file.storagePath || file.id)}`;
+    // 3. لملفات Office الرئيسية (Word, Excel, PowerPoint) على الحواسيب:
+    // نستخدم بروتوكولات Microsoft Office المدمجة رسمياً في نظام ويندوز (ms-word, ms-excel, ms-powerpoint)
+    const isWord = ['docx', 'doc', 'rtf', 'dotx'].includes(ext) || file.type === 'word';
+    const isExcel = ['xlsx', 'xls', 'csv', 'xltx'].includes(ext) || file.type === 'excel';
+    const isPowerPoint = ['pptx', 'ppt'].includes(ext);
 
-    // دالة إطلاق البروتوكول الأصلي فوريّاً بدون تجميد الصفحة أو حجب المتصفح
-    const launchProtocolInstant = (url: string) => {
+    if (isWord || isExcel || isPowerPoint) {
+      const scheme = isWord ? 'ms-word' : isExcel ? 'ms-excel' : 'ms-powerpoint';
+      const appName = isWord ? 'Word' : isExcel ? 'Excel' : 'PowerPoint';
+
+      setToastMessage({
+        text: `🚀 جاري تشغيل برنامج Microsoft ${appName} الأصلي لفتح "${file.name}"...`,
+        type: 'success'
+      });
+
+      // إطلاق بروتوكول أوفيس مباشرة عبر نافذة خفية
+      const officeUri = `${scheme}:ofe|u|${streamUrl}`;
       try {
         const iframe = document.createElement('iframe');
         iframe.style.display = 'none';
-        iframe.src = url;
+        iframe.src = officeUri;
         document.body.appendChild(iframe);
         setTimeout(() => {
-          try {
-            document.body.removeChild(iframe);
-          } catch {}
+          try { document.body.removeChild(iframe); } catch {}
         }, 1500);
       } catch {
-        window.location.href = url;
+        window.location.href = officeUri;
       }
-    };
-
-    // 1. في حال التصفح عبر HTTPS (مثل استضافة Vercel)، يمنع المتصفح أمنياً طلبات HTTP إلى 127.0.0.1 (Mixed Content)
-    // لذلك نطلق بروتوكول sharecoc:// فوراً بلحظة النقر (0ms) ليفتح برنامج Word/Excel/Access الأصلي مباشرة وبأقصى سرعة!
-    if (isHttps) {
-      launchProtocolInstant(protocolUrl);
-      setToastMessage({
-        text: `🚀 جاري تشغيل برنامج ${officeName} الأصلي لفتح "${file.name}" فوراً...`,
-        type: 'success'
-      });
       return;
     }
 
-    // 2. إذا كان الموقع يعمل عبر HTTP المحلي (Localhost)، استدعاء خادم الجسر المحلي مع مهلة قصيرة جداً (350ms)
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 350);
-      const bridgeUrl = `http://127.0.0.1:18290/open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder)}&storage_path=${encodeURIComponent(file.storagePath || file.id)}`;
-      const res = await fetch(bridgeUrl, { signal: controller.signal });
-      clearTimeout(timeoutId);
-
-      if (res.ok) {
-        const result = await res.json();
-        if (result.success) {
-          if (result.status === 'downloading') {
-            setToastMessage({
-              text: `⏳ جاري تحضير "${file.name}" وسيقوم تطبيق Share COC بتشغيل برنامج ${officeName} فوراً...`,
-              type: 'info'
-            });
-          } else {
-            setToastMessage({
-              text: `🚀 تم تشغيل برنامج ${officeName} الأصلي وفتح المستند بنجاح!`,
-              type: 'success'
-            });
-          }
-          return;
-        }
-      }
-    } catch {
-      // في حال تأخر الجسر، إطلاق البروتوكول فوراً
-    }
-
-    // 3. في حال لم يجب الجسر فوراً، استدعاء البروتوكول السريع
-    launchProtocolInstant(protocolUrl);
+    // 4. لملفات Access (.accdb, .mdb) وملفات PDF (.pdf) والملفات الكبيرة وكافة أنواع المستندات:
+    // إرسال الملف مباشرة ليتم تشغيله في برنامجه الأصلي (Microsoft Access أو قارئ PDF المفضل)
+    const appLabel = file.type === 'access' ? 'Microsoft Access' : ext === 'pdf' ? 'قارئ PDF' : 'البرنامج الأصلي';
     setToastMessage({
-      text: `🚀 جاري تشغيل برنامج ${officeName} الأصلي عبر تطبيق Share COC...`,
+      text: `📥 جاري تشغيل "${file.name}" في ${appLabel}...`,
       type: 'success'
     });
+
+    const dlLink = document.createElement('a');
+    dlLink.href = downloadUrl;
+    dlLink.download = file.name;
+    dlLink.style.display = 'none';
+    document.body.appendChild(dlLink);
+    dlLink.click();
+    setTimeout(() => {
+      try { document.body.removeChild(dlLink); } catch {}
+    }, 1200);
   };
 
   // تشغيل المستند في تطبيق الهاتف الأصلي (Word / Excel / WPS) عبر Web Share مع نوع MIME دقيق
@@ -3036,7 +3044,9 @@ export default function FilesPage() {
                           ? 'فتح Excel'
                           : file.type === 'access'
                           ? 'فتح Access'
-                          : ['image', 'pdf', 'video', 'audio'].includes(file.type)
+                          : file.type === 'pdf'
+                          ? 'فتح PDF'
+                          : ['image', 'video', 'audio'].includes(file.type)
                           ? 'معاينة'
                           : 'فتح'}
                       </span>
@@ -4313,32 +4323,7 @@ export default function FilesPage() {
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
-              {['word', 'excel', 'access'].includes(previewFile.type) && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const protocolUrl = `sharecoc://open?file=${encodeURIComponent(previewFile.name)}&folder=${encodeURIComponent(previewFile.folder)}&storage_path=${encodeURIComponent(previewFile.storagePath || previewFile.id)}`;
-                    try {
-                      const iframe = document.createElement('iframe');
-                      iframe.style.display = 'none';
-                      iframe.src = protocolUrl;
-                      document.body.appendChild(iframe);
-                      setTimeout(() => { try { document.body.removeChild(iframe); } catch {} }, 1500);
-                    } catch {
-                      window.location.href = protocolUrl;
-                    }
-                    setToastMessage({
-                      text: `🚀 جاري تشغيل برنامج ${previewFile.type === 'word' ? 'Word' : previewFile.type === 'excel' ? 'Excel' : 'Access'} الأصلي...`,
-                      type: 'success'
-                    });
-                  }}
-                  className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[12px] font-bold transition flex items-center gap-1.5 shadow-sm"
-                >
-                  <ExternalLink className="w-3.5 h-3.5" />
-                  <span>تشغيل في البرنامج الأصلي</span>
-                </button>
-              )}
-              <button
+                            <button
                 type="button"
                 onClick={() => handleDownloadFile(previewFile)}
                 className="px-3 py-1.5 rounded-lg bg-[#14372e] hover:bg-[#1b493d] text-white text-[12px] font-semibold transition flex items-center gap-1.5"
@@ -4372,13 +4357,7 @@ export default function FilesPage() {
               />
             )}
 
-            {previewFile.type === 'pdf' && (
-              <iframe
-                src={`/api/drive/stream?id=${encodeURIComponent(previewFile.id)}`}
-                title={previewFile.name}
-                className="w-full h-[78vh] rounded-lg bg-white border-0"
-              />
-            )}
+            
 
             {previewFile.type === 'video' && (
               <video
@@ -4401,106 +4380,6 @@ export default function FilesPage() {
                   autoPlay
                   className="w-full"
                 />
-              </div>
-            )}
-
-            {(previewFile.type === 'word' || previewFile.type === 'excel') && (
-              <div className="w-full h-full flex flex-col items-center justify-center p-4">
-                <div className="bg-[#1B1F24] p-8 rounded-2xl border border-white/10 text-center space-y-5 max-w-lg w-full shadow-2xl">
-                  <div className="flex justify-center">
-                    {getFileIcon(previewFile.type, 'lg')}
-                  </div>
-                  <div>
-                    <h4 className="text-white font-bold text-lg leading-snug">{previewFile.name}</h4>
-                    <p className="text-xs text-white/60 mt-1 font-mono">
-                      {previewFile.folder} • {previewFile.size}
-                    </p>
-                  </div>
-
-                  <div className="flex flex-col gap-3 pt-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const protocolUrl = `sharecoc://open?file=${encodeURIComponent(previewFile.name)}&folder=${encodeURIComponent(previewFile.folder)}&storage_path=${encodeURIComponent(previewFile.storagePath || previewFile.id)}`;
-                        try {
-                          const iframe = document.createElement('iframe');
-                          iframe.style.display = 'none';
-                          iframe.src = protocolUrl;
-                          document.body.appendChild(iframe);
-                          setTimeout(() => { try { document.body.removeChild(iframe); } catch {} }, 1500);
-                        } catch {
-                          window.location.href = protocolUrl;
-                        }
-                        setToastMessage({
-                          text: `🚀 جاري تشغيل برنامج ${previewFile.type === 'word' ? 'Word' : 'Excel'} الأصلي أمامك مباشرة...`,
-                          type: 'success'
-                        });
-                      }}
-                      className="w-full py-3.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm transition flex items-center justify-center gap-2 shadow-lg active:scale-98"
-                    >
-                      <ExternalLink className="w-4 h-4" />
-                      <span>تشغيل في برنامج {previewFile.type === 'word' ? 'Word' : 'Excel'} الأصلي أمامك</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDownloadFile(previewFile)}
-                      className="w-full py-2.5 px-4 rounded-xl bg-white/10 hover:bg-white/20 text-white font-semibold text-xs transition flex items-center justify-center gap-2"
-                    >
-                      <Download className="w-4 h-4" />
-                      <span>تنزيل نسخة من الملف</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {previewFile.type === 'access' && (
-              <div className="w-full h-full flex flex-col items-center justify-center p-4">
-                <div className="bg-[#1B1F24] p-8 rounded-2xl border border-white/10 text-center space-y-5 max-w-lg w-full shadow-2xl">
-                  <div className="flex justify-center">
-                    {getFileIcon('access', 'lg')}
-                  </div>
-                  <div>
-                    <h4 className="text-white font-bold text-lg leading-snug">{previewFile.name}</h4>
-                    <p className="text-xs text-white/60 mt-1 font-mono">
-                      قاعدة بيانات Microsoft Access • {previewFile.size}
-                    </p>
-                  </div>
-
-                  <div className="flex flex-col gap-3 pt-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const protocolUrl = `sharecoc://open?file=${encodeURIComponent(previewFile.name)}&folder=${encodeURIComponent(previewFile.folder)}&storage_path=${encodeURIComponent(previewFile.storagePath || previewFile.id)}`;
-                        try {
-                          const iframe = document.createElement('iframe');
-                          iframe.style.display = 'none';
-                          iframe.src = protocolUrl;
-                          document.body.appendChild(iframe);
-                          setTimeout(() => { try { document.body.removeChild(iframe); } catch {} }, 1500);
-                        } catch {
-                          window.location.href = protocolUrl;
-                        }
-                        setToastMessage({
-                          text: `🚀 جاري فتح قاعدة بيانات Access في البرنامج الأصلي...`,
-                          type: 'success'
-                        });
-                      }}
-                      className="w-full py-3.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-sm transition flex items-center justify-center gap-2 shadow-lg active:scale-98"
-                    >
-                      <ExternalLink className="w-4 h-4" />
-                      <span>تشغيل في برنامج Microsoft Access الأصلي</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDownloadFile(previewFile)}
-                      className="w-full py-2.5 px-4 rounded-xl bg-white/10 hover:bg-white/20 text-white font-semibold text-xs transition flex items-center justify-center gap-2"
-                    >
-                      <Download className="w-4 h-4" />
-                      <span>تنزيل نسخة من قاعدة البيانات</span>
-                    </button>
-                  </div>
-                </div>
               </div>
             )}
           </div>

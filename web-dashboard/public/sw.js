@@ -1,5 +1,5 @@
 // Service Worker for Share COC PWA
-const CACHE_NAME = 'share-coc-v3';
+const CACHE_NAME = 'share-coc-v4';
 const ASSETS_TO_CACHE = [
   '/',
   '/files',

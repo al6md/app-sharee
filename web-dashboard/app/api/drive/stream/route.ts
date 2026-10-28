@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDriveFileStreamResponse } from '@/lib/googleDrive';
+import { getDriveFileStreamResponse, drive } from '@/lib/googleDrive';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -39,6 +39,69 @@ const EXT_MIME_MAP: Record<string, string> = {
   '7z': 'application/x-7z-compressed',
 };
 
+export async function OPTIONS() {
+  const headers = new Headers();
+  headers.set('Allow', 'GET, HEAD, OPTIONS');
+  headers.set('Access-Control-Allow-Origin', '*');
+  headers.set('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  headers.set('Access-Control-Allow-Headers', '*');
+  headers.set('Access-Control-Max-Age', '86400');
+  return new NextResponse(null, { status: 204, headers });
+}
+
+export async function HEAD(req: NextRequest) {
+  try {
+    const fileId = req.nextUrl.searchParams.get('id');
+    const download = req.nextUrl.searchParams.get('download') === '1';
+
+    if (!fileId) {
+      return new NextResponse(null, { status: 400 });
+    }
+
+    const metaRes = await drive.files.get({
+      fileId,
+      fields: 'id, name, mimeType, size',
+    });
+    const meta = metaRes.data;
+
+    const fileName = meta.name || 'file';
+    const ext = fileName.includes('.') ? fileName.split('.').pop()?.toLowerCase() || '' : '';
+    let contentType = meta.mimeType || 'application/octet-stream';
+    if (ext && EXT_MIME_MAP[ext]) {
+      contentType = EXT_MIME_MAP[ext];
+    }
+
+    const resHeaders = new Headers();
+    resHeaders.set('Content-Type', contentType);
+    const encodedName = encodeURIComponent(fileName);
+    const safeAsciiName = fileName.replace(/[^\x20-\x7E]/g, '_') || 'file';
+    resHeaders.set(
+      'Content-Disposition',
+      `${download ? 'attachment' : 'inline'}; filename="${safeAsciiName}"; filename*=UTF-8''${encodedName}`
+    );
+    resHeaders.set('Accept-Ranges', 'bytes');
+    resHeaders.set('Access-Control-Allow-Origin', '*');
+    resHeaders.set('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+    resHeaders.set('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Content-Disposition, Accept-Ranges, X-File-Size, X-File-Name');
+    resHeaders.set('Cache-Control', 'private, max-age=300');
+
+    if (meta.size) {
+      resHeaders.set('Content-Length', String(meta.size));
+      resHeaders.set('X-File-Size', String(meta.size));
+    }
+    if (meta.name) {
+      resHeaders.set('X-File-Name', encodeURIComponent(meta.name));
+    }
+
+    return new NextResponse(null, {
+      status: 200,
+      headers: resHeaders,
+    });
+  } catch (error: any) {
+    return new NextResponse(null, { status: 500 });
+  }
+}
+
 export async function GET(req: NextRequest) {
   try {
     const fileId = req.nextUrl.searchParams.get('id');
@@ -61,11 +124,15 @@ export async function GET(req: NextRequest) {
     const resHeaders = new Headers();
     resHeaders.set('Content-Type', contentType);
     const encodedName = encodeURIComponent(fileName);
+    const safeAsciiName = fileName.replace(/[^\x20-\x7E]/g, '_') || 'file';
     resHeaders.set(
       'Content-Disposition',
-      `${download ? 'attachment' : 'inline'}; filename*=UTF-8''${encodedName}`
+      `${download ? 'attachment' : 'inline'}; filename="${safeAsciiName}"; filename*=UTF-8''${encodedName}`
     );
     resHeaders.set('Accept-Ranges', 'bytes');
+    resHeaders.set('Access-Control-Allow-Origin', '*');
+    resHeaders.set('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+    resHeaders.set('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Content-Disposition, Accept-Ranges, X-File-Size, X-File-Name');
     resHeaders.set('Cache-Control', 'private, max-age=300');
 
     const contentLength = upstreamRes.headers.get('content-length');
