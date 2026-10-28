@@ -637,7 +637,7 @@ class GovFileCard(QFrame):
         btn_action.setObjectName("btnCardOpen")
         btn_action.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         if self.is_folder:
-            btn_action.clicked.connect(lambda: self.main_window._navigate_into_folder(self.file_name))
+            btn_action.clicked.connect(lambda: self.main_window._navigate_into_folder(self.file_name, self.rel_path))
         else:
             btn_action.clicked.connect(lambda: self.main_window._open_file_by_name(self.file_name, self.rel_path))
         meta_row.addWidget(btn_action)
@@ -676,13 +676,13 @@ class GovFileCard(QFrame):
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             if self.is_folder:
-                self.main_window._navigate_into_folder(self.file_name)
+                self.main_window._navigate_into_folder(self.file_name, self.rel_path)
             else:
                 self.main_window._open_file_by_name(self.file_name, self.rel_path)
 
     def contextMenuEvent(self, event):
         if self.is_folder:
-            self.main_window._show_context_menu_for_folder(self.file_name, event.globalPos())
+            self.main_window._show_context_menu_for_folder(self.file_name, event.globalPos(), self.rel_path)
         else:
             self.main_window._show_context_menu_for_file(self.file_name, event.globalPos(), self.rel_path)
 
@@ -739,7 +739,7 @@ class GovCompactTile(QFrame):
             btn_action = QPushButton("فتح")
             btn_action.setObjectName("btnTileOpen")
             btn_action.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-            btn_action.clicked.connect(lambda: self.main_window._navigate_into_folder(self.file_name))
+            btn_action.clicked.connect(lambda: self.main_window._navigate_into_folder(self.file_name, self.rel_path))
             layout.addWidget(btn_action)
 
             btn_move = QPushButton("نقل")
@@ -855,13 +855,13 @@ class GovCompactTile(QFrame):
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             if self.is_folder:
-                self.main_window._navigate_into_folder(self.file_name)
+                self.main_window._navigate_into_folder(self.file_name, self.rel_path)
             else:
                 self.main_window._open_file_by_name(self.file_name, self.rel_path)
 
     def contextMenuEvent(self, event):
         if self.is_folder:
-            self.main_window._show_context_menu_for_folder(self.file_name, event.globalPos())
+            self.main_window._show_context_menu_for_folder(self.file_name, event.globalPos(), self.rel_path)
         else:
             self.main_window._show_context_menu_for_file(self.file_name, event.globalPos(), self.rel_path)
 
@@ -2562,6 +2562,7 @@ class FileExchangeMainWindow(QMainWindow):
         if self.active_filter == "TRASH":
             self._render_trash_table()
         else:
+            self._apply_instant_snapshot_render(self.current_subpath)
             self._refresh_file_list()
 
     def _show_department_context_menu(self, pos):
@@ -2917,51 +2918,217 @@ class FileExchangeMainWindow(QMainWindow):
             self._refresh_file_list()
             QMessageBox.information(self, "تم الحذف", f"تم نقل قسم '{dept_name}' إلى سلة المحذوفات بنجاح.")
 
-    def _navigate_into_folder(self, folder_name):
-        """الدخول إلى مجلد فرعي وتحديث العرض مع التحقق من صلاحيات القسم والرمز السري"""
+    def _apply_instant_snapshot_render(self, target_subpath):
+        """عرض فوري متزامن فائق السرعة من الذاكرة للقطة السحابية دون انتظار الفحص الخلفي (< 15ms)"""
+        try:
+            if not (hasattr(self, 'client') and self.client and hasattr(self.client, 'peek_snapshot')):
+                return False
+            cached_snap = self.client.peek_snapshot()
+            if not (cached_snap and hasattr(cached_snap, 'folders')):
+                return False
+
+            from gdrive_client import is_ignored_name
+            norm_sub = str(target_subpath).replace("\\", "/").strip("/").strip(".")
+            if norm_sub in (".", ""):
+                norm_sub = ""
+
+            snap_idx = _get_snapshot_index(cached_snap)
+            child_dirs = [fld for fld in snap_idx['child_dirs'].get(norm_sub, []) if not is_ignored_name(fld.split("/")[-1])]
+
+            unlocked_pins = getattr(self, '_unlocked_pin_depts', set())
+            perms_map = {}
+            try:
+                if hasattr(self.client, 'get_cached_folder_permissions'):
+                    perms_map = self.client.get_cached_folder_permissions() or {}
+                elif hasattr(self.client, 'get_folder_permissions'):
+                    perms_map = self.client.get_folder_permissions() or {}
+            except Exception:
+                pass
+
+            def _can_show_dept_instant(d_name):
+                if norm_sub != "":
+                    return True
+                if not isinstance(perms_map, dict) or d_name not in perms_map:
+                    return True
+                rule = perms_map.get(d_name) or {}
+                if not rule.get('canView', rule.get('can_view', True)):
+                    return False
+                pin_c = str(rule.get('pinCode') or rule.get('pin_code') or '').strip()
+                if pin_c and d_name not in unlocked_pins:
+                    return False
+                return True
+
+            folders_list = []
+            for d_rel in sorted(child_dirs):
+                d_name = d_rel.split("/")[-1]
+                if not _can_show_dept_instant(d_name):
+                    continue
+                total_sub_items = snap_idx['rec_files'].get(d_rel, 0) + len(snap_idx['child_dirs'].get(d_rel, []))
+                local_dir_path = os.path.normpath(os.path.join(str(self.sync_folder), d_rel))
+                folders_list.append({
+                    'file_name': d_name,
+                    'is_folder': True,
+                    'item_count': total_sub_items,
+                    'relative_path': d_rel,
+                    'abs_path': local_dir_path,
+                    'file_size': 0,
+                    'sync_status': 'synced',
+                    'last_modified_local': ''
+                })
+
+            files_list = []
+            is_all_archive = (self.active_dept_name is None and target_subpath == Path("."))
+            if is_all_archive:
+                for f_rel, meta in cached_snap.files.items():
+                    f_name = f_rel.split("/")[-1]
+                    if is_ignored_name(f_name):
+                        continue
+                    dept_p = f_rel.split("/")[0] if "/" in f_rel else ""
+                    if not dept_p or _can_show_dept_instant(dept_p):
+                        full_p = os.path.normpath(os.path.join(str(self.sync_folder), f_rel))
+                        files_list.append({
+                            'file_name': f_name,
+                            'is_folder': False,
+                            'relative_path': f_rel,
+                            'abs_path': full_p,
+                            'file_size': getattr(meta, 'size', 0),
+                            'sync_status': 'synced',
+                            'last_modified_local': getattr(meta, 'modified_iso', '') or ''
+                        })
+            else:
+                for f_rel, meta in snap_idx['child_files'].get(norm_sub, []):
+                    f_name = f_rel.split("/")[-1]
+                    if is_ignored_name(f_name):
+                        continue
+                    full_p = os.path.normpath(os.path.join(str(self.sync_folder), f_rel))
+                    files_list.append({
+                        'file_name': f_name,
+                        'is_folder': False,
+                        'relative_path': f_rel,
+                        'abs_path': full_p,
+                        'file_size': getattr(meta, 'size', 0),
+                        'sync_status': 'synced',
+                        'last_modified_local': getattr(meta, 'modified_iso', '') or ''
+                    })
+
+            folders_list.sort(key=lambda x: x['file_name'].lower())
+            files_list.sort(key=lambda x: x['file_name'].lower())
+
+            word_cnt = sum(1 for x in files_list if get_type_key(x['file_name']) == 'word')
+            excel_cnt = sum(1 for x in files_list if get_type_key(x['file_name']) == 'excel')
+            access_cnt = sum(1 for x in files_list if get_type_key(x['file_name']) == 'access')
+            pdf_cnt = sum(1 for x in files_list if get_type_key(x['file_name']) == 'pdf')
+            images_cnt = sum(1 for x in files_list if get_type_key(x['file_name']) == 'image')
+            other_cnt = sum(1 for x in files_list if get_type_key(x['file_name']) in ('video', 'audio', 'archive', 'other'))
+            folders_cnt = len(folders_list)
+
+            self.tab_all.setText(f"الكل ({len(files_list)})")
+            self.tab_folders.setText(f"المجلدات ({folders_cnt})" if folders_cnt > 0 else "المجلدات")
+            self.tab_word.setText(f"Word ({word_cnt})" if word_cnt > 0 else "Word")
+            self.tab_excel.setText(f"Excel ({excel_cnt})" if excel_cnt > 0 else "Excel")
+            self.tab_access.setText(f"Access ({access_cnt})" if access_cnt > 0 else "Access")
+            self.tab_pdf.setText(f"PDF ({pdf_cnt})" if pdf_cnt > 0 else "PDF")
+            if hasattr(self, 'tab_images'):
+                self.tab_images.setText(f"الصور ({images_cnt})" if images_cnt > 0 else "الصور")
+            if hasattr(self, 'tab_other'):
+                self.tab_other.setText(f"أخرى ({other_cnt})" if other_cnt > 0 else "أخرى")
+
+            self.lbl_total.setText(f"المستندات: {len(files_list)}  •  المجلدات: {folders_cnt}")
+            self.all_files_cache = folders_list + files_list
+            self._filter_content()
+            return True
+        except Exception as e:
+            print(f"[Instant Render Error]: {e}")
+            return False
+
+    def _navigate_into_folder(self, folder_name, rel_path=None):
+        """الدخول إلى مجلد فرعي وتحديث العرض مع التحقق من صلاحيات القسم والرمز السري ومنع التكرار نهائياً"""
+        if getattr(self, '_nav_transitioning', False):
+            return
+
+        # تحديد المسار المستهدف بدقة لمنع التكرار
+        if rel_path:
+            norm_rel = str(rel_path).replace("\\", "/").strip("/").strip(".")
+            new_path = Path(norm_rel) if norm_rel else Path(".")
+        else:
+            norm_sub = str(self.current_subpath).replace("\\", "/").strip("/").strip(".")
+            if not norm_sub or norm_sub == ".":
+                new_path = Path(folder_name)
+            else:
+                sub_parts = [p for p in norm_sub.split("/") if p]
+                if sub_parts and sub_parts[-1] == folder_name:
+                    return
+                new_path = self.current_subpath / folder_name
+
+        norm_new = str(new_path).replace("\\", "/").strip("/").strip(".")
+        norm_curr = str(self.current_subpath).replace("\\", "/").strip("/").strip(".")
+        if norm_new == norm_curr:
+            return
+
         target_dept = self.active_dept_name
         if not target_dept:
-            if self.current_subpath == Path("."):
-                target_dept = folder_name
-            else:
-                parts = list(self.current_subpath.parts)
-                if parts:
-                    target_dept = parts[0]
+            if norm_new:
+                target_dept = norm_new.split("/")[0]
         if target_dept and not self._check_department_permission(target_dept, action='view'):
             return
 
-        new_path = self.current_subpath / folder_name
-        target = (self.sync_folder / new_path).resolve()
-        try:
-            target.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
-        if target.exists() and target.is_dir():
-            self.current_subpath = new_path
-            self._reset_scroll_on_render = True
-            self._force_full_render = True
-            self._nav_cache_ok = True
-            self._update_breadcrumb()
-            self._refresh_file_list()
+        # التحقق من أن المجلد موجود فعلياً (إما محلياً أو في اللقطة السحابية) لمنع مسارات وهمية
+        local_target = (self.sync_folder / new_path).resolve()
+        local_exists = local_target.is_dir()
+        cloud_exists = False
+        if hasattr(self, 'client') and self.client and self.client.is_configured():
+            cached_snap = self.client.peek_snapshot() if hasattr(self.client, 'peek_snapshot') else None
+            if cached_snap and hasattr(cached_snap, 'folders'):
+                cloud_exists = (norm_new in cached_snap.folders)
+
+        if not local_exists and not cloud_exists:
+            return
+
+        # تفعيل حماية منع النقر المتكرر (Debounce)
+        self._nav_transitioning = True
+        QTimer.singleShot(200, lambda: setattr(self, '_nav_transitioning', False))
+
+        self.current_subpath = new_path
+        self._reset_scroll_on_render = True
+        self._force_full_render = True
+        self._nav_cache_ok = True
+        self._update_breadcrumb()
+
+        # العرض الفوري المتزامن من الذاكرة (< 15ms)
+        self._apply_instant_snapshot_render(new_path)
+
+        # جدولة فحص خلفي هادئ للتزامن
+        self._refresh_file_list()
 
     def _navigate_up(self):
-        """الرجوع للمجلد السابق (للأعلى) مع الحفاظ على حدود القسم"""
+        """الرجوع للمجلد السابق (للأعلى) مع الحفاظ على حدود القسم وعرض فوري"""
+        if getattr(self, '_nav_transitioning', False):
+            return
+
+        new_subpath = None
         if self.active_dept_name:
             if self.current_subpath != Path(self.active_dept_name):
-                self.current_subpath = self.current_subpath.parent
-                self._reset_scroll_on_render = True
-                self._force_full_render = True
-                self._nav_cache_ok = True
-                self._update_breadcrumb()
-                self._refresh_file_list()
+                new_subpath = self.current_subpath.parent
         else:
             if self.current_subpath != Path("."):
-                self.current_subpath = self.current_subpath.parent
-                self._reset_scroll_on_render = True
-                self._force_full_render = True
-                self._nav_cache_ok = True
-                self._update_breadcrumb()
-                self._refresh_file_list()
+                new_subpath = self.current_subpath.parent
+
+        if new_subpath is None or new_subpath == self.current_subpath:
+            return
+
+        self._nav_transitioning = True
+        QTimer.singleShot(200, lambda: setattr(self, '_nav_transitioning', False))
+
+        self.current_subpath = new_subpath
+        self._reset_scroll_on_render = True
+        self._force_full_render = True
+        self._nav_cache_ok = True
+        self._update_breadcrumb()
+
+        # العرض الفوري المتزامن من الذاكرة (< 15ms)
+        self._apply_instant_snapshot_render(new_subpath)
+
+        self._refresh_file_list()
 
     def _update_breadcrumb(self):
         """تحديث شريط المسار بالأقسام والمجلدات الحالية مع الحفاظ على عزل القسم"""
@@ -3190,10 +3357,15 @@ class FileExchangeMainWindow(QMainWindow):
         layout.addLayout(btn_row)
         dialog.exec()
 
-    def _show_context_menu_for_folder(self, folder_name, global_pos):
+    def _show_context_menu_for_folder(self, folder_name, global_pos, rel_path=None):
         """القائمة المنسدلة الخاصة بالمجلدات الإدارية"""
-        target = (self._get_current_abs_folder() / folder_name).resolve()
-        rel_p = str(target.relative_to(self.sync_folder)).replace("\\", "/") if target.exists() else folder_name
+        if rel_path:
+            norm_r = str(rel_path).replace("\\", "/").strip("/").strip(".")
+            target = (self.sync_folder / norm_r).resolve()
+            rel_p = norm_r
+        else:
+            target = (self._get_current_abs_folder() / folder_name).resolve()
+            rel_p = str(target.relative_to(self.sync_folder)).replace("\\", "/") if target.exists() else folder_name
         menu = QMenu(self)
         menu.setStyleSheet("""
             QMenu {
@@ -3224,7 +3396,7 @@ class FileExchangeMainWindow(QMainWindow):
 
         action = menu.exec(global_pos)
         if action == open_action:
-            self._navigate_into_folder(folder_name)
+            self._navigate_into_folder(folder_name, rel_path=rel_p)
         elif action == open_win_action:
             if target.exists():
                 subprocess.Popen(f'explorer /select,"{str(target)}"')
@@ -3233,7 +3405,7 @@ class FileExchangeMainWindow(QMainWindow):
         elif action == rename_action:
             self._rename_folder(folder_name)
         elif action == delete_action:
-            self._move_folder_to_trash(folder_name)
+            self._move_folder_to_trash(folder_name, rel_path=rel_p)
 
     def _move_folder_to_trash(self, folder_name, rel_path=None, ask_confirm=True):
         """نقل مجلد كامل إلى سلة المحذوفات بأمان وحذفه فوراً من السحابة وباقي المنصات"""
@@ -5321,7 +5493,7 @@ class FileExchangeMainWindow(QMainWindow):
                         btn_open = QPushButton("فتح")
                         btn_open.setObjectName("btnTileOpen")
                         btn_open.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-                        btn_open.clicked.connect(lambda _, n=name: self._navigate_into_folder(n))
+                        btn_open.clicked.connect(lambda _, n=name, rp=rel_path: self._navigate_into_folder(n, rp))
                         act_layout.addWidget(btn_open)
 
                         btn_move = QPushButton("نقل")
@@ -5414,7 +5586,7 @@ class FileExchangeMainWindow(QMainWindow):
         rel_path = cell0.data(Qt.ItemDataRole.UserRole)
         is_fld = bool(cell0.data(Qt.ItemDataRole.UserRole + 1)) or "(مجلد" in raw_text
         if is_fld:
-            self._navigate_into_folder(file_name)
+            self._navigate_into_folder(file_name, rel_path)
         else:
             self._open_file_by_name(file_name, rel_path)
 
@@ -5477,7 +5649,7 @@ class FileExchangeMainWindow(QMainWindow):
                 return
 
         if file_path.is_dir():
-            self._navigate_into_folder(file_name)
+            self._navigate_into_folder(file_name, rel_path)
             return
 
         # إذا كان الملف صورة: فتحه في عارض الصور المدمج بالتطبيق مع إمكانية فتحه خارجياً
