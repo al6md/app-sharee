@@ -1674,10 +1674,10 @@ export default function FilesPage() {
     }
   };
 
-  // رابط تنزيل/بث مباشر عبر خادم البث السحابي المدمج (مطلق بالكامل ليتوافق مع برامج Office والهواتف)
+  // رابط بث مباشر مطلق ينتهي باسم الملف الحقيقي (تشترطه برامج Office لتحديد نوع المستند)
   const getFileDirectUrl = async (file: FileItem): Promise<string> => {
     const origin = typeof window !== 'undefined' ? window.location.origin : '';
-    return `${origin}/api/drive/stream?id=${encodeURIComponent(file.id)}&file=${encodeURIComponent(file.name)}`;
+    return `${origin}/api/drive/file/${encodeURIComponent(file.id)}/${encodeURIComponent(file.name)}`;
   };
 
   // 1. فتح المستند في البرنامج الأصلي أو عرض وسائط المعاينة (صور وفيديو وصوت)
@@ -1698,97 +1698,90 @@ export default function FilesPage() {
     await openNativeFile(file);
   };
 
-  // فتح الملف في برنامجه الأصلي المثبت على جهاز الحاسوب أو الهاتف
+  // تنزيل ملف عبر رابط مخفي (يتحول لملف في مجلد التنزيلات)
+  const triggerBrowserDownload = (url: string, name: string) => {
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = name;
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    setTimeout(() => {
+      try { document.body.removeChild(link); } catch {}
+    }, 1500);
+  };
+
+  // إطلاق بروتوكول برنامج خارجي (ms-word ...) مع كشف عدم الاستجابة: إذا لم تفقد الصفحة التركيز خلال 3 ثوانٍ
+  // فهذا يعني أن البرنامج لم يُفتح فعلياً، فنُبلغ المستخدم بدل رسالة نجاح كاذبة.
+  const launchExternalProtocol = (uri: string, onNoResponse: () => void) => {
+    let handled = false;
+    const markHandled = () => { handled = true; };
+    const onVisibility = () => { if (document.hidden) markHandled(); };
+    window.addEventListener('blur', markHandled, { once: true });
+    document.addEventListener('visibilitychange', onVisibility);
+
+    const link = document.createElement('a');
+    link.href = uri;
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    setTimeout(() => {
+      try { document.body.removeChild(link); } catch {}
+    }, 500);
+
+    setTimeout(() => {
+      window.removeEventListener('blur', markHandled);
+      document.removeEventListener('visibilitychange', onVisibility);
+      if (!handled) onNoResponse();
+    }, 3000);
+  };
+
+  // فتح الملف في برنامجه الأصلي على جهاز المستخدم (بدون أي تطبيق مساعد)
   const openNativeFile = async (file: FileItem) => {
-    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const fileUrl = await getFileDirectUrl(file);
+    const downloadUrl = `${fileUrl}?download=1`;
     const ext = file.name.split('.').pop()?.toLowerCase() || '';
 
-    // روابط البث والتنزيل السحابي المباشرة من السحابة
-    const streamUrl = `${origin}/api/drive/stream?id=${encodeURIComponent(file.id)}&file=${encodeURIComponent(file.name)}`;
-    const downloadUrl = `${origin}/api/drive/stream?id=${encodeURIComponent(file.id)}&download=1&file=${encodeURIComponent(file.name)}`;
-
-    // 1. محاولة استدعاء الجسر المحلي (Local Bridge) في حال كان التطبيق المكتبي يعمل على الجهاز (خلال 300ms)
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 300);
-      const bridgeUrl = `http://127.0.0.1:18290/open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder)}&storage_path=${encodeURIComponent(file.storagePath || file.id)}`;
-      const res = await fetch(bridgeUrl, { signal: controller.signal });
-      clearTimeout(timeoutId);
-      if (res.ok) {
-        const result = await res.json();
-        if (result.success) {
-          setToastMessage({
-            text: `🚀 تم فتح المستند "${file.name}" في البرنامج الأصلي بنجاح!`,
-            type: 'success'
-          });
-          return;
-        }
-      }
-    } catch {
-      // الجسر غير متوفر (وهذا طبيعي لمن يتصفح الموقع من المتصفح مباشرة)
-    }
-
-    // 2. إذا كان المستخدم على هاتف محمول
+    // الهواتف المحمولة
     const isMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
     if (isMobile) {
       if (['word', 'excel'].includes(file.type)) {
         setSelectedMobileFile(file);
         handleOpenInMobileApp(file);
-        return;
       } else {
-        window.open(streamUrl, '_blank');
-        return;
-      }
-    }
-
-    // 3. لملفات Office الرئيسية (Word, Excel, PowerPoint) على الحواسيب:
-    // نستخدم بروتوكولات Microsoft Office المدمجة رسمياً في نظام ويندوز (ms-word, ms-excel, ms-powerpoint)
-    const isWord = ['docx', 'doc', 'rtf', 'dotx'].includes(ext) || file.type === 'word';
-    const isExcel = ['xlsx', 'xls', 'csv', 'xltx'].includes(ext) || file.type === 'excel';
-    const isPowerPoint = ['pptx', 'ppt'].includes(ext);
-
-    if (isWord || isExcel || isPowerPoint) {
-      const scheme = isWord ? 'ms-word' : isExcel ? 'ms-excel' : 'ms-powerpoint';
-      const appName = isWord ? 'Word' : isExcel ? 'Excel' : 'PowerPoint';
-
-      setToastMessage({
-        text: `🚀 جاري تشغيل برنامج Microsoft ${appName} الأصلي لفتح "${file.name}"...`,
-        type: 'success'
-      });
-
-      // إطلاق بروتوكول أوفيس مباشرة عبر نافذة خفية
-      const officeUri = `${scheme}:ofe|u|${streamUrl}`;
-      try {
-        const iframe = document.createElement('iframe');
-        iframe.style.display = 'none';
-        iframe.src = officeUri;
-        document.body.appendChild(iframe);
-        setTimeout(() => {
-          try { document.body.removeChild(iframe); } catch {}
-        }, 1500);
-      } catch {
-        window.location.href = officeUri;
+        window.open(fileUrl, '_blank');
       }
       return;
     }
 
-    // 4. لملفات Access (.accdb, .mdb) وملفات PDF (.pdf) والملفات الكبيرة وكافة أنواع المستندات:
-    // إرسال الملف مباشرة ليتم تشغيله في برنامجه الأصلي (Microsoft Access أو قارئ PDF المفضل)
-    const appLabel = file.type === 'access' ? 'Microsoft Access' : ext === 'pdf' ? 'قارئ PDF' : 'البرنامج الأصلي';
-    setToastMessage({
-      text: `📥 جاري تشغيل "${file.name}" في ${appLabel}...`,
-      type: 'success'
-    });
+    // بروتوكولات Microsoft Office الرسمية المثبتة مع Office في ويندوز
+    const OFFICE_PROTOCOLS: Record<string, [string, string]> = {
+      docx: ['ms-word', 'Word'], doc: ['ms-word', 'Word'], docm: ['ms-word', 'Word'], dotx: ['ms-word', 'Word'], rtf: ['ms-word', 'Word'],
+      xlsx: ['ms-excel', 'Excel'], xls: ['ms-excel', 'Excel'], xlsm: ['ms-excel', 'Excel'], xltx: ['ms-excel', 'Excel'], csv: ['ms-excel', 'Excel'],
+      pptx: ['ms-powerpoint', 'PowerPoint'], ppt: ['ms-powerpoint', 'PowerPoint'], pptm: ['ms-powerpoint', 'PowerPoint'],
+      accdb: ['ms-access', 'Access'], mdb: ['ms-access', 'Access'],
+    };
+    const entry = OFFICE_PROTOCOLS[ext];
 
-    const dlLink = document.createElement('a');
-    dlLink.href = downloadUrl;
-    dlLink.download = file.name;
-    dlLink.style.display = 'none';
-    document.body.appendChild(dlLink);
-    dlLink.click();
-    setTimeout(() => {
-      try { document.body.removeChild(dlLink); } catch {}
-    }, 1200);
+    if (entry) {
+      const [scheme, appName] = entry;
+      setToastMessage({ text: `⏳ جاري فتح "${file.name}" في ${appName}...`, type: 'info' });
+      launchExternalProtocol(`${scheme}:ofe|u|${fileUrl}`, () => {
+        setToastMessage({
+          text: `⚠️ لم يستجب ${appName}. تم تنزيل نسخة من الملف بدلاً من ذلك، افتحها من مجلد التنزيلات.`,
+          type: 'error'
+        });
+        triggerBrowserDownload(downloadUrl, file.name);
+      });
+      return;
+    }
+
+    // باقي الأنواع (PDF وغيرها): تنزيل مباشر ليفتحه المتصفح/النظام بالبرنامج الافتراضي
+    setToastMessage({
+      text: `📥 جاري تنزيل "${file.name}" لفتحه في البرنامج الافتراضي...`,
+      type: 'info'
+    });
+    triggerBrowserDownload(downloadUrl, file.name);
   };
 
   // تشغيل المستند في تطبيق الهاتف الأصلي (Word / Excel / WPS) عبر Web Share مع نوع MIME دقيق

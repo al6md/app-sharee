@@ -1,0 +1,41 @@
+Windows Registry Editor Version 5.00
+
+; =====================================================================
+; Share COC - إعداد المتصفح لفتح الملفات في البرامج الأصلية (Edge + Chrome)
+; يُشغَّل مرة واحدة على كل جهاز بصلاحية مسؤول (انقر بزر الفأرة الأيمن > Merge)
+; أو يُنشر عبر Group Policy / Intune. ثم أعد تشغيل المتصفح.
+; =====================================================================
+
+; ------------------------- Microsoft Edge -------------------------
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Edge]
+"AlwaysOpenPdfExternally"=dword:00000001
+"AutoLaunchProtocolsFromOrigins"="[{\"allowed_origins\":[\"https://web-dashboard-pi-self.vercel.app\"],\"protocol\":\"ms-word\"},{\"allowed_origins\":[\"https://web-dashboard-pi-self.vercel.app\"],\"protocol\":\"ms-excel\"},{\"allowed_origins\":[\"https://web-dashboard-pi-self.vercel.app\"],\"protocol\":\"ms-powerpoint\"},{\"allowed_origins\":[\"https://web-dashboard-pi-self.vercel.app\"],\"protocol\":\"ms-access\"}]"
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Edge\AutoOpenFileTypes]
+"1"="pdf"
+"2"="zip"
+"3"="rar"
+"4"="7z"
+"5"="txt"
+"6"="csv"
+"7"="rtf"
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Edge\AutoOpenAllowedForURLs]
+"1"="https://web-dashboard-pi-self.vercel.app"
+
+; ------------------------- Google Chrome -------------------------
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Google\Chrome]
+"AlwaysOpenPdfExternally"=dword:00000001
+"AutoLaunchProtocolsFromOrigins"="[{\"allowed_origins\":[\"https://web-dashboard-pi-self.vercel.app\"],\"protocol\":\"ms-word\"},{\"allowed_origins\":[\"https://web-dashboard-pi-self.vercel.app\"],\"protocol\":\"ms-excel\"},{\"allowed_origins\":[\"https://web-dashboard-pi-self.vercel.app\"],\"protocol\":\"ms-powerpoint\"},{\"allowed_origins\":[\"https://web-dashboard-pi-self.vercel.app\"],\"protocol\":\"ms-access\"}]"
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Google\Chrome\AutoOpenFileTypes]
+"1"="pdf"
+"2"="zip"
+"3"="rar"
+"4"="7z"
+"5"="txt"
+"6"="csv"
+"7"="rtf"
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Google\Chrome\AutoOpenAllowedForURLs]
+"1"="https://web-dashboard-pi-self.vercel.app"
