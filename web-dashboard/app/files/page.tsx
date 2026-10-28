@@ -2856,7 +2856,7 @@ export default function FilesPage() {
 
           {/* شبكة المجلدات الفرعية بتصميم متناسق وعريض يمنع تكسير الكلمات نهائياً */}
           {visibleSubfolders.length > 0 && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 pt-1">
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-3 pt-1">
               {visibleSubfolders.map((sub) => {
                 const subFilesCount = folderFilesCountMap.get(sub.path) || 0;
                 const childFoldersCount = folderChildsCountMap.get(sub.path) || 0;
@@ -2865,84 +2865,85 @@ export default function FilesPage() {
                   <div
                     key={sub.id}
                     onClick={() => handleSelectDepartment(sub.department, sub.path)}
-                    className={`group cursor-pointer rounded-xl p-3 flex items-center justify-between gap-3 transition-all duration-150 border shadow-2xs hover:shadow-sm ${
+                    className={`group cursor-pointer rounded-xl p-3 flex flex-col gap-2.5 transition-all duration-150 border shadow-2xs hover:shadow-sm ${
                       isSubSelected
                         ? 'bg-[#14372e]/5 border-[#14372e] ring-1 ring-[#14372e]'
                         : 'bg-white hover:bg-[#FDFEFE] border-[#E4E7EC] hover:border-[#14372e]/60'
                     }`}
                   >
-                    {/* قسم الأيقونة والتفاصيل على اليمين بتنسيق أفقي كامل */}
-                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                    {/* الصف العلوي: تحديد + أيقونة + الاسم كاملاً (يلتف على أكثر من سطر ولا يُقتطع) */}
+                    <div className="flex items-start gap-2.5 min-w-0">
                       <input
                         type="checkbox"
                         checked={isSubSelected}
                         onClick={(e) => e.stopPropagation()}
                         onChange={() => toggleSelectFolder(sub.id)}
-                        className="w-4 h-4 rounded accent-[#14372e] cursor-pointer shrink-0"
+                        className="w-4 h-4 mt-3 rounded accent-[#14372e] cursor-pointer shrink-0"
                         title="تحديد المجلد"
                       />
                       <div className="w-10 h-10 bg-emerald-50 text-[#14372e] rounded-xl flex items-center justify-center shrink-0 border border-emerald-100 group-hover:bg-[#14372e] group-hover:text-white transition-colors duration-150">
                         <Folder className="w-5 h-5 fill-current/20" />
                       </div>
-                      <div className="min-w-0 flex-1">
-                        <h4
-                          className="font-bold text-[14px] text-[#1B1F24] group-hover:text-[#14372e] truncate transition-colors leading-tight"
-                          title={sub.name}
-                          dir="auto"
-                        >
-                          {sub.name}
-                        </h4>
-                        <div className="flex items-center gap-1.5 text-[11px] text-[#667085] mt-1 font-medium">
-                          <span>{subFilesCount} ملف</span>
-                          {childFoldersCount > 0 && (
-                            <>
-                              <span>•</span>
-                              <span className="text-[#14372e]">{childFoldersCount} فرعي</span>
-                            </>
-                          )}
-                        </div>
-                      </div>
+                      <h4
+                        className="flex-1 min-w-0 font-bold text-[14px] text-[#1B1F24] group-hover:text-[#14372e] break-words whitespace-normal transition-colors leading-snug pt-0.5"
+                        title={sub.name}
+                        dir="auto"
+                      >
+                        {sub.name}
+                      </h4>
                     </div>
 
-                    {/* أدوات الإجراءات السريعة على اليسار */}
-                    <div className="flex items-center gap-0.5 shrink-0 opacity-80 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
-                      {canMoveFolder(sub.path) && (
-                        <button
-                          onClick={() =>
-                            openMoveDialog({
-                              folderIds: [sub.id],
-                              label: `المجلد: ${sub.name}`,
-                              sourceDept: sub.department,
-                            })
-                          }
-                          className="p-1.5 text-[#667085] hover:text-[#1B1F24] hover:bg-[#F2F4F7] rounded-md transition"
-                          title="نقل المجلد"
-                        >
-                          <Move className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                      {canRenameFolder(sub.path) && (
-                        <button
-                          onClick={() => {
-                            setItemToRename({ id: sub.id, name: sub.name, isFolder: true });
-                            setNewRenameValue(sub.name);
-                            setShowRenameModal(true);
-                          }}
-                          className="p-1.5 text-[#667085] hover:text-[#14372e] hover:bg-emerald-50 rounded-md transition"
-                          title="إعادة تسمية المجلد"
-                        >
-                          <Edit3 className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                      {canDeleteFolder(sub.path) && (
-                        <button
-                          onClick={() => handleMoveFolderToTrash(sub)}
-                          className="p-1.5 text-[#667085] hover:text-[#F04438] hover:bg-rose-50 rounded-md transition"
-                          title="نقل للمحذوفات"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      )}
+                    {/* الصف السفلي: عدد الملفات + أدوات الإجراءات السريعة */}
+                    <div className="flex items-center justify-between gap-2 pt-2 border-t border-[#EEF0F3]">
+                      <div className="flex items-center gap-1.5 text-[11px] text-[#667085] font-medium min-w-0">
+                        <span className="whitespace-nowrap">{subFilesCount} ملف</span>
+                        {childFoldersCount > 0 && (
+                          <>
+                            <span>•</span>
+                            <span className="text-[#14372e] whitespace-nowrap">{childFoldersCount} فرعي</span>
+                          </>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-0.5 shrink-0 opacity-80 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+                        {canMoveFolder(sub.path) && (
+                          <button
+                            onClick={() =>
+                              openMoveDialog({
+                                folderIds: [sub.id],
+                                label: `المجلد: ${sub.name}`,
+                                sourceDept: sub.department,
+                              })
+                            }
+                            className="p-1.5 text-[#667085] hover:text-[#1B1F24] hover:bg-[#F2F4F7] rounded-md transition"
+                            title="نقل المجلد"
+                          >
+                            <Move className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                        {canRenameFolder(sub.path) && (
+                          <button
+                            onClick={() => {
+                              setItemToRename({ id: sub.id, name: sub.name, isFolder: true });
+                              setNewRenameValue(sub.name);
+                              setShowRenameModal(true);
+                            }}
+                            className="p-1.5 text-[#667085] hover:text-[#14372e] hover:bg-emerald-50 rounded-md transition"
+                            title="إعادة تسمية المجلد"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                        {canDeleteFolder(sub.path) && (
+                          <button
+                            onClick={() => handleMoveFolderToTrash(sub)}
+                            className="p-1.5 text-[#667085] hover:text-[#F04438] hover:bg-rose-50 rounded-md transition"
+                            title="نقل للمحذوفات"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 );
