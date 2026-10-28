@@ -16,6 +16,16 @@ export default function PwaRegistrar() {
         navigator.serviceWorker.register('/sw.js').then(
           (reg) => {
             console.log('[PWA] ServiceWorker registered with scope:', reg.scope);
+            reg.onupdatefound = () => {
+              const installingWorker = reg.installing;
+              if (installingWorker) {
+                installingWorker.onstatechange = () => {
+                  if (installingWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                    window.location.reload();
+                  }
+                };
+              }
+            };
           },
           (err) => {
             console.log('[PWA] ServiceWorker registration failed:', err);

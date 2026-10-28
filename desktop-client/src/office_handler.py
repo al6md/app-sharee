@@ -69,13 +69,52 @@ class OfficeHandler:
             pass
 
     @staticmethod
-    def _bring_window_to_front(filepath):
+    def get_office_executable(suffix):
+        """البحث عن المسار المباشر لبرامج Office (Word, Excel, Access) في النظام لتشغيلها مباشرة بأقصى سرعة"""
+        suffix = suffix.lower()
+        app_key = None
+        if suffix in ['.docx', '.doc', '.rtf', '.odt']:
+            app_key = 'winword.exe'
+        elif suffix in ['.xlsx', '.xls', '.csv', '.ods']:
+            app_key = 'excel.exe'
+        elif suffix in ['.accdb', '.mdb']:
+            app_key = 'msaccess.exe'
+
+        if not app_key or sys.platform != 'win32':
+            return None
+
+        # 1. فحص سجل ويندوز (Registry App Paths)
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{app_key}") as key:
+                val, _ = winreg.QueryValueEx(key, "")
+                if val and os.path.exists(val):
+                    return val
+        except Exception:
+            pass
+
+        # 2. فحص مسارات التثبيت الشائعة لـ Office (Click-to-Run و Program Files)
+        common_candidates = [
+            rf"C:\Program Files\Microsoft Office\Root\Office16\{app_key.upper()}",
+            rf"C:\Program Files (x86)\Microsoft Office\Root\Office16\{app_key.upper()}",
+            rf"C:\Program Files\Microsoft Office\Office16\{app_key.upper()}",
+            rf"C:\Program Files (x86)\Microsoft Office\Office16\{app_key.upper()}",
+            rf"C:\Program Files\Microsoft Office\Root\Office15\{app_key.upper()}",
+            rf"C:\Program Files (x86)\Microsoft Office\Root\Office15\{app_key.upper()}",
+        ]
+        for cand in common_candidates:
+            if os.path.exists(cand):
+                return cand
+
+        return None
+
+    @staticmethod
+    def _bring_window_to_front(filepath, synchronous=False):
         """
         إحضار نافذة البرنامج المفتوح (Word, Excel, Access) فورياً إلى الواجهة مباشرة أمام المستخدم
         (Foreground Focus) ومنع بقائها مصغرة أو وميضها في شريط المهام بالأسفل فقط.
         """
-        import threading
-        def _worker():
+        def _activate_loop():
             import time
             from pathlib import Path
             p = Path(filepath)
@@ -102,7 +141,14 @@ class OfficeHandler:
             user32 = ctypes.windll.user32
             kernel32 = ctypes.windll.kernel32
 
-            # محاولة متكررة خلال 3.5 ثوانٍ لالتقاط نافذة البرنامج فور فتحها
+            # رفع قيود ويندوز فوراً
+            try:
+                user32.LockSetForegroundWindow(2)   # LSFW_UNLOCK
+                user32.AllowSetForegroundWindow(-1) # ASFW_ANY
+            except Exception:
+                pass
+
+            # محاولة متكررة حتى 3.5 ثوانٍ لالتقاط نافذة البرنامج فور فتحها
             found_hwnd = None
             for _ in range(35):
                 time.sleep(0.1)
@@ -116,7 +162,7 @@ class OfficeHandler:
                 if found_hwnd:
                     break
 
-                # 2. البحث عبر عنوان النافذة (Window Title)
+                # 2. البحث عبر نافذة مطابقة لاسم المستند أو اسم التطبيق
                 candidate_hwnds = []
                 def _enum_cb(hwnd, _):
                     if user32.IsWindowVisible(hwnd):
@@ -141,20 +187,23 @@ class OfficeHandler:
                 if user32.IsIconic(found_hwnd):
                     user32.ShowWindow(found_hwnd, 9)  # SW_RESTORE
                 else:
-                    user32.ShowWindow(found_hwnd, 3)  # SW_MAXIMIZE أو SW_SHOW (5)
+                    user32.ShowWindow(found_hwnd, 3)  # SW_MAXIMIZE
 
                 # 2. كسر قفل منع سرقة التركيز في ويندوز (AttachThreadInput)
                 fore_hwnd = user32.GetForegroundWindow()
                 fore_thread = user32.GetWindowThreadProcessId(fore_hwnd, None)
+                target_thread = user32.GetWindowThreadProcessId(found_hwnd, None)
                 curr_thread = kernel32.GetCurrentThreadId()
 
                 if fore_thread != curr_thread and fore_thread != 0:
                     user32.AttachThreadInput(curr_thread, fore_thread, True)
+                    user32.AttachThreadInput(curr_thread, target_thread, True)
                     user32.BringWindowToTop(found_hwnd)
                     user32.SetForegroundWindow(found_hwnd)
                     if hasattr(user32, 'SwitchToThisWindow'):
                         user32.SwitchToThisWindow(found_hwnd, True)
                     user32.AttachThreadInput(curr_thread, fore_thread, False)
+                    user32.AttachThreadInput(curr_thread, target_thread, False)
                 else:
                     user32.BringWindowToTop(found_hwnd)
                     user32.SetForegroundWindow(found_hwnd)
@@ -163,9 +212,9 @@ class OfficeHandler:
 
                 # 3. محاكاة مفتاح Alt لنقل التركيز القسري رغماً عن قيود ويندوز
                 user32.keybd_event(0x12, 0, 0, 0)
+                user32.keybd_event(0x12, 0, 2, 0)
                 user32.SetForegroundWindow(found_hwnd)
                 user32.BringWindowToTop(found_hwnd)
-                user32.keybd_event(0x12, 0, 2, 0)
 
             # 4. تشغيل WScript.Shell AppActivate في الخلفية كضمانة إضافية للبرامج الشهيرة
             try:
@@ -178,10 +227,14 @@ class OfficeHandler:
             except Exception:
                 pass
 
-        threading.Thread(target=_worker, daemon=True).start()
+        if synchronous:
+            _activate_loop()
+        else:
+            import threading
+            threading.Thread(target=_activate_loop, daemon=True).start()
 
     @staticmethod
-    def open_native_file(filepath):
+    def open_native_file(filepath, synchronous=False):
         """
         فتح الملف باستخدام البرنامج الافتراضي الأصلي المثبت على جهاز Windows:
         - Word لملفات .docx
@@ -199,22 +252,32 @@ class OfficeHandler:
         path_str = str(path)
 
         if sys.platform == 'win32':
-            # الطريقة الأولى: استدعاء نظام الويندوز المباشر مع تفعيل الظهور المباشر أمام المستخدم
+            # التحقق أولاً من وجود المسار المباشر للبرنامج (Word / Excel / Access)
+            exe_path = OfficeHandler.get_office_executable(path.suffix)
+            if exe_path and os.path.exists(exe_path):
+                try:
+                    subprocess.Popen([exe_path, path_str])
+                    OfficeHandler._bring_window_to_front(path_str, synchronous=synchronous)
+                    return True
+                except Exception as e_direct:
+                    print(f"[OfficeHandler Direct Launch Warning]: {e_direct}")
+
+            # الطريقة الثانية: استدعاء نظام الويندوز المباشر مع تفعيل الظهور المباشر أمام المستخدم
             try:
                 os.startfile(path_str)
-                OfficeHandler._bring_window_to_front(path_str)
+                OfficeHandler._bring_window_to_front(path_str, synchronous=synchronous)
                 return True
             except Exception as e_startfile:
-                # الطريقة الثانية البديلة: استدعاء أمر التشغيل في cmd
+                # الطريقة الثالثة البديلة: استدعاء أمر التشغيل في cmd
                 try:
                     subprocess.Popen(f'cmd /c start "" "{path_str}"', shell=True)
-                    OfficeHandler._bring_window_to_front(path_str)
+                    OfficeHandler._bring_window_to_front(path_str, synchronous=synchronous)
                     return True
                 except Exception as e_cmd:
-                    # الطريقة الثالثة: عبر powershell Start-Process
+                    # الطريقة الرابعة: عبر powershell Start-Process
                     try:
                         subprocess.Popen(['powershell', '-Command', f'Start-Process -FilePath "{path_str}"'], shell=True)
-                        OfficeHandler._bring_window_to_front(path_str)
+                        OfficeHandler._bring_window_to_front(path_str, synchronous=synchronous)
                         return True
                     except Exception as e_ps:
                         raise RuntimeError(f"تعذر فتح الملف بالبرنامج الأصلي: {e_startfile} | {e_cmd} | {e_ps}")

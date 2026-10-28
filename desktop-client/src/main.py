@@ -307,8 +307,13 @@ def main():
                     print(f"[CLI Download Error]: {dl_err}")
 
             if target_cand and target_cand.exists():
-                OfficeHandler.open_native_file(str(target_cand))
-                time.sleep(0.5)
+                OfficeHandler.open_native_file(str(target_cand), synchronous=True)
+                # تشغيل تطبيق الحاسوب في صينية النظام (System Tray) ليبقى متصلاً ومتاحاً للطلبات التالية
+                try:
+                    if getattr(sys, 'frozen', False):
+                        subprocess.Popen([sys.executable], creationflags=getattr(subprocess, 'DETACHED_PROCESS', 0x00000008))
+                except Exception:
+                    pass
                 sys.exit(0)
             else:
                 app_err = QApplication(sys.argv)
