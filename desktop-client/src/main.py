@@ -308,6 +308,7 @@ def main():
 
             if target_cand and target_cand.exists():
                 OfficeHandler.open_native_file(str(target_cand))
+                time.sleep(0.5)
                 sys.exit(0)
             else:
                 app_err = QApplication(sys.argv)

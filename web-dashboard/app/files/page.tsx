@@ -2853,7 +2853,7 @@ export default function FilesPage() {
 
           {/* شبكة المجلدات الفرعية بتصميم متناسق وعريض يمنع تكسير الكلمات نهائياً */}
           {visibleSubfolders.length > 0 && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3.5 pt-1">
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(270px,1fr))] gap-4 pt-1">
               {visibleSubfolders.map((sub) => {
                 const subFilesCount = folderFilesCountMap.get(sub.path) || 0;
                 const childFoldersCount = folderChildsCountMap.get(sub.path) || 0;
@@ -2862,7 +2862,7 @@ export default function FilesPage() {
                   <div
                     key={sub.id}
                     onClick={() => handleSelectDepartment(sub.department, sub.path)}
-                    className={`group cursor-pointer rounded-xl p-4 flex flex-col justify-between gap-3 transition-all duration-150 border shadow-2xs hover:shadow-sm ${
+                    className={`group cursor-pointer rounded-xl p-4 flex flex-col justify-between gap-3.5 min-h-[145px] transition-all duration-150 border shadow-2xs hover:shadow-sm ${
                       isSubSelected
                         ? 'bg-[#14372e]/5 border-[#14372e] ring-1 ring-[#14372e]'
                         : 'bg-white hover:bg-[#FDFEFE] border-[#E4E7EC] hover:border-[#14372e]/60'

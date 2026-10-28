@@ -69,12 +69,125 @@ class OfficeHandler:
             pass
 
     @staticmethod
+    def _bring_window_to_front(filepath):
+        """
+        إحضار نافذة البرنامج المفتوح (Word, Excel, Access) فورياً إلى الواجهة مباشرة أمام المستخدم
+        (Foreground Focus) ومنع بقائها مصغرة أو وميضها في شريط المهام بالأسفل فقط.
+        """
+        import threading
+        def _worker():
+            import time
+            from pathlib import Path
+            p = Path(filepath)
+            ext = p.suffix.lower()
+            stem = p.stem.lower()
+
+            target_classes = []
+            app_names = []
+            if ext in ['.docx', '.doc', '.rtf', '.odt']:
+                target_classes.append('OpusApp')
+                app_names.extend(['Word', 'Microsoft Word', 'WINWORD'])
+            elif ext in ['.xlsx', '.xls', '.csv', '.ods']:
+                target_classes.append('XLMAIN')
+                app_names.extend(['Excel', 'Microsoft Excel'])
+            elif ext in ['.accdb', '.mdb']:
+                target_classes.append('OMain')
+                app_names.extend(['Access', 'Microsoft Access'])
+
+            if sys.platform != 'win32':
+                return
+
+            import ctypes
+            import ctypes.wintypes
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+
+            # محاولة متكررة خلال 3.5 ثوانٍ لالتقاط نافذة البرنامج فور فتحها
+            found_hwnd = None
+            for _ in range(35):
+                time.sleep(0.1)
+
+                # 1. البحث السريع عبر فئة النافذة (Class Name)
+                for cname in target_classes:
+                    h = user32.FindWindowW(cname, None)
+                    if h and user32.IsWindowVisible(h):
+                        found_hwnd = h
+                        break
+                if found_hwnd:
+                    break
+
+                # 2. البحث عبر عنوان النافذة (Window Title)
+                candidate_hwnds = []
+                def _enum_cb(hwnd, _):
+                    if user32.IsWindowVisible(hwnd):
+                        length = user32.GetWindowTextLengthW(hwnd)
+                        if length > 0:
+                            buf = ctypes.create_unicode_buffer(length + 1)
+                            user32.GetWindowTextW(hwnd, buf, length + 1)
+                            t = buf.value.lower()
+                            if stem in t or any(a.lower() in t for a in app_names):
+                                candidate_hwnds.append(hwnd)
+                                return 0
+                    return 1
+
+                CB = ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)(_enum_cb)
+                user32.EnumWindows(CB, 0)
+                if candidate_hwnds:
+                    found_hwnd = candidate_hwnds[0]
+                    break
+
+            if found_hwnd:
+                # 1. استعادة النافذة وتكبيرها فوراً إذا كانت مصغرة في شريط المهام
+                if user32.IsIconic(found_hwnd):
+                    user32.ShowWindow(found_hwnd, 9)  # SW_RESTORE
+                else:
+                    user32.ShowWindow(found_hwnd, 3)  # SW_MAXIMIZE أو SW_SHOW (5)
+
+                # 2. كسر قفل منع سرقة التركيز في ويندوز (AttachThreadInput)
+                fore_hwnd = user32.GetForegroundWindow()
+                fore_thread = user32.GetWindowThreadProcessId(fore_hwnd, None)
+                curr_thread = kernel32.GetCurrentThreadId()
+
+                if fore_thread != curr_thread and fore_thread != 0:
+                    user32.AttachThreadInput(curr_thread, fore_thread, True)
+                    user32.BringWindowToTop(found_hwnd)
+                    user32.SetForegroundWindow(found_hwnd)
+                    if hasattr(user32, 'SwitchToThisWindow'):
+                        user32.SwitchToThisWindow(found_hwnd, True)
+                    user32.AttachThreadInput(curr_thread, fore_thread, False)
+                else:
+                    user32.BringWindowToTop(found_hwnd)
+                    user32.SetForegroundWindow(found_hwnd)
+                    if hasattr(user32, 'SwitchToThisWindow'):
+                        user32.SwitchToThisWindow(found_hwnd, True)
+
+                # 3. محاكاة مفتاح Alt لنقل التركيز القسري رغماً عن قيود ويندوز
+                user32.keybd_event(0x12, 0, 0, 0)
+                user32.SetForegroundWindow(found_hwnd)
+                user32.BringWindowToTop(found_hwnd)
+                user32.keybd_event(0x12, 0, 2, 0)
+
+            # 4. تشغيل WScript.Shell AppActivate في الخلفية كضمانة إضافية للبرامج الشهيرة
+            try:
+                for app in app_names:
+                    subprocess.Popen(
+                        ['powershell', '-WindowStyle', 'Hidden', '-Command',
+                         f'$ws = New-Object -ComObject WScript.Shell; $ws.AppActivate("{app}")'],
+                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+                    )
+            except Exception:
+                pass
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    @staticmethod
     def open_native_file(filepath):
         """
         فتح الملف باستخدام البرنامج الافتراضي الأصلي المثبت على جهاز Windows:
         - Word لملفات .docx
         - Excel لملفات .xlsx
         - Access لملفات .accdb
+        مع إحضار نافذة البرنامج فورياً إلى الواجهة أمام المستخدم مباشرة.
         """
         path = Path(filepath).resolve()
         if not path.exists():
@@ -86,19 +199,22 @@ class OfficeHandler:
         path_str = str(path)
 
         if sys.platform == 'win32':
-            # الطريقة الأولى: استدعاء نظام الويندوز المباشر
+            # الطريقة الأولى: استدعاء نظام الويندوز المباشر مع تفعيل الظهور المباشر أمام المستخدم
             try:
                 os.startfile(path_str)
+                OfficeHandler._bring_window_to_front(path_str)
                 return True
             except Exception as e_startfile:
                 # الطريقة الثانية البديلة: استدعاء أمر التشغيل في cmd
                 try:
                     subprocess.Popen(f'cmd /c start "" "{path_str}"', shell=True)
+                    OfficeHandler._bring_window_to_front(path_str)
                     return True
                 except Exception as e_cmd:
                     # الطريقة الثالثة: عبر powershell Start-Process
                     try:
                         subprocess.Popen(['powershell', '-Command', f'Start-Process -FilePath "{path_str}"'], shell=True)
+                        OfficeHandler._bring_window_to_front(path_str)
                         return True
                     except Exception as e_ps:
                         raise RuntimeError(f"تعذر فتح الملف بالبرنامج الأصلي: {e_startfile} | {e_cmd} | {e_ps}")
