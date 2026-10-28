@@ -1636,21 +1636,31 @@ export default function FilesPage() {
       type: 'info'
     });
 
+    let openedViaBridge = false;
+
     // أولاً: استدعاء خادم الجسر المحلي لتطبيق الويندوز share coc على المنفذ 18290
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 4000);
-      const bridgeUrl = `http://127.0.0.1:18290/open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder)}&storage_path=${encodeURIComponent(file.storagePath)}`;
+      const timeoutId = setTimeout(() => controller.abort(), 2000);
+      const bridgeUrl = `http://127.0.0.1:18290/open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder)}&storage_path=${encodeURIComponent(file.storagePath || file.id)}`;
       const res = await fetch(bridgeUrl, { signal: controller.signal });
       clearTimeout(timeoutId);
 
       if (res.ok) {
         const result = await res.json();
         if (result.success) {
-          setToastMessage({
-            text: `🚀 تم تشغيل برنامج ${officeName} الأصلي وفتح المستند بنجاح!`,
-            type: 'success'
-          });
+          openedViaBridge = true;
+          if (result.status === 'downloading') {
+            setToastMessage({
+              text: `⏳ جاري تنزيل "${file.name}" وسيقوم تطبيق Share COC بتشغيل برنامج ${officeName} فوراً...`,
+              type: 'info'
+            });
+          } else {
+            setToastMessage({
+              text: `🚀 تم تشغيل برنامج ${officeName} الأصلي وفتح المستند بنجاح!`,
+              type: 'success'
+            });
+          }
           return;
         }
       }
@@ -1658,23 +1668,29 @@ export default function FilesPage() {
       // إذا لم يكن الجسر المحلي يعمل أو تأخر
     }
 
-    // ثانياً: استدعاء بروتوكول الويندوز المسجل sharecoc:// لتشغيل التطبيق والملف
-    try {
-      const iframe = document.createElement('iframe');
-      iframe.style.display = 'none';
-      iframe.src = `sharecoc://open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder)}&storage_path=${encodeURIComponent(file.storagePath)}`;
-      document.body.appendChild(iframe);
-      setTimeout(() => {
-        try { document.body.removeChild(iframe); } catch {}
-      }, 2500);
-    } catch {}
+    // ثانياً: إذا لم يستجب الجسر المحلي (مثلاً لأن التطبيق غير مشغل على هذا الحاسوب)
+    // نضمن أن الملف يفتح فوراً عبر تشغيل البروتوكول وتنزيل نسخة للمستخدم
+    if (!openedViaBridge) {
+      try {
+        const protocolUrl = `sharecoc://open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder)}&storage_path=${encodeURIComponent(file.storagePath || file.id)}`;
+        window.location.assign(protocolUrl);
+      } catch {}
 
-    setTimeout(() => {
-      setToastMessage({
-        text: `💡 نصيحة: تطبيق share coc يقوم بفتح ملفات Office على الكمبيوتر فوراً وبدون تحميل.`,
-        type: 'info'
-      });
-    }, 1800);
+      // تنزيل الملف فوراً حتى لا يبقى المستخدم عالقاً أبداً
+      setTimeout(() => {
+        setToastMessage({
+          text: `📥 جاري تنزيل "${file.name}" مباشرة لفتحه في برنامج ${officeName}...`,
+          type: 'info'
+        });
+        const downloadUrl = `/api/drive/stream?id=${encodeURIComponent(file.id)}&download=1`;
+        const a = document.createElement('a');
+        a.href = downloadUrl;
+        a.download = file.name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }, 1200);
+    }
   };
 
   // تشغيل المستند في تطبيق الهاتف الأصلي (Word / Excel / WPS) عبر Web Share مع نوع MIME دقيق
@@ -1806,8 +1822,25 @@ export default function FilesPage() {
       return;
     }
 
-    transferAbortedRef.current = false;
     const downloadUrl = `/api/drive/stream?id=${encodeURIComponent(file.id)}&download=1`;
+
+    // للملفات الكبيرة (أكبر من 30 ميجابايت وخاصة قواعد بيانات Access):
+    // استخدام التنزيل المباشر للمتصفح لمنع حشو ذاكرة الرام وضمان أقصى سرعة ممكنة
+    if ((file.rawSize || 0) > 30 * 1024 * 1024) {
+      setToastMessage({
+        text: `📥 جاري تنزيل "${file.name}" مباشرة عبر المتصفح...`,
+        type: 'info'
+      });
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      a.download = file.name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      return;
+    }
+
+    transferAbortedRef.current = false;
     const initialSize = Math.max(1, file.rawSize || 0);
     const progressUpdater = createProgressUpdater(1, initialSize, 'download');
     progressUpdater(0, file.name, initialSize, 0);
@@ -1871,8 +1904,13 @@ export default function FilesPage() {
         return;
       }
       setUploadProgress(null);
-      // في حال فشل XHR لأي سبب في متصفح قديم، نفتح الرابط المباشر كاحتياط
-      window.open(downloadUrl, '_blank');
+      // في حال فشل XHR لأي سبب، استخدام التنزيل المباشر كبديل فوري موثوق 100%
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      a.download = file.name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
     }
   };
   // 4. إظهار الملف داخل مجلد الويندوز (Reveal in Explorer)

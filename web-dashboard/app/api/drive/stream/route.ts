@@ -5,6 +5,14 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
 const EXT_MIME_MAP: Record<string, string> = {
+  accdb: 'application/msaccess',
+  mdb: 'application/msaccess',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  doc: 'application/msword',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  xls: 'application/vnd.ms-excel',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  ppt: 'application/vnd.ms-powerpoint',
   jpg: 'image/jpeg',
   jpeg: 'image/jpeg',
   png: 'image/png',
@@ -26,6 +34,9 @@ const EXT_MIME_MAP: Record<string, string> = {
   txt: 'text/plain; charset=utf-8',
   csv: 'text/csv; charset=utf-8',
   json: 'application/json; charset=utf-8',
+  zip: 'application/zip',
+  rar: 'application/x-rar-compressed',
+  '7z': 'application/x-7z-compressed',
 };
 
 export async function GET(req: NextRequest) {

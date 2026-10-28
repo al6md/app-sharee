@@ -88,22 +88,39 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
                 return
 
             try:
-                target_path = self._find_or_download_file(file_name, folder_name, storage_path)
-                if not target_path or not target_path.exists():
-                    self._set_headers(404)
+                # 1. إذا كان الملف موجوداً محلياً، فتحه فوراً بالبرنامج الأصلي
+                target_path = self._find_local_file(file_name, folder_name)
+                if target_path and target_path.exists():
+                    OfficeHandler.open_native_file(str(target_path))
+                    self._set_headers(200)
                     self.wfile.write(json.dumps({
-                        "success": False,
-                        "error": f"الملف '{file_name}' غير موجود ولم نتمكن من تنزيله من السحابة."
+                        "success": True,
+                        "status": "opened",
+                        "message": f"تم فتح المستند '{file_name}' في البرنامج الأصلي بنجاح.",
+                        "path": str(target_path)
                     }, ensure_ascii=False).encode('utf-8'))
                     return
 
-                OfficeHandler.open_native_file(str(target_path))
+                # 2. إذا لم يكن موجوداً محلياً، بدء التنزيل في خيط خلفي والرد فوراً للمتصفح لتفادي انقطاع الاتصال
+                if self.cloud_client:
+                    threading.Thread(
+                        target=self._download_and_open_worker,
+                        args=(file_name, folder_name, storage_path),
+                        daemon=True
+                    ).start()
+                    self._set_headers(200)
+                    self.wfile.write(json.dumps({
+                        "success": True,
+                        "status": "downloading",
+                        "message": f"جاري تنزيل '{file_name}' من السحابة وسيتم تشغيله تلقائياً في البرنامج الأصلي فور اكتماله...",
+                        "path": None
+                    }, ensure_ascii=False).encode('utf-8'))
+                    return
 
-                self._set_headers(200)
+                self._set_headers(404)
                 self.wfile.write(json.dumps({
-                    "success": True,
-                    "message": f"تم فتح المستند '{file_name}' في البرنامج الأصلي بنجاح.",
-                    "path": str(target_path)
+                    "success": False,
+                    "error": f"الملف '{file_name}' غير موجود محلياً ولا يتوفر اتصال سحابي."
                 }, ensure_ascii=False).encode('utf-8'))
             except Exception as e:
                 self._set_headers(500)
@@ -140,6 +157,49 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
 
         self._set_headers(404)
         self.wfile.write(json.dumps({"error": "endpoint not found"}).encode('utf-8'))
+
+    def _find_local_file(self, file_name, folder_name=""):
+        if not self.sync_folder:
+            return None
+
+        import re
+        def clean_bidi(s):
+            return re.sub(r'[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]', '', str(s)).strip()
+
+        clean_file = clean_bidi(file_name)
+        base = Path(self.sync_folder)
+        norm_folder = folder_name.replace("\\", "/").strip("/") if folder_name and folder_name not in ('__ALL__', 'المجلد العام') else ""
+
+        # 1. فحص المسار المباشر داخل المجلد المحدد (يدعم المجلدات الفرعية المتداخلة)
+        if norm_folder:
+            clean_folder = "/".join(clean_bidi(p) for p in norm_folder.split("/"))
+            for cand in [base / norm_folder / file_name, base / clean_folder / clean_file, base / norm_folder / clean_file]:
+                if cand.exists() and cand.is_file():
+                    return cand
+
+        # 2. فحص المسار المباشر في جذر مجلد المزامنة
+        for cand in [base / file_name, base / clean_file]:
+            if cand.exists() and cand.is_file():
+                return cand
+
+        # 3. بحث متكرر عن الملف في المجلدات الفرعية
+        target_lower = clean_file.lower()
+        for sub in base.rglob("*"):
+            if sub.is_file() and ".trash" not in sub.parts:
+                if sub.name == file_name or clean_bidi(sub.name).lower() == target_lower:
+                    return sub
+
+        return None
+
+    def _download_and_open_worker(self, file_name, folder_name="", storage_path=""):
+        """تنزيل الملف في الخلفية وتشغيله بالبرنامج الأصلي فور اكتماله بدون تجميد اتصال الويب"""
+        try:
+            target_path = self._find_or_download_file(file_name, folder_name, storage_path)
+            if target_path and target_path.exists():
+                OfficeHandler.open_native_file(str(target_path))
+                print(f"[LocalBridge] Successfully opened '{file_name}' via background worker.")
+        except Exception as e:
+            print(f"[LocalBridge] Error opening '{file_name}' in background worker: {e}")
 
     def _find_or_download_file(self, file_name, folder_name="", storage_path=""):
         if not self.sync_folder:
