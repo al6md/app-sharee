@@ -1686,9 +1686,11 @@ export default function FilesPage() {
       return;
     }
 
-    // إذا كان الملف صورة أو PDF أو فيديو أو صوت: فتح عارض الوسائط المدمج فوراً (Lightbox Preview)
+    // فتح نافذة المعاينة والتحكم فورياً أمام المستخدم على الشاشة
+    setPreviewFile(file);
+
+    // للوسائط و PDF، المعاينة كافية
     if (['image', 'pdf', 'video', 'audio'].includes(file.type)) {
-      setPreviewFile(file);
       return;
     }
 
@@ -2853,7 +2855,7 @@ export default function FilesPage() {
 
           {/* شبكة المجلدات الفرعية بتصميم متناسق وعريض يمنع تكسير الكلمات نهائياً */}
           {visibleSubfolders.length > 0 && (
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(270px,1fr))] gap-4 pt-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 pt-1">
               {visibleSubfolders.map((sub) => {
                 const subFilesCount = folderFilesCountMap.get(sub.path) || 0;
                 const childFoldersCount = folderChildsCountMap.get(sub.path) || 0;
@@ -2862,89 +2864,83 @@ export default function FilesPage() {
                   <div
                     key={sub.id}
                     onClick={() => handleSelectDepartment(sub.department, sub.path)}
-                    className={`group cursor-pointer rounded-xl p-4 flex flex-col justify-between gap-3.5 min-h-[145px] transition-all duration-150 border shadow-2xs hover:shadow-sm ${
+                    className={`group cursor-pointer rounded-xl p-3 flex items-center justify-between gap-3 transition-all duration-150 border shadow-2xs hover:shadow-sm ${
                       isSubSelected
                         ? 'bg-[#14372e]/5 border-[#14372e] ring-1 ring-[#14372e]'
                         : 'bg-white hover:bg-[#FDFEFE] border-[#E4E7EC] hover:border-[#14372e]/60'
                     }`}
                   >
-                    {/* الصف العلوي: التحديد وأيقونة المجلد على اليمين + أدوات الإجراءات السريعة على اليسار */}
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2.5">
-                        <input
-                          type="checkbox"
-                          checked={isSubSelected}
-                          onClick={(e) => e.stopPropagation()}
-                          onChange={() => toggleSelectFolder(sub.id)}
-                          className="w-4 h-4 rounded accent-[#14372e] cursor-pointer shrink-0"
-                          title="تحديد المجلد"
-                        />
-                        <div className="w-9 h-9 bg-emerald-50 text-[#14372e] rounded-lg flex items-center justify-center shrink-0 border border-emerald-100 group-hover:bg-[#14372e] group-hover:text-white transition-colors duration-150">
-                          <Folder className="w-5 h-5 fill-current/20" />
+                    {/* قسم الأيقونة والتفاصيل على اليمين بتنسيق أفقي كامل */}
+                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                      <input
+                        type="checkbox"
+                        checked={isSubSelected}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={() => toggleSelectFolder(sub.id)}
+                        className="w-4 h-4 rounded accent-[#14372e] cursor-pointer shrink-0"
+                        title="تحديد المجلد"
+                      />
+                      <div className="w-10 h-10 bg-emerald-50 text-[#14372e] rounded-xl flex items-center justify-center shrink-0 border border-emerald-100 group-hover:bg-[#14372e] group-hover:text-white transition-colors duration-150">
+                        <Folder className="w-5 h-5 fill-current/20" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <h4
+                          className="font-bold text-[14px] text-[#1B1F24] group-hover:text-[#14372e] truncate transition-colors leading-tight"
+                          title={sub.name}
+                          dir="auto"
+                        >
+                          {sub.name}
+                        </h4>
+                        <div className="flex items-center gap-1.5 text-[11px] text-[#667085] mt-1 font-medium">
+                          <span>{subFilesCount} ملف</span>
+                          {childFoldersCount > 0 && (
+                            <>
+                              <span>•</span>
+                              <span className="text-[#14372e]">{childFoldersCount} فرعي</span>
+                            </>
+                          )}
                         </div>
                       </div>
-
-                      <div className="flex items-center gap-0.5 shrink-0 opacity-80 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
-                        {canMoveFolder(sub.path) && (
-                          <button
-                            onClick={() =>
-                              openMoveDialog({
-                                folderIds: [sub.id],
-                                label: `المجلد: ${sub.name}`,
-                                sourceDept: sub.department,
-                              })
-                            }
-                            className="p-1.5 text-[#667085] hover:text-[#1B1F24] hover:bg-[#F2F4F7] rounded-md transition"
-                            title="نقل المجلد"
-                          >
-                            <Move className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                        {canRenameFolder(sub.path) && (
-                          <button
-                            onClick={() => {
-                              setItemToRename({ id: sub.id, name: sub.name, isFolder: true });
-                              setNewRenameValue(sub.name);
-                              setShowRenameModal(true);
-                            }}
-                            className="p-1.5 text-[#667085] hover:text-[#14372e] hover:bg-emerald-50 rounded-md transition"
-                            title="إعادة تسمية المجلد"
-                          >
-                            <Edit3 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                        {canDeleteFolder(sub.path) && (
-                          <button
-                            onClick={() => handleMoveFolderToTrash(sub)}
-                            className="p-1.5 text-[#667085] hover:text-[#F04438] hover:bg-rose-50 rounded-md transition"
-                            title="نقل للمحذوفات"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </div>
                     </div>
 
-                    {/* عنوان المجلد بكامل عرض البطاقة وبخط واضح وأنيق دون أي تكسير رأسي للحروف */}
-                    <div className="min-w-0 my-0.5">
-                      <h4
-                        className="font-bold text-[15px] text-[#1B1F24] group-hover:text-[#14372e] leading-snug line-clamp-2 break-normal transition-colors"
-                        title={sub.name}
-                        dir="auto"
-                      >
-                        {sub.name}
-                      </h4>
-                    </div>
-
-                    {/* أسفل البطاقة: عدد الملفات والمجلدات الفرعية بتنسيق منفصل وأنيق */}
-                    <div className="flex items-center justify-between text-xs text-[#667085] pt-2 border-t border-[#F2F4F7]">
-                      <span className="font-medium text-[#344054]">
-                        {subFilesCount} ملف
-                      </span>
-                      {childFoldersCount > 0 && (
-                        <span className="bg-[#F2F4F7] text-[#475467] px-2 py-0.5 rounded-full font-medium text-[11px]">
-                          {childFoldersCount} مجلد فرعي
-                        </span>
+                    {/* أدوات الإجراءات السريعة على اليسار */}
+                    <div className="flex items-center gap-0.5 shrink-0 opacity-80 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+                      {canMoveFolder(sub.path) && (
+                        <button
+                          onClick={() =>
+                            openMoveDialog({
+                              folderIds: [sub.id],
+                              label: `المجلد: ${sub.name}`,
+                              sourceDept: sub.department,
+                            })
+                          }
+                          className="p-1.5 text-[#667085] hover:text-[#1B1F24] hover:bg-[#F2F4F7] rounded-md transition"
+                          title="نقل المجلد"
+                        >
+                          <Move className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      {canRenameFolder(sub.path) && (
+                        <button
+                          onClick={() => {
+                            setItemToRename({ id: sub.id, name: sub.name, isFolder: true });
+                            setNewRenameValue(sub.name);
+                            setShowRenameModal(true);
+                          }}
+                          className="p-1.5 text-[#667085] hover:text-[#14372e] hover:bg-emerald-50 rounded-md transition"
+                          title="إعادة تسمية المجلد"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      {canDeleteFolder(sub.path) && (
+                        <button
+                          onClick={() => handleMoveFolderToTrash(sub)}
+                          className="p-1.5 text-[#667085] hover:text-[#F04438] hover:bg-rose-50 rounded-md transition"
+                          title="نقل للمحذوفات"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
                       )}
                     </div>
                   </div>
@@ -4317,6 +4313,31 @@ export default function FilesPage() {
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
+              {['word', 'excel', 'access'].includes(previewFile.type) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const protocolUrl = `sharecoc://open?file=${encodeURIComponent(previewFile.name)}&folder=${encodeURIComponent(previewFile.folder)}&storage_path=${encodeURIComponent(previewFile.storagePath || previewFile.id)}`;
+                    try {
+                      const iframe = document.createElement('iframe');
+                      iframe.style.display = 'none';
+                      iframe.src = protocolUrl;
+                      document.body.appendChild(iframe);
+                      setTimeout(() => { try { document.body.removeChild(iframe); } catch {} }, 1500);
+                    } catch {
+                      window.location.href = protocolUrl;
+                    }
+                    setToastMessage({
+                      text: `🚀 جاري تشغيل برنامج ${previewFile.type === 'word' ? 'Word' : previewFile.type === 'excel' ? 'Excel' : 'Access'} الأصلي...`,
+                      type: 'success'
+                    });
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[12px] font-bold transition flex items-center gap-1.5 shadow-sm"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>تشغيل في البرنامج الأصلي</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => handleDownloadFile(previewFile)}
@@ -4380,6 +4401,106 @@ export default function FilesPage() {
                   autoPlay
                   className="w-full"
                 />
+              </div>
+            )}
+
+            {(previewFile.type === 'word' || previewFile.type === 'excel') && (
+              <div className="w-full h-full flex flex-col items-center justify-center p-4">
+                <div className="bg-[#1B1F24] p-8 rounded-2xl border border-white/10 text-center space-y-5 max-w-lg w-full shadow-2xl">
+                  <div className="flex justify-center">
+                    {getFileIcon(previewFile.type, 'lg')}
+                  </div>
+                  <div>
+                    <h4 className="text-white font-bold text-lg leading-snug">{previewFile.name}</h4>
+                    <p className="text-xs text-white/60 mt-1 font-mono">
+                      {previewFile.folder} • {previewFile.size}
+                    </p>
+                  </div>
+
+                  <div className="flex flex-col gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const protocolUrl = `sharecoc://open?file=${encodeURIComponent(previewFile.name)}&folder=${encodeURIComponent(previewFile.folder)}&storage_path=${encodeURIComponent(previewFile.storagePath || previewFile.id)}`;
+                        try {
+                          const iframe = document.createElement('iframe');
+                          iframe.style.display = 'none';
+                          iframe.src = protocolUrl;
+                          document.body.appendChild(iframe);
+                          setTimeout(() => { try { document.body.removeChild(iframe); } catch {} }, 1500);
+                        } catch {
+                          window.location.href = protocolUrl;
+                        }
+                        setToastMessage({
+                          text: `🚀 جاري تشغيل برنامج ${previewFile.type === 'word' ? 'Word' : 'Excel'} الأصلي أمامك مباشرة...`,
+                          type: 'success'
+                        });
+                      }}
+                      className="w-full py-3.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm transition flex items-center justify-center gap-2 shadow-lg active:scale-98"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                      <span>تشغيل في برنامج {previewFile.type === 'word' ? 'Word' : 'Excel'} الأصلي أمامك</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadFile(previewFile)}
+                      className="w-full py-2.5 px-4 rounded-xl bg-white/10 hover:bg-white/20 text-white font-semibold text-xs transition flex items-center justify-center gap-2"
+                    >
+                      <Download className="w-4 h-4" />
+                      <span>تنزيل نسخة من الملف</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {previewFile.type === 'access' && (
+              <div className="w-full h-full flex flex-col items-center justify-center p-4">
+                <div className="bg-[#1B1F24] p-8 rounded-2xl border border-white/10 text-center space-y-5 max-w-lg w-full shadow-2xl">
+                  <div className="flex justify-center">
+                    {getFileIcon('access', 'lg')}
+                  </div>
+                  <div>
+                    <h4 className="text-white font-bold text-lg leading-snug">{previewFile.name}</h4>
+                    <p className="text-xs text-white/60 mt-1 font-mono">
+                      قاعدة بيانات Microsoft Access • {previewFile.size}
+                    </p>
+                  </div>
+
+                  <div className="flex flex-col gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const protocolUrl = `sharecoc://open?file=${encodeURIComponent(previewFile.name)}&folder=${encodeURIComponent(previewFile.folder)}&storage_path=${encodeURIComponent(previewFile.storagePath || previewFile.id)}`;
+                        try {
+                          const iframe = document.createElement('iframe');
+                          iframe.style.display = 'none';
+                          iframe.src = protocolUrl;
+                          document.body.appendChild(iframe);
+                          setTimeout(() => { try { document.body.removeChild(iframe); } catch {} }, 1500);
+                        } catch {
+                          window.location.href = protocolUrl;
+                        }
+                        setToastMessage({
+                          text: `🚀 جاري فتح قاعدة بيانات Access في البرنامج الأصلي...`,
+                          type: 'success'
+                        });
+                      }}
+                      className="w-full py-3.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-sm transition flex items-center justify-center gap-2 shadow-lg active:scale-98"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                      <span>تشغيل في برنامج Microsoft Access الأصلي</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadFile(previewFile)}
+                      className="w-full py-2.5 px-4 rounded-xl bg-white/10 hover:bg-white/20 text-white font-semibold text-xs transition flex items-center justify-center gap-2"
+                    >
+                      <Download className="w-4 h-4" />
+                      <span>تنزيل نسخة من قاعدة البيانات</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
           </div>
