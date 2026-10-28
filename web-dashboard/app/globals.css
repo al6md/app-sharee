@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=Cairo:wght@400;500;600;700;800&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -9,13 +9,18 @@
   --gov-dark: #0e2720;
   --gov-gold: #c59b27;
   --gov-light-gold: #ecd58a;
+  --bg-canvas: #F7F8FA;
+  --bg-surface: #FFFFFF;
+  --border-subtle: #E4E7EC;
+  --text-primary: #1B1F24;
+  --text-secondary: #667085;
 }
 
 body {
-  font-family: 'Cairo', 'Segoe UI', Tahoma, sans-serif !important;
-  background-color: #f4f7f6;
-  color: #0f172a;
-  line-height: 1.65;
+  font-family: 'IBM Plex Sans Arabic', 'Cairo', 'Segoe UI', Tahoma, sans-serif !important;
+  background-color: var(--bg-canvas);
+  color: var(--text-primary);
+  line-height: 1.6;
   letter-spacing: 0;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -24,5 +29,21 @@ body {
 }
 
 * {
-  font-family: 'Cairo', 'Segoe UI', Tahoma, sans-serif;
+  font-family: 'IBM Plex Sans Arabic', 'Cairo', 'Segoe UI', Tahoma, sans-serif;
+}
+
+/* شريط تمرير نظيف وهادئ */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #D0D5DD;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #98A2B3;
 }

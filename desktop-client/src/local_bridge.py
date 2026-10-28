@@ -23,6 +23,8 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
     cloud_client = None
     sync_engine = None
     show_window_callback = None
+    last_sync_time = 0.0
+    last_synced_file = ""
 
     def _set_headers(self, status=200, content_type='application/json'):
         self.send_response(status)
@@ -30,6 +32,8 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', '*')
+        self.send_header('Access-Control-Allow-Private-Network', 'true')
+        self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate')
         self.end_headers()
 
     def do_OPTIONS(self):
@@ -40,13 +44,15 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
         path = parsed.path
         params = urllib.parse.parse_qs(parsed.query)
 
-        if path == '/ping':
+        if path == '/ping' or path == '/status':
             self._set_headers(200)
             data = {
                 "status": "ok",
                 "app": "share coc",
-                "version": "3.0",
+                "version": "4.0",
                 "pid": os.getpid(),
+                "last_sync_time": getattr(LocalBridgeHandler, "last_sync_time", 0.0),
+                "last_synced_file": getattr(LocalBridgeHandler, "last_synced_file", ""),
                 "sync_folder": str(self.sync_folder) if self.sync_folder else None
             }
             self.wfile.write(json.dumps(data, ensure_ascii=False).encode('utf-8'))
@@ -92,6 +98,8 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
                 target_path = self._find_local_file(file_name, folder_name)
                 if target_path and target_path.exists():
                     OfficeHandler.open_native_file(str(target_path))
+                    if self.sync_engine and hasattr(self.sync_engine, 'watch_active_file'):
+                        self.sync_engine.watch_active_file(str(target_path))
                     self._set_headers(200)
                     self.wfile.write(json.dumps({
                         "success": True,
@@ -197,6 +205,8 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
             target_path = self._find_or_download_file(file_name, folder_name, storage_path)
             if target_path and target_path.exists():
                 OfficeHandler.open_native_file(str(target_path))
+                if self.sync_engine and hasattr(self.sync_engine, 'watch_active_file'):
+                    self.sync_engine.watch_active_file(str(target_path))
                 print(f"[LocalBridge] Successfully opened '{file_name}' via background worker.")
         except Exception as e:
             print(f"[LocalBridge] Error opening '{file_name}' in background worker: {e}")

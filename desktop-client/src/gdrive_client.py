@@ -1205,6 +1205,7 @@ class GoogleDriveClient:
             return False
         except Exception as e:
             _safe_log(f"[GDRIVE CHANGES POLL ERROR]: {e}")
+            self._changes_page_token = None
             return False
 
     def rename_file(self, old_file_path, new_name):

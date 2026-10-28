@@ -491,7 +491,7 @@ class GovFileCard(QFrame):
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(10)
 
-        # 1. الصف العلوي: مربع التحديد + الأيقونة/المصغرة + الشارات الرسمية
+        # 1. الصف العلوي: مربع التحديد + الأيقونة الواضحة + شارة النوع والحالة
         top_row = QHBoxLayout()
         top_row.setSpacing(10)
 
@@ -510,59 +510,47 @@ class GovFileCard(QFrame):
         badge_col.setSpacing(4)
 
         if self.is_folder:
-            app_text = "📁 مجلد مستندات"
-            badge_style = "background: #fefce8; color: #854d0e; border: 1px solid #fef08a;"
-            status_text = f"📁 {self.file_data.get('item_count', 0)} عنصر داخل المجلد"
-            status_style = "background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0;"
+            app_text = "مجلد"
+            badge_style = "background: #EDF5F2; color: #14372e; border: 1px solid #CBE3DA;"
+            status_text = f"{self.file_data.get('item_count', 0)} عنصر"
+            status_style = "background: #F7F8FA; color: #667085; border: 1px solid #E4E7EC;"
         else:
             tkey = get_type_key(self.file_name, is_folder=False)
-            if tkey == 'word':
-                app_text = "Word • مستند رسمي"
-                badge_style = "background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe;"
-            elif tkey == 'excel':
-                app_text = "Excel • جدول مالي"
-                badge_style = "background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0;"
-            elif tkey == 'access':
-                app_text = "Access • قاعدة بيانات"
-                badge_style = "background: #fef2f2; color: #991b1b; border: 1px solid #fecaca;"
-            elif tkey == 'pdf':
-                app_text = "PDF • وثيقة رسمية"
-                badge_style = "background: #fff1f2; color: #9f1239; border: 1px solid #fecdd3;"
-            elif tkey == 'image':
-                app_text = "صورة • وثيقة مصورة"
-                badge_style = "background: #f5f3ff; color: #6d28d9; border: 1px solid #ddd6fe;"
-            elif tkey == 'video':
-                app_text = "فيديو • وسائط مرئية"
-                badge_style = "background: #eef2ff; color: #4338ca; border: 1px solid #c7d2fe;"
-            elif tkey == 'audio':
-                app_text = "صوت • تسجيل صوتي"
-                badge_style = "background: #fdf2f8; color: #be185d; border: 1px solid #fbcfe8;"
-            elif tkey == 'archive':
-                app_text = "أرشيف مضغوط 📦"
-                badge_style = "background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa;"
-            else:
-                app_text = "مستند عام"
-                badge_style = "background: #f8fafc; color: #334155; border: 1px solid #e2e8f0;"
+            type_labels = {
+                'word': ("Word", "background: #EFF4FF; color: #2B579A; border: 1px solid #D1E0FF;"),
+                'excel': ("Excel", "background: #ECFDF3; color: #217346; border: 1px solid #ABEFC6;"),
+                'access': ("Access", "background: #FEF3F2; color: #A4373A; border: 1px solid #FECDCA;"),
+                'pdf': ("PDF", "background: #FEF3F2; color: #E5252A; border: 1px solid #FECDCA;"),
+                'image': ("صورة", "background: #F4F3FF; color: #7C3AED; border: 1px solid #D9D6FE;"),
+                'video': ("فيديو", "background: #EEF4FF; color: #4F46E5; border: 1px solid #C7D7FE;"),
+                'audio': ("صوت", "background: #FDF2FA; color: #DB2777; border: 1px solid #FCCEEE;"),
+                'archive': ("أرشيف", "background: #FFFAEB; color: #D97706; border: 1px solid #FEDF89;"),
+            }
+            app_text, badge_style = type_labels.get(
+                tkey, ("مستند", "background: #F7F8FA; color: #475467; border: 1px solid #E4E7EC;")
+            )
 
             status = self.file_data.get('sync_status', 'synced')
             status_map = {
-                'synced': ('● محفوظ ومؤمّن', 'background: #eaf7f0; color: #0d8a55; border: 1px solid #a8dfc4;'),
-                'cloud_only': ('☁️ متاح بالسحابة', 'background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe;'),
-                'syncing': ('● جارٍ الرفع...', 'background: #fffbeb; color: #b45309; border: 1px solid #fde68a;'),
-                'pending_upload': ('● بانتظار الاتصال', 'background: #f8fafc; color: #64748b; border: 1px solid #cbd5e1;'),
-                'conflict': ('● تم احتواء تعارض', 'background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa;'),
-                'failed': ('● فشل التحقق', 'background: #fef2f2; color: #dc2626; border: 1px solid #fecaca;'),
-                'locked': ('🔒 محجوزة للتعديل', 'background: #fdf2ef; color: #a33820; border: 1px solid #f8c9bd;')
+                'synced': ('● متزامن', 'background: #EDF5F2; color: #14372e; border: 1px solid #CBE3DA;'),
+                'cloud_only': ('● سحابي', 'background: #EFF4FF; color: #2B579A; border: 1px solid #D1E0FF;'),
+                'syncing': ('● قيد الرفع...', 'background: #FFFAEB; color: #B54708; border: 1px solid #FEDF89;'),
+                'pending_upload': ('● بالانتظار', 'background: #F7F8FA; color: #667085; border: 1px solid #E4E7EC;'),
+                'conflict': ('● تعارض', 'background: #FFFAEB; color: #B54708; border: 1px solid #FEDF89;'),
+                'failed': ('● خطأ مزامنة', 'background: #FEF3F2; color: #F04438; border: 1px solid #FECDCA;'),
+                'locked': ('● قيد التعديل', 'background: #FEF3F2; color: #F04438; border: 1px solid #FECDCA;')
             }
-            status_text, status_style = status_map.get(status, ('● محفوظ', 'background: #eaf7f0; color: #0d8a55; border: 1px solid #a8dfc4;'))
+            status_text, status_style = status_map.get(
+                status, ('● متزامن', 'background: #EDF5F2; color: #14372e; border: 1px solid #CBE3DA;')
+            )
 
         type_lbl = QLabel(app_text)
-        type_lbl.setFont(QFont("Cairo", 9, QFont.Weight.Bold))
+        type_lbl.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
         type_lbl.setStyleSheet(f"{badge_style} border-radius: 4px; padding: 2px 6px;")
         badge_col.addWidget(type_lbl)
 
         status_lbl = QLabel(status_text)
-        status_lbl.setFont(QFont("Cairo", 9, QFont.Weight.DemiBold))
+        status_lbl.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.DemiBold))
         status_lbl.setStyleSheet(f"{status_style} border-radius: 4px; padding: 1px 6px;")
         badge_col.addWidget(status_lbl)
 
@@ -570,22 +558,22 @@ class GovFileCard(QFrame):
         top_row.addStretch()
         layout.addLayout(top_row)
 
-        # 2. اسم المجلد أو المستند (كامل وواضح 100% بدون أي اقتطاع رأسي أو أفقي)
+        # 2. اسم المجلد أو المستند الكامل بوضوح تام وبدون أي اقتطاع
         name_lbl = QLabel(self.file_name)
-        name_lbl.setFont(QFont("Cairo", 11, QFont.Weight.Bold))
-        name_lbl.setStyleSheet("color: #162420; line-height: 1.4;")
+        name_lbl.setFont(QFont("IBM Plex Sans Arabic", 11, QFont.Weight.DemiBold))
+        name_lbl.setStyleSheet("color: #1B1F24; line-height: 1.45;")
         name_lbl.setWordWrap(True)
         name_lbl.setToolTip(self.file_name)
-        name_lbl.setMinimumHeight(48)
+        name_lbl.setMinimumHeight(44)
         layout.addWidget(name_lbl)
 
-        # 3. الصف السفلي
+        # 3. الصف السفلي: الحجم والتاريخ + أزرار الإجراءات النظيفة
         meta_row = QHBoxLayout()
         meta_row.setSpacing(6)
 
         if self.is_folder:
-            info_lbl = QLabel(f"📂 مجلد إداري منظم")
-            action_btn_text = "📂 استعراض"
+            info_lbl = QLabel("مجلد إداري")
+            action_btn_text = "فتح المجلد"
         else:
             size_bytes = self.file_data.get('file_size', 0)
             if size_bytes < 1024:
@@ -596,11 +584,11 @@ class GovFileCard(QFrame):
                 size_str = f"{round(size_bytes / 1048576, 2)} MB"
             date_raw = self.file_data.get('last_modified_local', '')
             date_str = date_raw[:10] if date_raw else "محفوظ"
-            info_lbl = QLabel(f"💾 {size_str}  •  📅 {date_str}")
-            action_btn_text = "🖼️ معاينة" if get_type_key(self.file_name) == 'image' else "⚡ فتح"
+            info_lbl = QLabel(f"{size_str}  •  {date_str}")
+            action_btn_text = "معاينة" if get_type_key(self.file_name) == 'image' else "فتح"
 
-        info_lbl.setFont(QFont("Segoe UI", 10))
-        info_lbl.setStyleSheet("color: #566c65;")
+        info_lbl.setFont(QFont("Segoe UI", 9))
+        info_lbl.setStyleSheet("color: #667085;")
         meta_row.addWidget(info_lbl)
         meta_row.addStretch()
 
@@ -613,16 +601,16 @@ class GovFileCard(QFrame):
             btn_action.clicked.connect(lambda: self.main_window._open_file_by_name(self.file_name, self.rel_path))
         meta_row.addWidget(btn_action)
 
-        btn_move = QPushButton("📂")
+        btn_move = QPushButton("نقل")
         btn_move.setObjectName("btnCardRename")
         btn_move.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        btn_move.setToolTip("نقل إلى قسم أو مجلد آخر...")
+        btn_move.setToolTip("نقل إلى قسم أو مجلد آخر")
         btn_move.clicked.connect(lambda: self.main_window._show_move_items_dialog([
             {"name": self.file_name, "rel_path": self.rel_path, "is_folder": self.is_folder}
         ]))
         meta_row.addWidget(btn_move)
 
-        btn_rename = QPushButton("✏️")
+        btn_rename = QPushButton("تسمية")
         btn_rename.setObjectName("btnCardRename")
         btn_rename.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         btn_rename.setToolTip("تعديل الاسم (إعادة تسمية)")
@@ -632,7 +620,7 @@ class GovFileCard(QFrame):
             btn_rename.clicked.connect(lambda: self.main_window._rename_file(self.file_name, self.rel_path))
         meta_row.addWidget(btn_rename)
 
-        btn_delete = QPushButton("🗑️")
+        btn_delete = QPushButton("حذف")
         btn_delete.setObjectName("btnCardDelete")
         btn_delete.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         btn_delete.setToolTip("نقل إلى سلة المحذوفات")
@@ -669,7 +657,7 @@ class GovCompactTile(QFrame):
         self.is_folder = file_data.get('is_folder', False)
         self.abs_path = file_data.get('abs_path')
         self.setObjectName("govCompactTile")
-        self.setMinimumHeight(60)
+        self.setMinimumHeight(58)
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._init_ui()
 
@@ -685,56 +673,51 @@ class GovCompactTile(QFrame):
         layout.addWidget(self.chk_select)
 
         icon_lbl = QLabel()
-        pix = get_file_office_pixmap(self.file_name, size=34, is_folder=self.is_folder, abs_path=self.abs_path)
+        pix = get_file_office_pixmap(self.file_name, size=36, is_folder=self.is_folder, abs_path=self.abs_path)
         icon_lbl.setPixmap(pix)
         layout.addWidget(icon_lbl)
 
         name_lbl = QLabel(self.file_name)
-        name_lbl.setFont(QFont("Cairo", 11, QFont.Weight.Bold))
-        name_lbl.setStyleSheet("color: #162420;")
+        name_lbl.setFont(QFont("IBM Plex Sans Arabic", 11, QFont.Weight.DemiBold))
+        name_lbl.setStyleSheet("color: #1B1F24;")
         name_lbl.setWordWrap(True)
         name_lbl.setToolTip(self.file_name)
         layout.addWidget(name_lbl, stretch=3)
 
         if self.is_folder:
             type_lbl = QLabel("مجلد")
-            type_lbl.setFont(QFont("Cairo", 9, QFont.Weight.Bold))
-            type_lbl.setStyleSheet("background: #fefce8; color: #854d0e; border: 1px solid #fef08a; border-radius: 4px; padding: 2px 8px;")
+            type_lbl.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+            type_lbl.setStyleSheet("background: #EDF5F2; color: #14372e; border: 1px solid #CBE3DA; border-radius: 4px; padding: 2px 8px;")
             layout.addWidget(type_lbl)
 
-            info_lbl = QLabel(f"{self.file_data.get('item_count', 0)} عناصر")
-            info_lbl.setFont(QFont("Segoe UI", 10))
-            info_lbl.setStyleSheet("color: #566c65;")
+            info_lbl = QLabel(f"{self.file_data.get('item_count', 0)} عنصر")
+            info_lbl.setFont(QFont("Segoe UI", 9))
+            info_lbl.setStyleSheet("color: #667085;")
             layout.addWidget(info_lbl)
 
-            status_lbl = QLabel("📁 مجلد منظم")
-            status_lbl.setFont(QFont("Cairo", 9, QFont.Weight.DemiBold))
-            status_lbl.setStyleSheet("background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; border-radius: 4px; padding: 2px 8px;")
-            layout.addWidget(status_lbl)
-
-            btn_action = QPushButton("📂 استعراض")
+            btn_action = QPushButton("فتح")
             btn_action.setObjectName("btnTileOpen")
             btn_action.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
             btn_action.clicked.connect(lambda: self.main_window._navigate_into_folder(self.file_name))
             layout.addWidget(btn_action)
 
-            btn_move = QPushButton("📂")
+            btn_move = QPushButton("نقل")
             btn_move.setObjectName("btnTileRename")
             btn_move.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-            btn_move.setToolTip("نقل المجلد إلى قسم أو مجلد آخر...")
+            btn_move.setToolTip("نقل المجلد إلى قسم أو مجلد آخر")
             btn_move.clicked.connect(lambda: self.main_window._show_move_items_dialog([
                 {"name": self.file_name, "rel_path": self.rel_path, "is_folder": True}
             ]))
             layout.addWidget(btn_move)
 
-            btn_rename = QPushButton("✏️")
+            btn_rename = QPushButton("تسمية")
             btn_rename.setObjectName("btnTileRename")
             btn_rename.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
             btn_rename.setToolTip("تعديل اسم المجلد")
             btn_rename.clicked.connect(lambda: self.main_window._rename_folder(self.file_name))
             layout.addWidget(btn_rename)
 
-            btn_del = QPushButton("🗑️")
+            btn_del = QPushButton("حذف")
             btn_del.setObjectName("btnTileDelete")
             btn_del.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
             btn_del.setToolTip("نقل المجلد إلى سلة المحذوفات")
@@ -742,44 +725,30 @@ class GovCompactTile(QFrame):
             layout.addWidget(btn_del)
         else:
             tkey = get_type_key(self.file_name, is_folder=False)
-            if tkey == 'word':
-                app_text = "Word"
-                badge_style = "background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe;"
-            elif tkey == 'excel':
-                app_text = "Excel"
-                badge_style = "background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0;"
-            elif tkey == 'access':
-                app_text = "Access"
-                badge_style = "background: #fef2f2; color: #991b1b; border: 1px solid #fecaca;"
-            elif tkey == 'pdf':
-                app_text = "PDF"
-                badge_style = "background: #fff1f2; color: #9f1239; border: 1px solid #fecdd3;"
-            elif tkey == 'image':
-                app_text = "صورة"
-                badge_style = "background: #f5f3ff; color: #6d28d9; border: 1px solid #ddd6fe;"
-            elif tkey == 'video':
-                app_text = "فيديو"
-                badge_style = "background: #eef2ff; color: #4338ca; border: 1px solid #c7d2fe;"
-            elif tkey == 'audio':
-                app_text = "صوت"
-                badge_style = "background: #fdf2f8; color: #be185d; border: 1px solid #fbcfe8;"
-            elif tkey == 'archive':
-                app_text = "أرشيف"
-                badge_style = "background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa;"
-            else:
-                app_text = "عام"
-                badge_style = "background: #f8fafc; color: #334155; border: 1px solid #e2e8f0;"
+            type_labels = {
+                'word': ("Word", "background: #EFF4FF; color: #2B579A; border: 1px solid #D1E0FF;"),
+                'excel': ("Excel", "background: #ECFDF3; color: #217346; border: 1px solid #ABEFC6;"),
+                'access': ("Access", "background: #FEF3F2; color: #A4373A; border: 1px solid #FECDCA;"),
+                'pdf': ("PDF", "background: #FEF3F2; color: #E5252A; border: 1px solid #FECDCA;"),
+                'image': ("صورة", "background: #F4F3FF; color: #7C3AED; border: 1px solid #D9D6FE;"),
+                'video': ("فيديو", "background: #EEF4FF; color: #4F46E5; border: 1px solid #C7D7FE;"),
+                'audio': ("صوت", "background: #FDF2FA; color: #DB2777; border: 1px solid #FCCEEE;"),
+                'archive': ("أرشيف", "background: #FFFAEB; color: #D97706; border: 1px solid #FEDF89;"),
+            }
+            app_text, badge_style = type_labels.get(
+                tkey, ("مستند", "background: #F7F8FA; color: #475467; border: 1px solid #E4E7EC;")
+            )
 
             type_lbl = QLabel(app_text)
-            type_lbl.setFont(QFont("Cairo", 9, QFont.Weight.Bold))
+            type_lbl.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
             type_lbl.setStyleSheet(f"{badge_style} border-radius: 4px; padding: 2px 8px;")
             layout.addWidget(type_lbl)
 
             date_raw = self.file_data.get('last_modified_local', '')
-            date_str = date_raw[:19].replace('T', ' ') if date_raw else "محفوظ"
+            date_str = date_raw[:16].replace('T', ' ') if date_raw else "محفوظ"
             date_lbl = QLabel(date_str)
-            date_lbl.setFont(QFont("Segoe UI", 10))
-            date_lbl.setStyleSheet("color: #566c65;")
+            date_lbl.setFont(QFont("Segoe UI", 9))
+            date_lbl.setStyleSheet("color: #667085;")
             layout.addWidget(date_lbl)
 
             size_bytes = self.file_data.get('file_size', 0)
@@ -790,50 +759,52 @@ class GovCompactTile(QFrame):
             else:
                 size_str = f"{round(size_bytes / 1048576, 2)} MB"
             size_lbl = QLabel(size_str)
-            size_lbl.setFont(QFont("Segoe UI", 10))
-            size_lbl.setStyleSheet("color: #566c65;")
+            size_lbl.setFont(QFont("Segoe UI", 9))
+            size_lbl.setStyleSheet("color: #667085;")
             layout.addWidget(size_lbl)
 
             status = self.file_data.get('sync_status', 'synced')
             status_map = {
-                'synced': ('● محفوظ ومؤمّن', 'background: #eaf7f0; color: #0d8a55; border: 1px solid #a8dfc4;'),
-                'cloud_only': ('☁️ متاح بالسحابة', 'background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe;'),
-                'syncing': ('● جارٍ الرفع...', 'background: #fffbeb; color: #b45309; border: 1px solid #fde68a;'),
-                'pending_upload': ('● بانتظار الاتصال', 'background: #f8fafc; color: #64748b; border: 1px solid #cbd5e1;'),
-                'conflict': ('● تم احتواء تعارض', 'background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa;'),
-                'failed': ('● فشل التحقق', 'background: #fef2f2; color: #dc2626; border: 1px solid #fecaca;'),
-                'locked': ('🔒 محجوزة للتعديل', 'background: #fdf2ef; color: #a33820; border: 1px solid #f8c9bd;')
+                'synced': ('● متزامن', 'background: #EDF5F2; color: #14372e; border: 1px solid #CBE3DA;'),
+                'cloud_only': ('● سحابي', 'background: #EFF4FF; color: #2B579A; border: 1px solid #D1E0FF;'),
+                'syncing': ('● قيد الرفع...', 'background: #FFFAEB; color: #B54708; border: 1px solid #FEDF89;'),
+                'pending_upload': ('● بالانتظار', 'background: #F7F8FA; color: #667085; border: 1px solid #E4E7EC;'),
+                'conflict': ('● تعارض', 'background: #FFFAEB; color: #B54708; border: 1px solid #FEDF89;'),
+                'failed': ('● خطأ', 'background: #FEF3F2; color: #F04438; border: 1px solid #FECDCA;'),
+                'locked': ('● قيد التعديل', 'background: #FEF3F2; color: #F04438; border: 1px solid #FECDCA;')
             }
-            status_text, status_style = status_map.get(status, ('● محفوظ', 'background: #eaf7f0; color: #0d8a55; border: 1px solid #a8dfc4;'))
+            status_text, status_style = status_map.get(
+                status, ('● متزامن', 'background: #EDF5F2; color: #14372e; border: 1px solid #CBE3DA;')
+            )
 
             status_lbl = QLabel(status_text)
-            status_lbl.setFont(QFont("Cairo", 9, QFont.Weight.DemiBold))
+            status_lbl.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.DemiBold))
             status_lbl.setStyleSheet(f"{status_style} border-radius: 4px; padding: 2px 8px;")
             layout.addWidget(status_lbl)
 
-            btn_action = QPushButton("🖼️ معاينة" if tkey == 'image' else "⚡ فتح")
+            btn_action = QPushButton("معاينة" if tkey == 'image' else "فتح")
             btn_action.setObjectName("btnTileOpen")
             btn_action.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
             btn_action.clicked.connect(lambda: self.main_window._open_file_by_name(self.file_name, self.rel_path))
             layout.addWidget(btn_action)
 
-            btn_move = QPushButton("📂")
+            btn_move = QPushButton("نقل")
             btn_move.setObjectName("btnTileRename")
             btn_move.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-            btn_move.setToolTip("نقل المستند إلى قسم أو مجلد آخر...")
+            btn_move.setToolTip("نقل المستند إلى قسم أو مجلد آخر")
             btn_move.clicked.connect(lambda: self.main_window._show_move_items_dialog([
                 {"name": self.file_name, "rel_path": self.rel_path, "is_folder": False}
             ]))
             layout.addWidget(btn_move)
 
-            btn_rename = QPushButton("✏️")
+            btn_rename = QPushButton("تسمية")
             btn_rename.setObjectName("btnTileRename")
             btn_rename.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
             btn_rename.setToolTip("تعديل اسم المستند")
             btn_rename.clicked.connect(lambda: self.main_window._rename_file(self.file_name, self.rel_path))
             layout.addWidget(btn_rename)
 
-            btn_del = QPushButton("🗑️")
+            btn_del = QPushButton("حذف")
             btn_del.setObjectName("btnTileDelete")
             btn_del.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
             btn_del.setToolTip("نقل المستند إلى سلة المحذوفات")
@@ -968,16 +939,15 @@ class FileExchangeMainWindow(QMainWindow):
         main_layout.setSpacing(12)
 
         # ========================================================
-        # 1. شريط الترويسة الرسمي مع التنقل الرئيسي للمنظومة (v4.0 Enterprise)
+        # 1. شريط الترويسة الرسمي الهادئ والواضح مع الشعار الرسمي
         # ========================================================
         gov_header = QFrame()
         gov_header.setStyleSheet("""
             QFrame {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
-                    stop:0 #0b221b, stop:0.5 #13382e, stop:1 #1a473b);
-                border: 1px solid #0a1f19;
-                border-bottom: 3px solid #c59b27;
-                border-radius: 14px;
+                background-color: #FFFFFF;
+                border: 1px solid #E4E7EC;
+                border-right: 4px solid #14372e;
+                border-radius: 12px;
                 padding: 8px 16px;
             }
         """)
@@ -990,35 +960,35 @@ class FileExchangeMainWindow(QMainWindow):
         logo_lbl = QLabel()
         if self.logo_path.exists():
             pix = QPixmap(str(self.logo_path))
-            scaled_pix = pix.scaled(52, 52, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            scaled_pix = pix.scaled(46, 46, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             logo_lbl.setPixmap(scaled_pix)
             logo_lbl.setStyleSheet("background: transparent; border: none;")
         else:
-            logo_lbl.setText("🏛️")
-            logo_lbl.setStyleSheet("font-size: 26px; background: transparent; border: none;")
+            logo_lbl.setText("Share COC")
+            logo_lbl.setStyleSheet("font-size: 16px; font-weight: bold; color: #14372e; background: transparent; border: none;")
         header_layout.addWidget(logo_lbl)
 
         # نصوص الهوية الرسمية
         brand_box = QVBoxLayout()
-        brand_box.setSpacing(1)
+        brand_box.setSpacing(2)
 
         title_row = QHBoxLayout()
         title_row.setSpacing(8)
 
         gov_title = QLabel("غرفة تجارة كربلاء المقدسة – Share COC")
-        gov_title.setFont(QFont("Cairo", 13, QFont.Weight.Bold))
-        gov_title.setStyleSheet("color: #ffffff; font-weight: 800; background: transparent; border: none;")
+        gov_title.setFont(QFont("IBM Plex Sans Arabic", 13, QFont.Weight.Bold))
+        gov_title.setStyleSheet("color: #1B1F24; font-weight: 700; background: transparent; border: none;")
         title_row.addWidget(gov_title)
 
-        gold_badge = QLabel("• الإصدار المؤسسي v4.0")
-        gold_badge.setFont(QFont("Cairo", 9, QFont.Weight.DemiBold))
-        gold_badge.setStyleSheet("color: #ecd58a; background: transparent; border: none;")
+        gold_badge = QLabel("v4.0")
+        gold_badge.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        gold_badge.setStyleSheet("color: #14372e; background: #EDF5F2; padding: 1px 7px; border-radius: 4px; border: none;")
         title_row.addWidget(gold_badge)
         title_row.addStretch()
 
-        gov_sub = QLabel("منظومة التبادل السحابي وأرشفة المستندات الرسمية • تكامل مباشر مع Google Drive")
-        gov_sub.setFont(QFont("Segoe UI", 9))
-        gov_sub.setStyleSheet("color: #bad3ca; background: transparent; border: none;")
+        gov_sub = QLabel("منظومة التبادل السحابي وأرشفة المستندات الرسمية • Google Drive")
+        gov_sub.setFont(QFont("IBM Plex Sans Arabic", 9))
+        gov_sub.setStyleSheet("color: #667085; background: transparent; border: none;")
 
         brand_box.addLayout(title_row)
         brand_box.addWidget(gov_sub)
@@ -1026,13 +996,13 @@ class FileExchangeMainWindow(QMainWindow):
 
         header_layout.addStretch()
 
-        # شريط التنقل بين شاشات المنظومة الرئيسية (Workspace Navigation Bar)
+        # شريط التنقل بين شاشات المنظومة الرئيسية
         nav_bar = QFrame()
         nav_bar.setStyleSheet("""
             QFrame {
-                background: rgba(0, 0, 0, 0.25);
-                border: 1px solid rgba(197, 155, 39, 0.35);
-                border-radius: 10px;
+                background: #F7F8FA;
+                border: 1px solid #E4E7EC;
+                border-radius: 8px;
                 padding: 2px;
             }
         """)
@@ -1046,26 +1016,25 @@ class FileExchangeMainWindow(QMainWindow):
         nav_btn_style = """
             QPushButton {
                 background: transparent;
-                color: #d1e7dd;
+                color: #667085;
                 border: none;
-                border-radius: 7px;
-                padding: 6px 10px;
-                font-family: 'Cairo', 'Segoe UI';
-                font-size: 11px;
-                font-weight: bold;
+                border-radius: 6px;
+                padding: 6px 12px;
+                font-family: 'IBM Plex Sans Arabic', 'Cairo', 'Segoe UI';
+                font-size: 12px;
+                font-weight: 600;
             }
             QPushButton:hover {
-                background: rgba(255, 255, 255, 0.10);
-                color: #ffffff;
+                color: #1B1F24;
             }
             QPushButton:checked {
-                background: #c59b27;
-                color: #0b221b;
-                font-weight: 900;
+                background: #14372e;
+                color: #FFFFFF;
+                font-weight: 700;
             }
         """
 
-        self.nav_btn_docs = QPushButton("📂 مستكشف المستندات")
+        self.nav_btn_docs = QPushButton("مستكشف المستندات")
         self.nav_btn_docs.setCheckable(True)
         self.nav_btn_docs.setChecked(True)
         self.nav_btn_docs.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -1074,7 +1043,7 @@ class FileExchangeMainWindow(QMainWindow):
         self.workspace_nav_group.addButton(self.nav_btn_docs)
         nav_layout.addWidget(self.nav_btn_docs)
 
-        self.nav_btn_sync = QPushButton("☁️ مركز المزامنة والرفع")
+        self.nav_btn_sync = QPushButton("مركز المزامنة")
         self.nav_btn_sync.setCheckable(True)
         self.nav_btn_sync.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.nav_btn_sync.setStyleSheet(nav_btn_style)
@@ -1082,7 +1051,7 @@ class FileExchangeMainWindow(QMainWindow):
         self.workspace_nav_group.addButton(self.nav_btn_sync)
         nav_layout.addWidget(self.nav_btn_sync)
 
-        self.nav_btn_settings = QPushButton("⚙️ النظام والتكامل")
+        self.nav_btn_settings = QPushButton("النظام والتكامل")
         self.nav_btn_settings.setCheckable(True)
         self.nav_btn_settings.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.nav_btn_settings.setStyleSheet(nav_btn_style)
@@ -1093,23 +1062,23 @@ class FileExchangeMainWindow(QMainWindow):
         header_layout.addWidget(nav_bar)
 
         # زر مزامنة فورية سريع في الترويسة
-        self.btn_header_sync = QPushButton("⚡ مزامنة الآن")
+        self.btn_header_sync = QPushButton("مزامنة الآن")
         self.btn_header_sync.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.btn_header_sync.setToolTip("بدء مزامنة فورية مع سحابة Google Drive وكافة الأجهزة")
         self.btn_header_sync.setStyleSheet("""
             QPushButton {
-                background: rgba(13, 138, 85, 0.32);
-                color: #bbf7d0;
+                background: #FFFFFF;
+                color: #14372e;
                 padding: 7px 14px;
-                border-radius: 10px;
-                border: 1px solid rgba(52, 211, 153, 0.50);
-                font-family: 'Cairo', 'Segoe UI';
-                font-size: 11px;
-                font-weight: bold;
+                border-radius: 8px;
+                border: 1px solid #E4E7EC;
+                font-family: 'IBM Plex Sans Arabic', 'Cairo', 'Segoe UI';
+                font-size: 12px;
+                font-weight: 600;
             }
             QPushButton:hover {
-                background: rgba(13, 138, 85, 0.55);
-                color: #ffffff;
+                background: #EDF5F2;
+                border-color: #14372e;
             }
         """)
         self.btn_header_sync.clicked.connect(self._on_refresh_clicked)
@@ -1117,25 +1086,25 @@ class FileExchangeMainWindow(QMainWindow):
 
         # شارة حالة الربط السحابي
         self.cloud_badge = QLabel("● متصل بالسحابة")
-        self.cloud_badge.setFont(QFont("Cairo", 10, QFont.Weight.Bold))
+        self.cloud_badge.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
         self.cloud_badge.setStyleSheet("""
-            background: rgba(13, 138, 85, 0.25);
-            color: #86efac;
+            background: #EDF5F2;
+            color: #14372e;
             padding: 6px 12px;
-            border-radius: 16px;
-            border: 1px solid rgba(34, 197, 94, 0.45);
+            border-radius: 8px;
+            border: 1px solid #CBE3DA;
         """)
         header_layout.addWidget(self.cloud_badge)
 
         main_layout.addWidget(gov_header)
 
         # ========================================================
-        # 2. شريط الإجراءات النظيف والمنظم بدون أي اقتطاع للنصوص
+        # 2. شريط الإجراءات النظيف والمنظم بدون أي ازدحام بصري
         # ========================================================
         toolbar = QHBoxLayout()
         toolbar.setSpacing(6)
 
-        # زر القائمة الجانبية للأقسام (مفعّل وظاهر افتراضياً لسهولة التنقل)
+        # زر القائمة الجانبية للأقسام
         self.btn_toggle_sidebar = QPushButton("☰ الأقسام")
         self.btn_toggle_sidebar.setObjectName("btnToggleSidebar")
         self.btn_toggle_sidebar.setCheckable(True)
@@ -1145,59 +1114,59 @@ class FileExchangeMainWindow(QMainWindow):
         self.btn_toggle_sidebar.clicked.connect(self._toggle_sidebar)
         toolbar.addWidget(self.btn_toggle_sidebar)
 
-        # زر فتح المجلد المشترك الرئيسي
-        self.btn_open_folder = QPushButton("📁 المجلد المحلي")
-        self.btn_open_folder.setObjectName("btnGovPrimary")
-        self.btn_open_folder.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.btn_open_folder.setToolTip("فتح مجلد المستندات المحلي على هذا الحاسوب")
-        self.btn_open_folder.clicked.connect(lambda: os.startfile(str(self._get_current_abs_folder())))
-        toolbar.addWidget(self.btn_open_folder)
-
-        # زر إضافة ملفات متعددة دفعة واحدة
-        self.btn_upload = QPushButton("➕ إضافة ملفات")
-        self.btn_upload.setObjectName("btnGovSecondary")
+        # زر إضافة ملفات متعددة دفعة واحدة (الزر الرئيسي)
+        self.btn_upload = QPushButton("+ إضافة ملفات")
+        self.btn_upload.setObjectName("btnGovPrimary")
         self.btn_upload.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.btn_upload.setToolTip("تحديد وإضافة عدة مستندات دفعة واحدة إلى المجلد الحالي ومزامنتها فوراً")
         self.btn_upload.clicked.connect(self._upload_custom_file)
         toolbar.addWidget(self.btn_upload)
 
         # زر إضافة مجلد كامل بمحتوياته
-        self.btn_upload_folder = QPushButton("📁 رفع مجلد")
+        self.btn_upload_folder = QPushButton("رفع مجلد")
         self.btn_upload_folder.setObjectName("btnGovSecondary")
         self.btn_upload_folder.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.btn_upload_folder.setToolTip("رفع مجلد كامل بكافة ملفاته ومجلداته الفرعية إلى السحابة")
         self.btn_upload_folder.clicked.connect(self._upload_custom_folder)
         toolbar.addWidget(self.btn_upload_folder)
 
-        # زر إنشاء مجلد جديد (قسم إنشاء مجلدات)
-        self.btn_new_folder = QPushButton("📂 مجلد جديد")
+        # زر إنشاء مجلد جديد
+        self.btn_new_folder = QPushButton("مجلد جديد")
         self.btn_new_folder.setObjectName("btnGovSecondary")
         self.btn_new_folder.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.btn_new_folder.setToolTip("إنشاء مجلد إداري جديد لتنظيم المستندات")
         self.btn_new_folder.clicked.connect(self._show_new_folder_dialog)
         toolbar.addWidget(self.btn_new_folder)
 
+        # زر فتح المجلد المشترك المحلي
+        self.btn_open_folder = QPushButton("المجلد المحلي")
+        self.btn_open_folder.setObjectName("btnGovSecondary")
+        self.btn_open_folder.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_open_folder.setToolTip("فتح مجلد المستندات المحلي على هذا الحاسوب")
+        self.btn_open_folder.clicked.connect(lambda: os.startfile(str(self._get_current_abs_folder())))
+        toolbar.addWidget(self.btn_open_folder)
+
+        # زر إحصائيات المستندات
+        self.btn_stats = QPushButton("الإحصائيات")
+        self.btn_stats.setObjectName("btnGovSecondary")
+        self.btn_stats.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_stats.setToolTip("عرض إحصائيات المستندات والمساحة وتوزيع الأنواع")
+        self.btn_stats.clicked.connect(self._show_file_statistics_dialog)
+        toolbar.addWidget(self.btn_stats)
+
         # زر التحديث اليدوي
-        self.btn_refresh = QPushButton("🔄 تحديث")
+        self.btn_refresh = QPushButton("تحديث")
         self.btn_refresh.setObjectName("btnGovSecondary")
         self.btn_refresh.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.btn_refresh.setToolTip("تحديث محتويات المجلد والمزامنة الفورية")
         self.btn_refresh.clicked.connect(self._on_refresh_clicked)
         toolbar.addWidget(self.btn_refresh)
 
-        # زر إحصائيات المستندات ولكل نوع
-        self.btn_stats = QPushButton("📊 الإحصائيات")
-        self.btn_stats.setObjectName("btnGovSecondary")
-        self.btn_stats.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.btn_stats.setToolTip("عرض إحصائيات شاملة للمستندات والمساحة وتوزيع الأنواع (Word, Excel, Access, PDF)")
-        self.btn_stats.clicked.connect(self._show_file_statistics_dialog)
-        toolbar.addWidget(self.btn_stats)
-
         # حقل البحث الفوري
         self.search_box = QLineEdit()
         self.search_box.setObjectName("govSearch")
-        self.search_box.setMinimumWidth(170)
-        self.search_box.setPlaceholderText("🔍 بحث فوري في المستندات والكتب الرسمية...")
+        self.search_box.setMinimumWidth(180)
+        self.search_box.setPlaceholderText("بحث في المستندات والكتب الرسمية...")
         self.search_box.textChanged.connect(self._filter_content)
         toolbar.addWidget(self.search_box, stretch=1)
 
@@ -1213,29 +1182,28 @@ class FileExchangeMainWindow(QMainWindow):
         # --------------------------------------------------------
         self.sidebar_frame = QFrame()
         self.sidebar_frame.setObjectName("sidebarFrame")
-        self.sidebar_frame.setFixedWidth(285)
-        apply_gov_shadow(self.sidebar_frame, blur=12, offset_y=2, alpha=10)
+        self.sidebar_frame.setFixedWidth(265)
         sb_layout = QVBoxLayout(self.sidebar_frame)
-        sb_layout.setContentsMargins(10, 10, 10, 10)
+        sb_layout.setContentsMargins(8, 8, 8, 8)
         sb_layout.setSpacing(8)
 
         # ترويسة القائمة الجانبية
         sb_header = QFrame()
         sb_header.setObjectName("sidebarHeaderFrame")
         sbh_layout = QHBoxLayout(sb_header)
-        sbh_layout.setContentsMargins(8, 6, 8, 6)
+        sbh_layout.setContentsMargins(8, 4, 8, 4)
         sbh_layout.setSpacing(6)
 
-        sb_title = QLabel("🏛️ أقسام الدائرة")
-        sb_title.setFont(QFont("Cairo", 11, QFont.Weight.Bold))
-        sb_title.setStyleSheet("color: #ffffff; background: transparent; border: none;")
+        sb_title = QLabel("الأقسام الإدارية")
+        sb_title.setFont(QFont("IBM Plex Sans Arabic", 11, QFont.Weight.Bold))
+        sb_title.setStyleSheet("color: #1B1F24; background: transparent; border: none;")
         sbh_layout.addWidget(sb_title)
         sbh_layout.addStretch()
 
-        btn_add_dept = QPushButton("➕ قسم")
+        btn_add_dept = QPushButton("+ قسم")
         btn_add_dept.setObjectName("btnAddDept")
         btn_add_dept.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        btn_add_dept.setToolTip("إضافة قسم إداري جديد للغرفة مع مجلداته المعزولة")
+        btn_add_dept.setToolTip("إضافة قسم إداري جديد للغرفة")
         btn_add_dept.clicked.connect(self._show_add_department_dialog)
         sbh_layout.addWidget(btn_add_dept)
 
@@ -1247,11 +1215,6 @@ class FileExchangeMainWindow(QMainWindow):
         sbh_layout.addWidget(btn_close_sidebar)
 
         sb_layout.addWidget(sb_header)
-
-        sb_desc = QLabel("مستندات ومجلدات مستقلة لكل قسم:")
-        sb_desc.setFont(QFont("Cairo", 9))
-        sb_desc.setStyleSheet("color: #566c65; padding-right: 4px;")
-        sb_layout.addWidget(sb_desc)
 
         # قائمة الأقسام
         self.dept_list = QListWidget()
@@ -1266,25 +1229,18 @@ class FileExchangeMainWindow(QMainWindow):
         sb_layout.addWidget(self.dept_list, stretch=1)
 
         # بطاقة السحب والإفلات السريع أسفل القائمة الجانبية
-        drop_hint = QLabel("📥 اسحب الملفات أو المجلدات وأفلتها هنا لرفعها فوراً للسحابة")
+        drop_hint = QLabel("اسحب الملفات أو المجلدات وأفلتها هنا لرفعها مباشرة")
         drop_hint.setWordWrap(True)
-        drop_hint.setFont(QFont("Cairo", 8, QFont.Weight.Bold))
+        drop_hint.setFont(QFont("IBM Plex Sans Arabic", 9))
         drop_hint.setStyleSheet("""
-            color: #14372e;
-            background: #f0fdf4;
-            border: 1px dashed #34d399;
+            color: #667085;
+            background: #F7F8FA;
+            border: 1px dashed #CBD5E1;
             border-radius: 8px;
-            padding: 7px 6px;
+            padding: 8px 6px;
         """)
         drop_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sb_layout.addWidget(drop_hint)
-
-        # شارة تأمين العزل أسفل القائمة
-        sb_footer = QLabel("🔒 بيئة عمل معزولة ومؤمنة • v4.0")
-        sb_footer.setFont(QFont("Cairo", 9, QFont.Weight.DemiBold))
-        sb_footer.setStyleSheet("color: #0d8a55; background: #eaf7f0; border-radius: 6px; padding: 6px;")
-        sb_footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        sb_layout.addWidget(sb_footer)
 
         # القائمة الجانبية ظاهرة افتراضياً لسهولة الوصول للأقسام
         self.sidebar_frame.setVisible(True)
@@ -1296,7 +1252,7 @@ class FileExchangeMainWindow(QMainWindow):
         content_container = QWidget()
         content_layout = QVBoxLayout(content_container)
         content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(10)
+        content_layout.setSpacing(8)
 
         content_layout.addLayout(toolbar)
 
@@ -1306,48 +1262,48 @@ class FileExchangeMainWindow(QMainWindow):
         self.breadcrumb_frame = QFrame()
         self.breadcrumb_frame.setObjectName("breadcrumbFrame")
         bc_layout = QHBoxLayout(self.breadcrumb_frame)
-        bc_layout.setContentsMargins(10, 5, 10, 5)
+        bc_layout.setContentsMargins(10, 4, 10, 4)
         bc_layout.setSpacing(10)
 
-        self.btn_nav_up = QPushButton("⬆ رجوع للمجلد السابق")
+        self.btn_nav_up = QPushButton("↑ رجوع للمجلد السابق")
         self.btn_nav_up.setObjectName("btnBreadcrumbUp")
         self.btn_nav_up.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.btn_nav_up.setEnabled(False)
         self.btn_nav_up.clicked.connect(self._navigate_up)
         bc_layout.addWidget(self.btn_nav_up)
 
-        self.lbl_current_path = QLabel("📂 المجلد الرئيسي: غرفة تجارة كربلاء المقدسة")
-        self.lbl_current_path.setFont(QFont("Cairo", 10, QFont.Weight.Bold))
-        self.lbl_current_path.setStyleSheet(f"color: {GOV_GREEN};")
+        self.lbl_current_path = QLabel("كافة الملفات والمجلدات")
+        self.lbl_current_path.setFont(QFont("IBM Plex Sans Arabic", 10, QFont.Weight.Bold))
+        self.lbl_current_path.setStyleSheet("color: #1B1F24;")
         bc_layout.addWidget(self.lbl_current_path)
 
         bc_layout.addStretch()
 
-        self.lbl_folder_info = QLabel("المجلد نشط ومتزامن")
-        self.lbl_folder_info.setFont(QFont("Cairo", 9))
-        self.lbl_folder_info.setStyleSheet("color: #566c65;")
+        self.lbl_folder_info = QLabel("متزامن")
+        self.lbl_folder_info.setFont(QFont("IBM Plex Sans Arabic", 9))
+        self.lbl_folder_info.setStyleSheet("color: #667085;")
         bc_layout.addWidget(self.lbl_folder_info)
 
         content_layout.addWidget(self.breadcrumb_frame)
 
         # ========================================================
-        # 3. تبويبات التصنيف الرسمية الهادئة (نصوص واضحة غير مقتطعة)
+        # 3. تبويبات التصنيف الرسمية النظيفة
         # ========================================================
         tabs_layout = QHBoxLayout()
-        tabs_layout.setSpacing(6)
+        tabs_layout.setSpacing(4)
 
         tab_group = QButtonGroup(self)
         tab_group.setExclusive(True)
 
         self.tab_all = self._create_gov_tab("كافة المستندات", "ALL", tab_group, checked=True)
-        self.tab_folders = self._create_gov_tab("المجلدات 📁", "FOLDERS", tab_group)
-        self.tab_word = self._create_gov_tab("Word 📝", "WORD", tab_group)
-        self.tab_excel = self._create_gov_tab("Excel 📊", "EXCEL", tab_group)
-        self.tab_access = self._create_gov_tab("Access 🗄️", "ACCESS", tab_group)
-        self.tab_pdf = self._create_gov_tab("PDF 📄", "PDF", tab_group)
-        self.tab_images = self._create_gov_tab("الصور 🖼️", "IMAGES", tab_group)
-        self.tab_other = self._create_gov_tab("وسائط وأخرى 📦", "OTHER", tab_group)
-        self.tab_trash = self._create_gov_tab("المحذوفات 🗑️", "TRASH", tab_group)
+        self.tab_folders = self._create_gov_tab("المجلدات", "FOLDERS", tab_group)
+        self.tab_word = self._create_gov_tab("Word", "WORD", tab_group)
+        self.tab_excel = self._create_gov_tab("Excel", "EXCEL", tab_group)
+        self.tab_access = self._create_gov_tab("Access", "ACCESS", tab_group)
+        self.tab_pdf = self._create_gov_tab("PDF", "PDF", tab_group)
+        self.tab_images = self._create_gov_tab("الصور", "IMAGES", tab_group)
+        self.tab_other = self._create_gov_tab("أخرى", "OTHER", tab_group)
+        self.tab_trash = self._create_gov_tab("المحذوفات", "TRASH", tab_group)
 
         self.tab_all.setToolTip("عرض كافة المستندات والملفات المتاحة")
         self.tab_folders.setToolTip("عرض المجلدات الإدارية المنظمة")
@@ -1370,51 +1326,50 @@ class FileExchangeMainWindow(QMainWindow):
         tabs_layout.addWidget(self.tab_trash)
         tabs_layout.addStretch()
 
-        self.btn_select_all_toggle = QPushButton("☑️ تحديد الكل")
+        self.btn_select_all_toggle = QPushButton("تحديد الكل")
         self.btn_select_all_toggle.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.btn_select_all_toggle.setToolTip("تحديد أو إلغاء تحديد كافة الملفات والمجلدات المعروضة")
         self.btn_select_all_toggle.setStyleSheet("""
             QPushButton {
-                background-color: #ffffff; color: #14372e; border: 1.5px solid #cbd5e1;
-                border-radius: 7px; padding: 5px 11px; font-weight: bold; font-size: 11px;
-                font-family: 'Cairo', Tahoma;
+                background-color: #FFFFFF; color: #1B1F24; border: 1px solid #E4E7EC;
+                border-radius: 6px; padding: 5px 11px; font-weight: 600; font-size: 11.5px;
             }
-            QPushButton:hover { background-color: #f0fdf4; border-color: #14372e; }
+            QPushButton:hover { background-color: #F7F8FA; border-color: #14372e; color: #14372e; }
         """)
         self.btn_select_all_toggle.clicked.connect(self._toggle_select_all_visible)
         tabs_layout.addWidget(self.btn_select_all_toggle)
 
-        # محدد طرق العرض (جدول تفصيلي / شبكة بطاقات / قائمة مدمجة)
+        # محدد طرق العرض (قائمة / شبكة / مدمج)
         self.view_switch_frame = QFrame()
         self.view_switch_frame.setObjectName("viewSwitcherFrame")
         view_switch_layout = QHBoxLayout(self.view_switch_frame)
-        view_switch_layout.setContentsMargins(4, 2, 4, 2)
-        view_switch_layout.setSpacing(4)
+        view_switch_layout.setContentsMargins(3, 2, 3, 2)
+        view_switch_layout.setSpacing(3)
 
         view_group = QButtonGroup(self)
         view_group.setExclusive(True)
 
-        self.btn_view_table = QPushButton("☰ جدول")
+        self.btn_view_table = QPushButton("قائمة")
         self.btn_view_table.setObjectName("btnViewMode")
         self.btn_view_table.setCheckable(True)
         self.btn_view_table.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.btn_view_table.setToolTip("عرض المستندات في جدول تفصيلي حكومي شامل")
+        self.btn_view_table.setToolTip("عرض المستندات في قائمة جدولية واضحة")
         view_group.addButton(self.btn_view_table)
         view_switch_layout.addWidget(self.btn_view_table)
 
-        self.btn_view_grid = QPushButton("⊞ شبكة")
+        self.btn_view_grid = QPushButton("شبكة")
         self.btn_view_grid.setObjectName("btnViewMode")
         self.btn_view_grid.setCheckable(True)
         self.btn_view_grid.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.btn_view_grid.setToolTip("عرض المستندات على شكل بطاقات أنيقة بأيقونات Office البارزة")
+        self.btn_view_grid.setToolTip("عرض المستندات على شكل شبكة بطاقات")
         view_group.addButton(self.btn_view_grid)
         view_switch_layout.addWidget(self.btn_view_grid)
 
-        self.btn_view_compact = QPushButton("☷ مدمج")
+        self.btn_view_compact = QPushButton("مدمج")
         self.btn_view_compact.setObjectName("btnViewMode")
         self.btn_view_compact.setCheckable(True)
         self.btn_view_compact.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.btn_view_compact.setToolTip("عرض المستندات في قائمة صفوف مدمجة وسريعة الاستعراض")
+        self.btn_view_compact.setToolTip("عرض المستندات في صفوف مدمجة")
         view_group.addButton(self.btn_view_compact)
         view_switch_layout.addWidget(self.btn_view_compact)
 
@@ -1432,58 +1387,55 @@ class FileExchangeMainWindow(QMainWindow):
         self.bulk_bar_frame.setVisible(False)
         self.bulk_bar_frame.setStyleSheet("""
             QFrame {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0e2720, stop:1 #163e33);
-                border: 1.5px solid #c59b27;
-                border-radius: 10px;
+                background-color: #1B1F24;
+                border: 1px solid #344054;
+                border-radius: 8px;
                 padding: 4px 10px;
             }
-            QLabel { color: #ffffff; font-weight: bold; font-size: 12px; border: none; background: transparent; }
+            QLabel { color: #FFFFFF; font-weight: 600; font-size: 12px; border: none; background: transparent; }
         """)
         bulk_layout = QHBoxLayout(self.bulk_bar_frame)
-        bulk_layout.setContentsMargins(12, 6, 12, 6)
-        bulk_layout.setSpacing(10)
+        bulk_layout.setContentsMargins(10, 5, 10, 5)
+        bulk_layout.setSpacing(8)
 
-        self.lbl_bulk_count = QLabel("☑️ تم تحديد 0 عنصر")
-        self.lbl_bulk_count.setFont(QFont("Cairo", 11, QFont.Weight.Bold))
+        self.lbl_bulk_count = QLabel("تم تحديد 0 عنصر")
+        self.lbl_bulk_count.setFont(QFont("IBM Plex Sans Arabic", 10, QFont.Weight.Bold))
         bulk_layout.addWidget(self.lbl_bulk_count)
 
         bulk_layout.addStretch()
 
-        btn_bulk_move = QPushButton("📂 نقل المحدد إلى قسم/مجلد آخر...")
+        btn_bulk_move = QPushButton("نقل المحدد...")
         btn_bulk_move.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         btn_bulk_move.setStyleSheet("""
             QPushButton {
-                background-color: #c59b27; color: #0e2720; border: none;
-                border-radius: 7px; padding: 6px 14px; font-weight: bold; font-size: 11px;
-                font-family: 'Cairo', Tahoma;
+                background-color: #14372e; color: #FFFFFF; border: none;
+                border-radius: 6px; padding: 6px 14px; font-weight: 600; font-size: 11.5px;
             }
-            QPushButton:hover { background-color: #d4af37; }
+            QPushButton:hover { background-color: #1b493d; }
         """)
         btn_bulk_move.clicked.connect(self._move_selected_items_bulk)
         bulk_layout.addWidget(btn_bulk_move)
 
-        btn_bulk_del = QPushButton("🗑️ حذف المحدد للسلة (محلياً وسحابياً)")
+        btn_bulk_del = QPushButton("حذف المحدد للسلة")
         btn_bulk_del.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         btn_bulk_del.setStyleSheet("""
             QPushButton {
-                background-color: #dc2626; color: #ffffff; border: none;
-                border-radius: 7px; padding: 6px 14px; font-weight: bold; font-size: 11px;
-                font-family: 'Cairo', Tahoma;
+                background-color: #F04438; color: #FFFFFF; border: none;
+                border-radius: 6px; padding: 6px 14px; font-weight: 600; font-size: 11.5px;
             }
-            QPushButton:hover { background-color: #b91c1c; }
+            QPushButton:hover { background-color: #D92D20; }
         """)
         btn_bulk_del.clicked.connect(self._delete_selected_items_bulk)
         bulk_layout.addWidget(btn_bulk_del)
 
-        btn_bulk_clear = QPushButton("✖ إلغاء التحديد")
+        btn_bulk_clear = QPushButton("إلغاء التحديد")
         btn_bulk_clear.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         btn_bulk_clear.setStyleSheet("""
             QPushButton {
-                background-color: rgba(255,255,255,0.14); color: #f8fafc; border: 1px solid rgba(255,255,255,0.25);
-                border-radius: 7px; padding: 6px 12px; font-weight: bold; font-size: 11px;
-                font-family: 'Cairo', Tahoma;
+                background-color: rgba(255,255,255,0.12); color: #FFFFFF; border: none;
+                border-radius: 6px; padding: 6px 12px; font-weight: 600; font-size: 11.5px;
             }
-            QPushButton:hover { background-color: rgba(255,255,255,0.24); }
+            QPushButton:hover { background-color: rgba(255,255,255,0.22); }
         """)
         btn_bulk_clear.clicked.connect(self._clear_all_selections)
         bulk_layout.addWidget(btn_bulk_clear)
@@ -1491,43 +1443,42 @@ class FileExchangeMainWindow(QMainWindow):
         content_layout.addWidget(self.bulk_bar_frame)
 
         # ========================================================
-        # 4. مساحة عرض المستندات (متعددة الأنماط: جدول / بطاقات / مدمجة / سلة المحذوفات)
+        # 4. مساحة عرض المستندات (جدول / بطاقات / مدمج / سلة المحذوفات)
         # ========================================================
         self.stack = QStackedWidget()
-        apply_gov_shadow(self.stack, blur=12, offset_y=2, alpha=10)
 
-        # 4.1 نمط الجدول التفصيلي الحكومي الشامل (TABLE)
+        # 4.1 نمط القائمة الجدولية الواضحة (TABLE)
         self.table = QTableWidget()
         self.table.setColumnCount(6)
         self.table.setHorizontalHeaderLabels([
-            "المستند أو المجلد", "النوع / البرنامج", "تاريخ الاعتماد", "الحجم / العناصر", "الحالة السحابية", "الإجراءات"
+            "اسم المستند الكامل", "النوع / المسار", "تاريخ التعديل", "الحجم", "الحالة", "الإجراءات"
         ])
-        self.table.setShowGrid(True)
-        self.table.setIconSize(QSize(28, 28))
+        self.table.setShowGrid(False)
+        self.table.setIconSize(QSize(36, 36))
         self.table.setWordWrap(True)
         self.table.setTextElideMode(Qt.TextElideMode.ElideNone)
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(54)
+        self.table.verticalHeader().setDefaultSectionSize(56)
 
-        # ضبط عرض الأعمدة بدقة مع إعطاء الأولوية القصوى لاسم المستند لمنع أي اقتطاع
+        # ضبط عرض الأعمدة بدقة مع إعطاء الأولوية القصوى لاسم المستند الكامل لمنع أي اقتطاع
         tbl_hdr = self.table.horizontalHeader()
         tbl_hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        tbl_hdr.setMinimumSectionSize(280)
+        tbl_hdr.setMinimumSectionSize(300)
 
         tbl_hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
         self.table.setColumnWidth(1, 145)
 
         tbl_hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
-        self.table.setColumnWidth(2, 140)
+        self.table.setColumnWidth(2, 135)
 
         tbl_hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
-        self.table.setColumnWidth(3, 95)
+        self.table.setColumnWidth(3, 90)
 
         tbl_hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)
-        self.table.setColumnWidth(4, 125)
+        self.table.setColumnWidth(4, 115)
 
         tbl_hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(5, 178)
+        self.table.setColumnWidth(5, 195)
 
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -1738,55 +1689,54 @@ class FileExchangeMainWindow(QMainWindow):
         self._set_view_mode(self.current_view_mode, persist=False)
 
         # ========================================================
-        # 5. شريط الحالة السفلي الرصين
+        # 5. شريط الحالة السفلي النظيف والمختصر
         # ========================================================
         statusbar = QFrame()
         statusbar.setStyleSheet("""
             QFrame {
-                background: #ffffff;
-                border-top: 1.5px solid #d5dfdb;
-                padding: 6px 14px;
-                border-radius: 6px;
+                background: #FFFFFF;
+                border: 1px solid #E4E7EC;
+                padding: 5px 14px;
+                border-radius: 8px;
             }
         """)
         status_layout = QHBoxLayout(statusbar)
         status_layout.setContentsMargins(4, 2, 4, 2)
 
         self.lbl_total = QLabel("المستندات: 0")
-        self.lbl_total.setFont(QFont("Cairo", 10, QFont.Weight.Bold))
-        self.lbl_total.setStyleSheet(f"color: {GOV_GREEN};")
+        self.lbl_total.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+        self.lbl_total.setStyleSheet("color: #1B1F24;")
         status_layout.addWidget(self.lbl_total)
 
-        status_layout.addWidget(QLabel(" | "))
+        status_layout.addWidget(QLabel(" • "))
 
         self.lbl_trash_stat = QLabel("المحذوفات: 0")
-        self.lbl_trash_stat.setFont(QFont("Cairo", 10))
-        self.lbl_trash_stat.setStyleSheet("color: #4b635b;")
+        self.lbl_trash_stat.setFont(QFont("IBM Plex Sans Arabic", 9))
+        self.lbl_trash_stat.setStyleSheet("color: #667085;")
         status_layout.addWidget(self.lbl_trash_stat)
 
-        status_layout.addWidget(QLabel(" | "))
+        status_layout.addWidget(QLabel(" • "))
 
-        self.lbl_watcher = QLabel("⚡ المزامنة: متصل ونشط")
-        self.lbl_watcher.setFont(QFont("Cairo", 10))
-        self.lbl_watcher.setStyleSheet("color: #4b635b;")
+        self.lbl_watcher = QLabel("المزامنة: متصل ونشط")
+        self.lbl_watcher.setFont(QFont("IBM Plex Sans Arabic", 9))
+        self.lbl_watcher.setStyleSheet("color: #14372e;")
         status_layout.addWidget(self.lbl_watcher)
 
-        status_layout.addWidget(QLabel(" | "))
+        status_layout.addWidget(QLabel(" • "))
 
-        self.lbl_cloud_info = QLabel("السحابة: Google Drive API v3")
-        self.lbl_cloud_info.setFont(QFont("Cairo", 10))
-        self.lbl_cloud_info.setStyleSheet("color: #4b635b;")
+        self.lbl_cloud_info = QLabel("Google Drive")
+        self.lbl_cloud_info.setFont(QFont("Segoe UI", 9))
+        self.lbl_cloud_info.setStyleSheet("color: #667085;")
         status_layout.addWidget(self.lbl_cloud_info)
 
         status_layout.addStretch()
 
-        self.lbl_dept = QLabel("غرفة تجارة كربلاء المقدسة v4.0 Enterprise")
-        self.lbl_dept.setFont(QFont("Cairo", 10, QFont.Weight.DemiBold))
-        self.lbl_dept.setStyleSheet("color: #5c726a;")
+        self.lbl_dept = QLabel("غرفة تجارة كربلاء المقدسة • Share COC")
+        self.lbl_dept.setFont(QFont("IBM Plex Sans Arabic", 9))
+        self.lbl_dept.setStyleSheet("color: #667085;")
         status_layout.addWidget(self.lbl_dept)
 
-        # زر إعدادات النظام السريع
-        btn_settings = QPushButton("⚙️")
+        btn_settings = QPushButton("⚙")
         btn_settings.setObjectName("btnGovSettings")
         btn_settings.setToolTip("إعدادات النظام والتكامل مع Windows")
         btn_settings.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -2443,8 +2393,9 @@ class FileExchangeMainWindow(QMainWindow):
             elif pin_code and name in unlocked_pins:
                 icon = '🔓'
             else:
-                icon = default_icon
-            return f"{icon}  {name}  ({cnt})"
+                icon = ''
+            prefix = f"{icon}  " if icon else ""
+            return f"{prefix}{name}  ({cnt})"
 
         expected_count = len(self.departments_list) + 1
         names_match = True
@@ -2459,13 +2410,13 @@ class FileExchangeMainWindow(QMainWindow):
         if not force_rebuild and self.dept_list.count() == expected_count and names_match:
             item_all = self.dept_list.item(0)
             if item_all:
-                new_all_txt = f"🗂️  كافة الملفات والمجلدات  ({total_all_files})"
+                new_all_txt = f"كافة الملفات والمجلدات  ({total_all_files})"
                 if item_all.text() != new_all_txt:
                     item_all.setText(new_all_txt)
 
             for idx, dept in enumerate(self.departments_list):
                 name = dept['name']
-                icon = dept.get('icon', '📁')
+                icon = dept.get('icon', '')
                 cnt = dept_counts.get(name, 0)
                 item = self.dept_list.item(idx + 1)
                 if item:
@@ -2480,10 +2431,10 @@ class FileExchangeMainWindow(QMainWindow):
         selected_item = None
 
         # 1. قسم كافة الملفات والمجلدات (الأرشيف الشامل) في المقدمة
-        item_all_text = f"🗂️  كافة الملفات والمجلدات  ({total_all_files})"
+        item_all_text = f"كافة الملفات والمجلدات  ({total_all_files})"
         item_all = QListWidgetItem(item_all_text)
         item_all.setData(Qt.ItemDataRole.UserRole, "__ALL__")
-        item_all.setFont(QFont("Cairo", 10, QFont.Weight.Bold))
+        item_all.setFont(QFont("IBM Plex Sans Arabic", 10, QFont.Weight.DemiBold))
         item_all.setToolTip("كافة الملفات والمجلدات")
         self.dept_list.addItem(item_all)
 
@@ -2493,13 +2444,13 @@ class FileExchangeMainWindow(QMainWindow):
         # 2. أقسام الدائرة المستقلة والمعزولة
         for dept in self.departments_list:
             name = dept['name']
-            icon = dept.get('icon', '📁')
+            icon = dept.get('icon', '')
             cnt = dept_counts.get(name, 0)
 
             item_text = _format_dept_label(name, icon, cnt)
             item = QListWidgetItem(item_text)
             item.setData(Qt.ItemDataRole.UserRole, name)
-            item.setFont(QFont("Cairo", 10, QFont.Weight.Bold))
+            item.setFont(QFont("IBM Plex Sans Arabic", 10, QFont.Weight.DemiBold))
             item.setToolTip(name)
             self.dept_list.addItem(item)
 
@@ -2947,25 +2898,25 @@ class FileExchangeMainWindow(QMainWindow):
         if self.active_dept_name is None:
             if self.current_subpath == Path("."):
                 self.btn_nav_up.setEnabled(False)
-                self.lbl_current_path.setText("🗂️ كافة الملفات والمجلدات (الأرشيف الشامل)")
+                self.lbl_current_path.setText("كافة الملفات والمجلدات")
             else:
                 self.btn_nav_up.setEnabled(True)
                 parts = list(self.current_subpath.parts)
-                path_str = " ◀ ".join(parts)
-                self.lbl_current_path.setText(f"🗂️ كافة الملفات والمجلدات ◀ {path_str}")
+                path_str = " / ".join(parts)
+                self.lbl_current_path.setText(f"كافة الملفات والمجلدات / {path_str}")
         else:
             if self.current_subpath == Path(self.active_dept_name):
                 self.btn_nav_up.setEnabled(False)
-                self.lbl_current_path.setText(f"🏛️ {self.active_dept_name}")
+                self.lbl_current_path.setText(f"{self.active_dept_name}")
             else:
                 self.btn_nav_up.setEnabled(True)
                 try:
                     rel_sub = self.current_subpath.relative_to(self.active_dept_name)
-                    path_str = " ◀ ".join(rel_sub.parts)
-                    self.lbl_current_path.setText(f"🏛️ {self.active_dept_name} ◀ {path_str}")
+                    path_str = " / ".join(rel_sub.parts)
+                    self.lbl_current_path.setText(f"{self.active_dept_name} / {path_str}")
                 except Exception:
-                    path_str = " ◀ ".join(self.current_subpath.parts)
-                    self.lbl_current_path.setText(f"📂 {path_str}")
+                    path_str = " / ".join(self.current_subpath.parts)
+                    self.lbl_current_path.setText(f"{path_str}")
 
     def _show_new_folder_dialog(self):
         """نافذة إنشاء مجلد إداري جديد مع اقتراحات سريعة لأقسام الغرفة (قسم إنشاء مجلدات)"""
@@ -4910,20 +4861,20 @@ class FileExchangeMainWindow(QMainWindow):
             other_cnt = sum(1 for x in files_list if get_type_key(x['file_name']) in ('video', 'audio', 'archive', 'other'))
             folders_cnt = len(folders_list)
 
-            self.tab_all.setText(f"كافة المستندات ({len(files_list)})")
-            self.tab_folders.setText(f"المجلدات 📁 ({folders_cnt})" if folders_cnt > 0 else "المجلدات 📁")
-            self.tab_word.setText(f"Word 📝 ({word_cnt})" if word_cnt > 0 else "Word 📝")
-            self.tab_excel.setText(f"Excel 📊 ({excel_cnt})" if excel_cnt > 0 else "Excel 📊")
-            self.tab_access.setText(f"Access 🗄️ ({access_cnt})" if access_cnt > 0 else "Access 🗄️")
-            self.tab_pdf.setText(f"PDF 📄 ({pdf_cnt})" if pdf_cnt > 0 else "PDF 📄")
+            self.tab_all.setText(f"الكل ({len(files_list)})")
+            self.tab_folders.setText(f"المجلدات ({folders_cnt})" if folders_cnt > 0 else "المجلدات")
+            self.tab_word.setText(f"Word ({word_cnt})" if word_cnt > 0 else "Word")
+            self.tab_excel.setText(f"Excel ({excel_cnt})" if excel_cnt > 0 else "Excel")
+            self.tab_access.setText(f"Access ({access_cnt})" if access_cnt > 0 else "Access")
+            self.tab_pdf.setText(f"PDF ({pdf_cnt})" if pdf_cnt > 0 else "PDF")
             if hasattr(self, 'tab_images'):
-                self.tab_images.setText(f"الصور 🖼️ ({images_cnt})" if images_cnt > 0 else "الصور 🖼️")
+                self.tab_images.setText(f"الصور ({images_cnt})" if images_cnt > 0 else "الصور")
             if hasattr(self, 'tab_other'):
-                self.tab_other.setText(f"وسائط وأخرى 📦 ({other_cnt})" if other_cnt > 0 else "وسائط وأخرى 📦")
-            self.tab_trash.setText(f"المحذوفات 🗑️ ({trash_cnt})" if trash_cnt > 0 else "المحذوفات 🗑️")
+                self.tab_other.setText(f"أخرى ({other_cnt})" if other_cnt > 0 else "أخرى")
+            self.tab_trash.setText(f"المحذوفات ({trash_cnt})" if trash_cnt > 0 else "المحذوفات")
 
             self.lbl_total.setText(
-                f"المستندات: {len(files_list)} (Word: {word_cnt} | Excel: {excel_cnt} | Access: {access_cnt} | PDF: {pdf_cnt} | صور: {images_cnt} | أخرى: {other_cnt}) | المجلدات: {folders_cnt}"
+                f"المستندات: {len(files_list)}  •  المجلدات: {folders_cnt}"
             )
             self.lbl_trash_stat.setText(f"المحذوفات: {trash_cnt}")
 
@@ -4971,9 +4922,9 @@ class FileExchangeMainWindow(QMainWindow):
                     widget.deleteLater()
 
             if not files:
-                empty_lbl = QLabel("📂 لا توجد مستندات تطابق هذا التصنيف أو معايير البحث.")
-                empty_lbl.setFont(QFont("Cairo", 12, QFont.Weight.DemiBold))
-                empty_lbl.setStyleSheet("color: #64748b; padding: 50px; background: transparent;")
+                empty_lbl = QLabel("لا توجد مستندات تطابق هذا التصنيف أو معايير البحث.")
+                empty_lbl.setFont(QFont("IBM Plex Sans Arabic", 11, QFont.Weight.Medium))
+                empty_lbl.setStyleSheet("color: #667085; padding: 50px; background: transparent;")
                 empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.grid_layout.addWidget(empty_lbl, 0, 0, 1, 2)
                 return
@@ -5014,9 +4965,9 @@ class FileExchangeMainWindow(QMainWindow):
                     widget.deleteLater()
 
             if not files:
-                empty_lbl = QLabel("📂 لا توجد مستندات تطابق هذا التصنيف أو معايير البحث.")
-                empty_lbl.setFont(QFont("Cairo", 12, QFont.Weight.DemiBold))
-                empty_lbl.setStyleSheet("color: #64748b; padding: 50px; background: transparent;")
+                empty_lbl = QLabel("لا توجد مستندات تطابق هذا التصنيف أو معايير البحث.")
+                empty_lbl.setFont(QFont("IBM Plex Sans Arabic", 11, QFont.Weight.Medium))
+                empty_lbl.setStyleSheet("color: #667085; padding: 50px; background: transparent;")
                 empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.compact_layout.addWidget(empty_lbl)
                 return
@@ -5067,49 +5018,49 @@ class FileExchangeMainWindow(QMainWindow):
                 rel_path = f.get('relative_path') or name
                 is_folder = f.get('is_folder', False)
                 abs_path = f.get('abs_path')
-                office_icon = get_file_office_icon(name, size=38, is_folder=is_folder, abs_path=abs_path)
+                office_icon = get_file_office_icon(name, size=36, is_folder=is_folder, abs_path=abs_path)
 
                 if is_folder:
-                    app_name = "مجلد مستندات"
-                    type_tag = "مجلد منظم"
+                    app_name = "مجلد"
+                    type_tag = "مجلد فرعي"
                     count = f.get('item_count', 0)
                     size_str = f"{count} عناصر"
                     date_str = f.get('last_modified_local', '')[:10] if f.get('last_modified_local') else "نشط"
-                    status_text = "📁 مجلد سحابي"
+                    status_text = "● مجلد"
                     status_color = GOV_GREEN
                 else:
                     tkey = get_type_key(name, is_folder=False)
                     if tkey == 'word':
-                        app_name = "Microsoft Word"
-                        type_tag = "مستند رسمي"
+                        app_name = "Word • مستند"
+                        type_tag = "مستند Word"
                     elif tkey == 'excel':
-                        app_name = "Microsoft Excel"
-                        type_tag = "جدول بيانات مالي"
+                        app_name = "Excel • جدول بيانات"
+                        type_tag = "جدول بيانات Excel"
                     elif tkey == 'access':
-                        app_name = "Microsoft Access"
-                        type_tag = "قاعدة بيانات الغرفة"
+                        app_name = "Access • قاعدة بيانات"
+                        type_tag = "قاعدة بيانات Access"
                     elif tkey == 'pdf':
-                        app_name = "Adobe Acrobat"
-                        type_tag = "وثيقة رسمية (PDF)"
+                        app_name = "PDF • وثيقة"
+                        type_tag = "وثيقة PDF"
                     elif tkey == 'image':
-                        app_name = "صورة رقمية 🖼️"
-                        type_tag = "وثيقة مصورة"
+                        app_name = "صورة"
+                        type_tag = "صورة رقمية"
                     elif tkey == 'video':
-                        app_name = "وسائط مرئية 🎬"
+                        app_name = "فيديو"
                         type_tag = "ملف فيديو"
                     elif tkey == 'audio':
-                        app_name = "ملف صوتي 🎵"
-                        type_tag = "تسجيل صوتي"
+                        app_name = "صوت"
+                        type_tag = "ملف صوتي"
                     elif tkey == 'archive':
-                        app_name = "أرشيف مضغوط 📦"
-                        type_tag = "حزمة ملفات"
+                        app_name = "أرشيف"
+                        type_tag = "ملف مضغوط"
                     else:
-                        app_name = "ملف عام"
-                        type_tag = "مستند"
+                        app_name = "مستند"
+                        type_tag = "ملف عام"
 
                     if self.active_dept_name is None and self.current_subpath == Path(".") and "/" in rel_path:
                         parent_folder_lbl = rel_path.rsplit("/", 1)[0]
-                        type_tag = f"{type_tag} • 📁 {parent_folder_lbl}"
+                        app_name = f"{app_name} • {parent_folder_lbl}"
 
                     size_bytes = f.get('file_size', 0)
                     if size_bytes < 1024:
@@ -5123,15 +5074,15 @@ class FileExchangeMainWindow(QMainWindow):
                     date_str = date_raw[:19].replace('T', ' ') if date_raw else "محفوظ"
 
                     status_map = {
-                        'synced': '● محفوظ ومؤمّن',
-                        'cloud_only': '☁️ متاح بالسحابة',
-                        'syncing': '● جارٍ الرفع...',
-                        'pending_upload': '● بانتظار الاتصال',
-                        'conflict': '● تم احتواء تعارض',
-                        'failed': '● فشل التحقق',
-                        'locked': '🔒 محجوزة للتعديل'
+                        'synced': '● متزامن',
+                        'cloud_only': '● سحابي',
+                        'syncing': '● قيد الرفع...',
+                        'pending_upload': '● بالانتظار',
+                        'conflict': '● تعارض',
+                        'failed': '● خطأ',
+                        'locked': '● قيد التعديل'
                     }
-                    status_text = status_map.get(f.get('sync_status', 'synced'), '● محفوظ')
+                    status_text = status_map.get(f.get('sync_status', 'synced'), '● متزامن')
                     status_color = STATUS_SYNCED if f.get('sync_status') == 'synced' else (
                         "#0284c7" if f.get('sync_status') == 'cloud_only' else (
                         STATUS_LOCKED if f.get('sync_status') == 'locked' else (
@@ -5159,19 +5110,20 @@ class FileExchangeMainWindow(QMainWindow):
                     Qt.CheckState.Checked if rel_path in self.selected_rel_paths else Qt.CheckState.Unchecked
                 )
                 item0.setIcon(office_icon)
-                item0.setFont(QFont("Cairo", 11, QFont.Weight.Bold))
+                item0.setFont(QFont("IBM Plex Sans Arabic", 11, QFont.Weight.DemiBold))
+                item0.setForeground(QColor("#1B1F24"))
                 item0.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
                 item0.setData(Qt.ItemDataRole.UserRole, rel_path)
                 item0.setData(Qt.ItemDataRole.UserRole + 1, is_folder)
-                item0.setToolTip(f"{name}\nالنوع: {app_name} • {type_tag}\nالحجم: {size_str}\nالمسار: {rel_path}")
+                item0.setToolTip(f"{name}\nالنوع: {app_name}\nالحجم: {size_str}\nالمسار: {rel_path}")
 
                 # الخلية 1: البرنامج المقترن / نوع العنصر
                 item1 = self.table.item(row, 1)
                 if item1 is None:
                     item1 = QTableWidgetItem(app_name)
-                    item1.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
+                    item1.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Medium))
                     item1.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
-                    item1.setForeground(QColor("#2d3d38"))
+                    item1.setForeground(QColor("#475467"))
                     self.table.setItem(row, 1, item1)
                 else:
                     if item1.text() != app_name:
@@ -5182,7 +5134,7 @@ class FileExchangeMainWindow(QMainWindow):
                 item2 = self.table.item(row, 2)
                 if item2 is None:
                     item2 = QTableWidgetItem(date_str)
-                    item2.setFont(QFont("Segoe UI", 10))
+                    item2.setFont(QFont("Segoe UI", 9))
                     item2.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignCenter)
                     item2.setForeground(QColor(TEXT_MUTED))
                     self.table.setItem(row, 2, item2)
@@ -5195,7 +5147,7 @@ class FileExchangeMainWindow(QMainWindow):
                 item3 = self.table.item(row, 3)
                 if item3 is None:
                     item3 = QTableWidgetItem(size_str)
-                    item3.setFont(QFont("Segoe UI", 10))
+                    item3.setFont(QFont("Segoe UI", 9))
                     item3.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignCenter)
                     item3.setForeground(QColor(TEXT_MUTED))
                     self.table.setItem(row, 3, item3)
@@ -5208,7 +5160,7 @@ class FileExchangeMainWindow(QMainWindow):
                 item4 = self.table.item(row, 4)
                 if item4 is None:
                     item4 = QTableWidgetItem(status_text)
-                    item4.setFont(QFont("Cairo", 10, QFont.Weight.Bold))
+                    item4.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.DemiBold))
                     item4.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignCenter)
                     item4.setForeground(QColor(status_color))
                     self.table.setItem(row, 4, item4)
@@ -5235,16 +5187,16 @@ class FileExchangeMainWindow(QMainWindow):
                     act_widget.setFixedHeight(40)
                     act_layout = QHBoxLayout(act_widget)
                     act_layout.setContentsMargins(4, 2, 4, 2)
-                    act_layout.setSpacing(3)
+                    act_layout.setSpacing(4)
 
                     if is_folder:
-                        btn_open = QPushButton("📂 فتح")
+                        btn_open = QPushButton("فتح")
                         btn_open.setObjectName("btnTileOpen")
                         btn_open.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
                         btn_open.clicked.connect(lambda _, n=name: self._navigate_into_folder(n))
                         act_layout.addWidget(btn_open)
 
-                        btn_move = QPushButton("📂")
+                        btn_move = QPushButton("نقل")
                         btn_move.setObjectName("btnTableRename")
                         btn_move.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
                         btn_move.setToolTip("نقل المجلد إلى قسم / مجلد آخر...")
@@ -5253,28 +5205,28 @@ class FileExchangeMainWindow(QMainWindow):
                         ]))
                         act_layout.addWidget(btn_move)
 
-                        btn_rename = QPushButton("✏️")
+                        btn_rename = QPushButton("تسمية")
                         btn_rename.setObjectName("btnTableRename")
                         btn_rename.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
                         btn_rename.setToolTip("تعديل اسم المجلد (F2)")
                         btn_rename.clicked.connect(lambda _, n=name: self._rename_folder(n))
                         act_layout.addWidget(btn_rename)
 
-                        btn_del = QPushButton("🗑️")
+                        btn_del = QPushButton("حذف")
                         btn_del.setObjectName("btnTableDelete")
                         btn_del.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
                         btn_del.setToolTip("نقل المجلد إلى سلة المحذوفات")
                         btn_del.clicked.connect(lambda _, n=name, rp=rel_path: self._move_folder_to_trash(n, rel_path=rp))
                         act_layout.addWidget(btn_del)
                     else:
-                        open_txt = "🖼️ عرض" if get_type_key(name) == 'image' else "⚡ فتح"
+                        open_txt = "عرض" if get_type_key(name) == 'image' else "فتح"
                         btn_open = QPushButton(open_txt)
                         btn_open.setObjectName("btnTileOpen")
                         btn_open.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
                         btn_open.clicked.connect(lambda _, n=name, rp=rel_path: self._open_file_by_name(n, rp))
                         act_layout.addWidget(btn_open)
 
-                        btn_move = QPushButton("📂")
+                        btn_move = QPushButton("نقل")
                         btn_move.setObjectName("btnTableRename")
                         btn_move.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
                         btn_move.setToolTip("نقل المستند إلى قسم / مجلد آخر...")
@@ -5283,14 +5235,14 @@ class FileExchangeMainWindow(QMainWindow):
                         ]))
                         act_layout.addWidget(btn_move)
 
-                        btn_rename = QPushButton("✏️")
+                        btn_rename = QPushButton("تسمية")
                         btn_rename.setObjectName("btnTableRename")
                         btn_rename.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
                         btn_rename.setToolTip("تعديل اسم المستند (F2)")
                         btn_rename.clicked.connect(lambda _, n=name, rp=rel_path: self._rename_file(n, rp))
                         act_layout.addWidget(btn_rename)
 
-                        btn_del = QPushButton("🗑️")
+                        btn_del = QPushButton("حذف")
                         btn_del.setObjectName("btnTableDelete")
                         btn_del.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
                         btn_del.setToolTip("نقل المستند إلى سلة المحذوفات")
@@ -5301,7 +5253,7 @@ class FileExchangeMainWindow(QMainWindow):
 
                 # ضبط ارتفاع الصف ديناميكياً ليتسع للاسم الكامل في حال التفافه لعدة أسطر دون أي اقتطاع
                 self.table.resizeRowToContents(row)
-                self.table.setRowHeight(row, max(54, self.table.rowHeight(row) + 10))
+                self.table.setRowHeight(row, max(56, self.table.rowHeight(row) + 10))
         finally:
             self.table.setUpdatesEnabled(True)
             self.table.blockSignals(False)
@@ -5456,7 +5408,10 @@ class FileExchangeMainWindow(QMainWindow):
                             last_size = cur.st_size
                             time.sleep(0.5)
                             if hasattr(self, 'sync_engine') and self.sync_engine:
-                                self.sync_engine.wake(delay=0.3)
+                                if hasattr(self.sync_engine, 'queue_fast_upload'):
+                                    self.sync_engine.queue_fast_upload(rel_path or file_name, delay=0.5)
+                                else:
+                                    self.sync_engine.wake(delay=0.3)
                     except Exception:
                         pass
             except Exception:
@@ -5551,6 +5506,7 @@ class FileExchangeMainWindow(QMainWindow):
         elif open_ext_action and action == open_ext_action:
             if file_path.exists():
                 OfficeHandler.open_native_file(str(file_path))
+                self._watch_opened_file_for_changes(file_path, actual_rel or file_name)
         elif action == open_folder_action:
             if file_path.exists():
                 subprocess.Popen(f'explorer /select,"{str(file_path)}"')

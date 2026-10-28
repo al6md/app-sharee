@@ -984,12 +984,78 @@ export default function AdminControlPage() {
     return matchDept && matchSearch;
   });
 
+  // أيقونة مميزة لكل نوع ملف في جدول الأدمن
+  const getAdminFileIcon = (fileName: string) => {
+    const ext = fileName.includes('.') ? '.' + fileName.split('.').pop()?.toLowerCase() : '';
+    if (['.doc', '.docx', '.rtf'].includes(ext)) {
+      return (
+        <div className="w-9 h-9 rounded-lg bg-[#2B579A] text-white flex items-center justify-center font-bold text-xs shrink-0 select-none">
+          W
+        </div>
+      );
+    }
+    if (['.xls', '.xlsx', '.csv'].includes(ext)) {
+      return (
+        <div className="w-9 h-9 rounded-lg bg-[#217346] text-white flex items-center justify-center font-bold text-xs shrink-0 select-none">
+          X
+        </div>
+      );
+    }
+    if (['.mdb', '.accdb'].includes(ext)) {
+      return (
+        <div className="w-9 h-9 rounded-lg bg-[#A4373A] text-white flex items-center justify-center font-bold text-xs shrink-0 select-none">
+          A
+        </div>
+      );
+    }
+    if (ext === '.pdf') {
+      return (
+        <div className="w-9 h-9 rounded-lg bg-[#E5252A] text-white flex items-center justify-center font-bold text-[10px] tracking-tight shrink-0 select-none">
+          PDF
+        </div>
+      );
+    }
+    if (['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg'].includes(ext)) {
+      return (
+        <div className="w-9 h-9 rounded-lg bg-[#7C3AED] text-white flex items-center justify-center font-bold text-[10px] shrink-0 select-none">
+          IMG
+        </div>
+      );
+    }
+    if (['.mp4', '.mov', '.avi', '.mkv', '.webm'].includes(ext)) {
+      return (
+        <div className="w-9 h-9 rounded-lg bg-[#4F46E5] text-white flex items-center justify-center font-bold text-[10px] shrink-0 select-none">
+          VID
+        </div>
+      );
+    }
+    if (['.mp3', '.wav', '.ogg', '.m4a'].includes(ext)) {
+      return (
+        <div className="w-9 h-9 rounded-lg bg-[#DB2777] text-white flex items-center justify-center font-bold text-[10px] shrink-0 select-none">
+          AUD
+        </div>
+      );
+    }
+    if (['.zip', '.rar', '.7z', '.tar', '.gz'].includes(ext)) {
+      return (
+        <div className="w-9 h-9 rounded-lg bg-[#D97706] text-white flex items-center justify-center font-bold text-[10px] shrink-0 select-none">
+          ZIP
+        </div>
+      );
+    }
+    return (
+      <div className="w-9 h-9 rounded-lg bg-[#475467] text-white flex items-center justify-center shrink-0 select-none">
+        <FileText className="w-4 h-4" />
+      </div>
+    );
+  };
+
   // حالة انتظار التحقق من الجلسة
   if (isCheckingAuth) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[70vh] gap-3">
-        <RefreshCw className="w-9 h-9 animate-spin text-[#14372e]" />
-        <p className="text-sm font-bold text-slate-600">جاري التحقق من أمان الجلسة ومزامنة السحابة...</p>
+        <RefreshCw className="w-8 h-8 animate-spin text-[#14372e]" />
+        <p className="text-[13px] font-medium text-[#667085]">جاري التحقق من أمان الجلسة ومزامنة السحابة...</p>
       </div>
     );
   }
@@ -998,28 +1064,28 @@ export default function AdminControlPage() {
   if (!isAuthenticated) {
     return (
       <div className="min-h-[85vh] flex items-center justify-center p-4">
-        <div className="w-full max-w-md bg-white rounded-3xl border border-slate-200 shadow-xl overflow-hidden">
+        <div className="w-full max-w-md bg-white rounded-2xl border border-[#E4E7EC] shadow-sm overflow-hidden">
           {/* الترويسة الرسمية لبطاقة الدخول */}
-          <div className="bg-gradient-to-r from-[#0e2720] via-[#14372e] to-[#1a473b] p-6 text-white text-center border-b-4 border-[#c59b27] relative">
-            <div className="w-16 h-16 mx-auto mb-3 rounded-full bg-white/10 p-1 border-2 border-[#c59b27] flex items-center justify-center shadow-md">
-              <Shield className="w-8 h-8 text-[#ecd58a]" />
+          <div className="bg-white p-6 text-center border-b border-[#E4E7EC]">
+            <div className="w-16 h-16 mx-auto mb-3 rounded-xl bg-[#F7F8FA] p-2 border border-[#E4E7EC] flex items-center justify-center">
+              <img src="/logo.png" alt="شعار غرفة تجارة كربلاء" className="w-full h-full object-contain" />
             </div>
-            <h2 className="text-xl font-black text-white">تسجيل دخول لوحة الأدمن</h2>
-            <p className="text-sm text-[#ecd58a] mt-1 font-bold">غرفة تجارة كربلاء المقدسة</p>
-            <p className="text-xs text-slate-300 mt-1">المنطقة مقيدة ومخصصة لإدارة المنظومة والصلاحيات فقط</p>
+            <h2 className="text-[20px] font-bold text-[#1B1F24]">لوحة الإدارة والتحكم</h2>
+            <p className="text-[13px] text-[#14372e] mt-1 font-semibold">غرفة تجارة كربلاء المقدسة</p>
+            <p className="text-[12px] text-[#667085] mt-1">مخصصة لإدارة الأقسام والصلاحيات السحابية</p>
           </div>
 
           {/* نموذج تسجيل الدخول */}
           <form onSubmit={handleLogin} className="p-6 space-y-4">
             {loginError && (
-              <div className="flex items-center gap-2 p-3.5 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-sm font-bold">
-                <AlertTriangle className="w-5 h-5 shrink-0" />
+              <div className="flex items-center gap-2 p-3 bg-rose-50 border border-rose-200 text-[#F04438] rounded-lg text-[13px] font-semibold">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
                 <span>{loginError}</span>
               </div>
             )}
 
             <div>
-              <label className="block text-sm font-bold text-slate-800 mb-1.5">اسم مستخدم الأدمن</label>
+              <label className="block text-[13px] font-semibold text-[#1B1F24] mb-1.5">اسم مستخدم الأدمن</label>
               <div className="relative">
                 <input
                   type="text"
@@ -1027,14 +1093,14 @@ export default function AdminControlPage() {
                   value={loginUser}
                   onChange={(e) => setLoginUser(e.target.value)}
                   placeholder={`أدخل اسم المستخدم (الحالي: ${adminUsername})`}
-                  className="w-full pl-3 pr-10 py-3 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14372e] focus:bg-white transition font-bold"
+                  className="w-full pl-3 pr-9 py-2.5 text-[14px] bg-[#F7F8FA] border border-[#E4E7EC] rounded-lg focus:outline-none focus:border-[#14372e] focus:bg-white transition font-medium"
                 />
-                <User className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5" />
+                <User className="w-4 h-4 text-[#667085] absolute right-3 top-3" />
               </div>
             </div>
 
             <div>
-              <label className="block text-sm font-bold text-slate-800 mb-1.5">كلمة المرور</label>
+              <label className="block text-[13px] font-semibold text-[#1B1F24] mb-1.5">كلمة المرور</label>
               <div className="relative">
                 <input
                   type={showLoginPass ? 'text' : 'password'}
@@ -1042,15 +1108,15 @@ export default function AdminControlPage() {
                   value={loginPass}
                   onChange={(e) => setLoginPass(e.target.value)}
                   placeholder="أدخل كلمة المرور"
-                  className="w-full pl-10 pr-10 py-3 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14372e] focus:bg-white transition font-bold"
+                  className="w-full pl-10 pr-9 py-2.5 text-[14px] bg-[#F7F8FA] border border-[#E4E7EC] rounded-lg focus:outline-none focus:border-[#14372e] focus:bg-white transition font-medium"
                 />
-                <Lock className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5" />
+                <Lock className="w-4 h-4 text-[#667085] absolute right-3 top-3" />
                 <button
                   type="button"
                   onClick={() => setShowLoginPass(!showLoginPass)}
-                  className="absolute left-3 top-3 text-slate-400 hover:text-slate-600 transition"
+                  className="absolute left-3 top-2.5 text-[#667085] hover:text-[#1B1F24] transition"
                 >
-                  {showLoginPass ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                  {showLoginPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
             </div>
@@ -1058,34 +1124,25 @@ export default function AdminControlPage() {
             <button
               type="submit"
               disabled={loggingIn}
-              className="w-full py-3.5 bg-[#14372e] hover:bg-[#1a473b] text-white text-sm font-black rounded-xl transition shadow-md active:scale-98 flex items-center justify-center gap-2 mt-2 disabled:opacity-60"
+              className="w-full py-2.5 bg-[#14372e] hover:bg-[#1b493d] text-white text-[14px] font-semibold rounded-lg transition flex items-center justify-center gap-2 mt-2 disabled:opacity-60"
             >
-              {loggingIn ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Key className="w-4 h-4 text-[#ecd58a]" />}
-              <span>{loggingIn ? 'جاري التحقق من السحابة...' : 'تسجيل الدخول إلى لوحة التحكم'}</span>
+              {loggingIn ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Key className="w-4 h-4 text-[#c59b27]" />}
+              <span>{loggingIn ? 'جاري التحقق...' : 'تسجيل الدخول'}</span>
             </button>
 
-            {/* بطاقة توضيحية لبيانات الدخول */}
-            <div className="p-3.5 bg-amber-50 rounded-xl border border-amber-200 text-amber-900 text-xs leading-relaxed space-y-1">
-              <div className="flex items-center gap-1.5 font-bold">
-                <Key className="w-4 h-4 text-amber-700" />
-                <span>معلومات الدخول:</span>
-              </div>
-              <p className="text-xs text-amber-950 font-bold">
-                اسم المستخدم النشط حالياً:{' '}
-                <span className="bg-amber-100 px-2 py-0.5 rounded border border-amber-300 font-mono">
+            <div className="p-3 bg-[#F7F8FA] rounded-lg border border-[#E4E7EC] text-[#667085] text-[12px] leading-relaxed space-y-1">
+              <div className="flex items-center justify-between">
+                <span>اسم المستخدم النشط:</span>
+                <span className="bg-white px-2 py-0.5 rounded border border-[#E4E7EC] font-mono font-semibold text-[#1B1F24]">
                   {adminUsername}
                 </span>
-              </p>
-              <p className="text-[11px] text-amber-800">
-                (إذا لم تقم بتغيير كلمة المرور مسبقاً فإن كلمة المرور الافتراضية هي:{' '}
-                <code className="font-bold">admin1234</code>).
-              </p>
+              </div>
             </div>
 
-            <div className="pt-2 text-center">
+            <div className="pt-1 text-center">
               <a
                 href="/files"
-                className="text-sm text-slate-600 hover:text-slate-900 font-bold transition inline-flex items-center gap-1"
+                className="text-[13px] text-[#667085] hover:text-[#1B1F24] font-semibold transition inline-flex items-center gap-1"
               >
                 <span>← العودة إلى صفحة المستندات والأقسام</span>
               </a>
@@ -1098,31 +1155,29 @@ export default function AdminControlPage() {
 
   // 2. المحتوى الكامل للوحة تحكم الأدمن (عند تسجيل الدخول بنجاح)
   return (
-    <div className="p-4 sm:p-6 md:p-8 space-y-6 max-w-[1440px] mx-auto w-full">
-      {/* 1. الترويسة الرسمية للوحة تحكم الأدمن مع أزرار الإدارة وتغيير بيانات الدخول */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-gradient-to-r from-[#0e2720] via-[#14372e] to-[#1a473b] p-6 rounded-3xl text-white shadow-lg border-b-4 border-[#c59b27]">
-        <div className="space-y-1.5">
-          <div className="flex items-center gap-3">
-            <span className="p-2.5 bg-[#c59b27]/20 rounded-xl text-[#ecd58a] border border-[#c59b27]/40 shrink-0">
-              <Shield className="w-6 h-6" />
-            </span>
-            <h1 className="text-lg sm:text-2xl font-black text-white leading-snug">
-              لوحة الإدارة والتحكم المركزي – غرفة تجارة كربلاء المقدسة
-            </h1>
+    <div className="p-4 sm:p-6 space-y-5 max-w-[1440px] mx-auto w-full">
+      {/* 1. الترويسة الرسمية النظيفة للوحة تحكم الأدمن */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white p-5 rounded-xl border border-[#E4E7EC]">
+        <div className="flex items-center gap-3.5">
+          <div className="w-12 h-12 rounded-xl bg-[#F7F8FA] border border-[#E4E7EC] p-1.5 flex items-center justify-center shrink-0">
+            <img src="/logo.png" alt="شعار الغرفة" className="w-full h-full object-contain" />
           </div>
-          <p className="text-xs sm:text-sm text-slate-200 leading-relaxed">
-            التحكم الفعلي الشامل في الأقسام، ومصفوفة الصلاحيات السحابية، وبيانات دخول الأدمن، والأجهزة المعتمدة.
-          </p>
+          <div>
+            <h1 className="text-[18px] sm:text-[22px] font-bold text-[#1B1F24] leading-snug">
+              لوحة الإدارة والصلاحيات
+            </h1>
+            <p className="text-[13px] text-[#667085] mt-0.5">
+              إدارة الأقسام، مصفوفة الصلاحيات السحابية، بيانات الدخول، والأجهزة المعتمدة
+            </p>
+          </div>
         </div>
 
-        <div className="flex items-center gap-2.5 flex-wrap">
-          {/* اسم المسؤول النشط */}
-          <span className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-white/10 text-[#ecd58a] rounded-xl text-sm font-bold border border-white/15">
-            <User className="w-4 h-4" />
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#F7F8FA] text-[#1B1F24] rounded-lg text-[13px] font-medium border border-[#E4E7EC]">
+            <User className="w-4 h-4 text-[#14372e]" />
             <span>المسؤول: {adminUsername}</span>
           </span>
 
-          {/* زر تغيير بيانات الدخول */}
           <button
             onClick={() => {
               setNewUserInput(adminUsername);
@@ -1132,92 +1187,84 @@ export default function AdminControlPage() {
               setCredSuccess('');
               setActiveTab('ACCOUNT');
             }}
-            className="flex items-center gap-1.5 px-4 py-2 bg-[#c59b27] hover:bg-[#b0871d] text-[#0e2720] rounded-xl text-sm font-black transition shadow-sm active:scale-95 cursor-pointer"
-            title="تغيير اسم المستخدم أو كلمة المرور"
+            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#EDF5F2] hover:bg-[#dfece7] text-[#14372e] rounded-lg text-[13px] font-semibold transition cursor-pointer"
           >
             <Key className="w-4 h-4" />
-            <span>تغيير اليوزر والباسورد</span>
+            <span>بيانات الدخول</span>
           </button>
 
-          {/* زر تسجيل الخروج */}
-          <button
-            onClick={handleLogout}
-            className="flex items-center gap-1.5 px-3.5 py-2 bg-rose-600/90 hover:bg-rose-700 text-white rounded-xl text-sm font-bold transition active:scale-95 border border-rose-500/30 cursor-pointer"
-            title="تسجيل الخروج"
-          >
-            <LogOut className="w-4 h-4" />
-            <span>خروج</span>
-          </button>
-
-          {/* زر تحديث السحابة */}
           <button
             onClick={() => loadAllData(false)}
             disabled={loading}
-            className="flex items-center gap-1.5 px-3.5 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl text-sm font-bold transition border border-white/15 active:scale-95 cursor-pointer"
-            title="تحديث البيانات من السحابة"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-[#F7F8FA] text-[#1B1F24] rounded-lg text-[13px] font-semibold transition border border-[#E4E7EC] cursor-pointer"
           >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`w-4 h-4 text-[#667085] ${loading ? 'animate-spin' : ''}`} />
             <span>تحديث</span>
+          </button>
+
+          <button
+            onClick={handleLogout}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-[#F04438] rounded-lg text-[13px] font-semibold transition border border-rose-200 cursor-pointer"
+          >
+            <LogOut className="w-4 h-4" />
+            <span>خروج</span>
           </button>
         </div>
       </div>
 
       {/* 2. بطاقات الإحصائيات الأربع المنظمة */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <div
           onClick={() => setActiveTab('DEPTS')}
-          className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between cursor-pointer hover:border-[#14372e] transition"
+          className="bg-white p-4 rounded-xl border border-[#E4E7EC] flex items-center justify-between cursor-pointer hover:border-[#14372e] transition"
         >
           <div>
-            <p className="text-sm font-bold text-slate-600">الأقسام الإدارية</p>
-            <p className="text-2xl sm:text-3xl font-black text-slate-900 mt-1">{departments.length}</p>
-            <p className="text-xs text-emerald-700 font-bold mt-1">متزامنة مع الويندوز والويب</p>
+            <p className="text-[13px] font-medium text-[#667085]">الأقسام الإدارية</p>
+            <p className="text-2xl font-bold text-[#1B1F24] mt-1 font-mono">{departments.length}</p>
           </div>
-          <div className="w-12 h-12 rounded-xl bg-amber-50 text-amber-800 flex items-center justify-center font-bold shrink-0">
-            <Layers className="w-6 h-6" />
+          <div className="w-10 h-10 rounded-lg bg-[#EDF5F2] text-[#14372e] flex items-center justify-center shrink-0">
+            <Layers className="w-5 h-5" />
           </div>
         </div>
 
         <div
           onClick={() => setActiveTab('FILES')}
-          className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between cursor-pointer hover:border-[#107c41] transition"
+          className="bg-white p-4 rounded-xl border border-[#E4E7EC] flex items-center justify-between cursor-pointer hover:border-[#14372e] transition"
         >
           <div>
-            <p className="text-sm font-bold text-slate-600">المستندات المحفوظة</p>
-            <p className="text-2xl sm:text-3xl font-black text-[#107c41] mt-1">
+            <p className="text-[13px] font-medium text-[#667085]">المستندات النشطة</p>
+            <p className="text-2xl font-bold text-[#14372e] mt-1 font-mono">
               {files.filter((f) => !f.isDeleted).length}
             </p>
-            <p className="text-xs text-slate-500 font-bold mt-1">كافة الملفات والوثائق النشطة</p>
           </div>
-          <div className="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center font-bold shrink-0">
-            <FileText className="w-6 h-6" />
+          <div className="w-10 h-10 rounded-lg bg-[#EDF5F2] text-[#14372e] flex items-center justify-center shrink-0">
+            <FileText className="w-5 h-5" />
           </div>
         </div>
 
         <div
           onClick={() => setActiveTab('DEVICES')}
-          className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between cursor-pointer hover:border-[#0f6cbd] transition"
+          className="bg-white p-4 rounded-xl border border-[#E4E7EC] flex items-center justify-between cursor-pointer hover:border-[#14372e] transition"
         >
           <div>
-            <p className="text-sm font-bold text-slate-600">الأجهزة المصرح لها</p>
-            <p className="text-2xl sm:text-3xl font-black text-[#0f6cbd] mt-1">
-              {devices.filter((d) => d.isAuthorized).length}{' '}
-              <span className="text-xs font-bold text-slate-500">من {devices.length} جهاز</span>
+            <p className="text-[13px] font-medium text-[#667085]">الأجهزة المعتمدة</p>
+            <p className="text-2xl font-bold text-[#1B1F24] mt-1 font-mono">
+              {devices.filter((d) => d.isAuthorized).length}
+              <span className="text-[12px] font-normal text-[#667085]"> / {devices.length}</span>
             </p>
-            <p className="text-xs text-sky-700 font-bold mt-1">حواسيب موظفي الغرفة</p>
           </div>
-          <div className="w-12 h-12 rounded-xl bg-sky-50 text-[#0f6cbd] flex items-center justify-center font-bold shrink-0">
-            <Laptop className="w-6 h-6" />
+          <div className="w-10 h-10 rounded-lg bg-[#F7F8FA] text-[#1B1F24] border border-[#E4E7EC] flex items-center justify-center shrink-0">
+            <Laptop className="w-5 h-5" />
           </div>
         </div>
 
         <div
           onClick={() => setActiveTab('PERMS')}
-          className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between cursor-pointer hover:border-amber-600 transition"
+          className="bg-white p-4 rounded-xl border border-[#E4E7EC] flex items-center justify-between cursor-pointer hover:border-[#14372e] transition"
         >
           <div>
-            <p className="text-sm font-bold text-slate-600">الأقسام المقيدة / المحمية</p>
-            <p className="text-2xl sm:text-3xl font-black text-amber-700 mt-1">
+            <p className="text-[13px] font-medium text-[#667085]">الأقسام المقيدة</p>
+            <p className="text-2xl font-bold text-[#c59b27] mt-1 font-mono">
               {
                 permissions.filter(
                   (p) =>
@@ -1229,37 +1276,36 @@ export default function AdminControlPage() {
                 ).length
               }
             </p>
-            <p className="text-xs text-amber-700 font-bold mt-1">تخضع لقواعد حماية مخصصة</p>
           </div>
-          <div className="w-12 h-12 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center font-bold shrink-0">
-            <Shield className="w-6 h-6" />
+          <div className="w-10 h-10 rounded-lg bg-amber-50 text-[#c59b27] flex items-center justify-center shrink-0">
+            <Shield className="w-5 h-5" />
           </div>
         </div>
       </div>
 
       {/* 3. شريط التبويبات الرئيسي للوحة الأدمن */}
-      <div className="flex items-center gap-2.5 border-b border-slate-200 pb-3 overflow-x-auto scrollbar-thin">
+      <div className="flex items-center gap-2 border-b border-[#E4E7EC] pb-3 overflow-x-auto">
         {[
-          { id: 'DEPTS', label: '🏛️ إدارة الأقسام والمجلدات', count: departments.length },
-          { id: 'PERMS', label: '🔐 مصفوفة الصلاحيات السحابية', count: permissions.length },
-          { id: 'ACCOUNT', label: '🔑 حساب الأدمن (اليوزر والباسورد)', count: null },
-          { id: 'FILES', label: '📁 إدارة كافة المستندات', count: files.length },
-          { id: 'DEVICES', label: '💻 أجهزة الموظفين المعتمدة', count: devices.length },
+          { id: 'DEPTS', label: 'إدارة الأقسام والمجلدات', count: departments.length },
+          { id: 'PERMS', label: 'مصفوفة الصلاحيات السحابية', count: permissions.length },
+          { id: 'FILES', label: 'إدارة كافة المستندات', count: files.length },
+          { id: 'DEVICES', label: 'الأجهزة المعتمدة', count: devices.length },
+          { id: 'ACCOUNT', label: 'بيانات حساب الأدمن', count: null },
         ].map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id as any)}
-            className={`flex items-center gap-2 px-4 py-3 rounded-2xl text-sm font-black transition whitespace-nowrap cursor-pointer ${
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-[13px] font-semibold transition whitespace-nowrap cursor-pointer border ${
               activeTab === tab.id
-                ? 'bg-[#14372e] text-white shadow-md'
-                : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
+                ? 'bg-[#14372e] text-white border-[#14372e]'
+                : 'bg-white text-[#1B1F24] hover:bg-[#F7F8FA] border-[#E4E7EC]'
             }`}
           >
             <span>{tab.label}</span>
             {tab.count !== null && (
               <span
-                className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
-                  activeTab === tab.id ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-700'
+                className={`px-2 py-0.5 rounded-full text-[11px] font-semibold font-mono ${
+                  activeTab === tab.id ? 'bg-white/20 text-white' : 'bg-[#F7F8FA] text-[#667085]'
                 }`}
               >
                 {tab.count}
@@ -1704,12 +1750,12 @@ export default function AdminControlPage() {
 
       {/* التبويب الرابع: إدارة كافة المستندات */}
       {activeTab === 'FILES' && (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-          <div className="p-5 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-3 bg-slate-50">
+        <div className="bg-white rounded-xl border border-[#E4E7EC] overflow-hidden">
+          <div className="p-4 border-b border-[#E4E7EC] flex flex-col md:flex-row md:items-center justify-between gap-3 bg-[#F7F8FA]">
             <div>
-              <h3 className="font-black text-base text-slate-900">إدارة المستندات الرسمية والأرشفة</h3>
-              <p className="text-sm text-slate-600 mt-0.5">
-                عرض الأسماء الكاملة للمستندات، تعديل الأسماء، وحذف المستندات الزائدة من التخزين السحابي.
+              <h3 className="font-bold text-[16px] text-[#1B1F24]">إدارة المستندات الرسمية والأرشفة</h3>
+              <p className="text-[13px] text-[#667085] mt-0.5">
+                عرض الأسماء الكاملة للمستندات مع أيقوناتها المميزة، تعديل الأسماء، أو حذف المستندات.
               </p>
             </div>
 
@@ -1717,7 +1763,7 @@ export default function AdminControlPage() {
               <select
                 value={selectedDeptFilter}
                 onChange={(e) => setSelectedDeptFilter(e.target.value)}
-                className="px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-xl font-bold text-slate-800"
+                className="px-3.5 py-2 text-[13px] bg-white border border-[#E4E7EC] rounded-lg font-semibold text-[#1B1F24] focus:outline-none focus:border-[#14372e]"
               >
                 <option value="__ALL__">كافة الأقسام</option>
                 {departments.map((d) => (
@@ -1733,59 +1779,59 @@ export default function AdminControlPage() {
                   placeholder="بحث في المستندات..."
                   value={fileSearch}
                   onChange={(e) => setFileSearch(e.target.value)}
-                  className="pl-3 pr-9 py-2 text-sm bg-white border border-slate-300 rounded-xl font-semibold"
+                  className="pl-3 pr-9 py-2 text-[13px] bg-white border border-[#E4E7EC] rounded-lg font-medium focus:outline-none focus:border-[#14372e]"
                 />
-                <Search className="w-4 h-4 text-slate-400 absolute right-3 top-2.5" />
+                <Search className="w-4 h-4 text-[#667085] absolute right-3 top-2.5" />
               </div>
             </div>
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full text-right text-sm">
-              <thead className="bg-slate-100/80 text-slate-700 border-b border-slate-200 font-black">
+            <table className="w-full text-right">
+              <thead className="bg-[#F7F8FA] text-[#667085] border-b border-[#E4E7EC] font-semibold text-[12px]">
                 <tr>
-                  <th className="p-4 min-w-[280px]">اسم المستند الكامل</th>
-                  <th className="p-4 min-w-[180px]">القسم / المسار</th>
-                  <th className="p-4">الحجم</th>
-                  <th className="p-4">تاريخ الحفظ</th>
-                  <th className="p-4 text-center">الحالة</th>
-                  <th className="p-4 text-center">إجراءات</th>
+                  <th className="py-3 px-4 min-w-[300px]">اسم المستند الكامل</th>
+                  <th className="py-3 px-4 min-w-[180px]">القسم / المسار</th>
+                  <th className="py-3 px-4">الحجم</th>
+                  <th className="py-3 px-4">تاريخ الحفظ</th>
+                  <th className="py-3 px-4 text-center">الحالة</th>
+                  <th className="py-3 px-4 text-center">إجراءات</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-[#E4E7EC]">
                 {filteredFiles.map((file) => (
-                  <tr key={file.id} className="hover:bg-slate-50/70 transition">
-                    <td className="p-4 font-bold text-slate-900">
-                      <div className="flex items-start gap-2.5">
-                        <FileText className="w-5 h-5 text-slate-500 shrink-0 mt-0.5" />
-                        <span className="break-words whitespace-normal leading-relaxed text-sm font-bold">
+                  <tr key={file.id} className="hover:bg-[#F7F8FA] transition">
+                    <td className="py-3.5 px-4">
+                      <div className="flex items-start gap-3">
+                        {getAdminFileIcon(file.name)}
+                        <span className="break-words whitespace-normal leading-relaxed text-[15px] font-medium text-[#1B1F24] pt-0.5">
                           {file.name}
                         </span>
                       </div>
                     </td>
-                    <td className="p-4 text-slate-700 font-semibold break-words whitespace-normal">{file.folder}</td>
-                    <td className="p-4 text-slate-700 font-mono font-bold">{file.size}</td>
-                    <td className="p-4 text-slate-600">{file.lastModifiedAt}</td>
-                    <td className="p-4 text-center">
+                    <td className="py-3.5 px-4 text-[13px] text-[#667085] font-medium break-words whitespace-normal">{file.folder}</td>
+                    <td className="py-3.5 px-4 text-[13px] text-[#667085] font-mono" dir="ltr">{file.size}</td>
+                    <td className="py-3.5 px-4 text-[13px] text-[#667085]">{file.lastModifiedAt}</td>
+                    <td className="py-3.5 px-4 text-center">
                       <span
-                        className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold ${
+                        className={`inline-flex items-center px-2.5 py-0.5 rounded-md text-[12px] font-semibold ${
                           file.isDeleted
-                            ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                            : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                            ? 'bg-rose-50 text-[#F04438] border border-rose-200'
+                            : 'bg-[#EDF5F2] text-[#14372e]'
                         }`}
                       >
-                        {file.isDeleted ? 'في السلة' : 'نشط ومؤرشف'}
+                        {file.isDeleted ? 'في السلة' : 'نشط'}
                       </span>
                     </td>
-                    <td className="p-4 text-center">
-                      <div className="flex items-center justify-center gap-2">
+                    <td className="py-3.5 px-4 text-center">
+                      <div className="flex items-center justify-center gap-1.5">
                         <button
                           onClick={() => {
                             setFileToRename(file);
                             setNewFileNameValue(file.name);
                             setShowRenameFileModal(true);
                           }}
-                          className="p-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition cursor-pointer"
+                          className="p-2 text-[#667085] hover:text-[#1B1F24] hover:bg-[#F7F8FA] rounded-lg transition cursor-pointer"
                           title="تعديل اسم المستند"
                         >
                           <Edit3 className="w-4 h-4" />
@@ -1798,7 +1844,7 @@ export default function AdminControlPage() {
                             await loadAllData(false);
                             notifyLocalDesktopSync();
                           }}
-                          className="p-2 text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-lg transition cursor-pointer"
+                          className="p-2 text-[#F04438] hover:bg-rose-50 rounded-lg transition cursor-pointer"
                           title="حذف المستند"
                         >
                           <Trash2 className="w-4 h-4" />

@@ -43,7 +43,10 @@ import {
   Film,
   Music,
   Archive,
-  Move
+  Move,
+  LayoutGrid,
+  List,
+  Unlock
 } from 'lucide-react';
 // Google Drive Connected
 
@@ -127,7 +130,8 @@ export default function FilesPage() {
   const [currentFolder, setCurrentFolder] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState<string>('ALL');
-  const [showStats, setShowStats] = useState(true);
+  const [showStats, setShowStats] = useState(false);
+  const [viewMode, setViewMode] = useState<'LIST' | 'GRID'>('LIST');
 
   const [files, setFiles] = useState<FileItem[]>([]);
   const [folderMap, setFolderMap] = useState<Record<string, string>>({});
@@ -519,11 +523,20 @@ export default function FilesPage() {
     return 'file';
   };
 
-  const loadData = async () => {
+  const loadData = async (isSilent: boolean | any = false) => {
+    const silent = typeof isSilent === 'boolean' ? isSilent : false;
     try {
-      setLoading(true);
+      if (!silent) {
+        setLoading(true);
+      }
 
-      const res = await fetch('/api/drive/files');
+      const res = await fetch(`/api/drive/files?t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: {
+          'Pragma': 'no-cache',
+          'Cache-Control': 'no-cache'
+        }
+      });
       const data = await res.json();
       if (data.success) {
         if (data.permissions && typeof data.permissions === 'object') {
@@ -575,16 +588,65 @@ export default function FilesPage() {
     } catch (err) {
       console.error('Error fetching files:', err);
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
-    loadData();
-    const interval = setInterval(() => {
-      loadData();
-    }, 10000);
-    return () => clearInterval(interval);
+    loadData(false);
+
+    // 1. مزامنة فورية فائقة السرعة مع جسر تطبيق الحاسوب المحلي (Sub-second companion sync)
+    let lastKnownBridgeSync = 0;
+    const bridgeInterval = setInterval(async () => {
+      try {
+        const bridgeRes = await fetch('http://127.0.0.1:18290/status', {
+          method: 'GET',
+          mode: 'cors',
+          cache: 'no-store',
+          signal: AbortSignal.timeout(1200),
+        });
+        if (bridgeRes.ok) {
+          const info = await bridgeRes.json();
+          const bridgeTs = Number(info.last_sync_time || 0);
+          if (bridgeTs > 0 && bridgeTs > lastKnownBridgeSync) {
+            if (lastKnownBridgeSync !== 0) {
+              // تم حفظ ورفع تعديلات من تطبيق الحاسوب فورياً! تحديث لوحة التحكم مباشرة
+              loadData(true);
+            }
+            lastKnownBridgeSync = bridgeTs;
+          }
+        }
+      } catch {
+        // الجسر المحلي غير متاح أو المستخدم يتصفح من هاتف/جهاز آخر
+      }
+    }, 1500);
+
+    // 2. فحص سحابي دوري هادئ لمزامنة تعديلات المستخدمين الآخرين
+    const cloudInterval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        loadData(true);
+      }
+    }, 4000);
+
+    // 3. تحديث فوري لحظة الرجوع إلى المتصفح (مثلاً بعد حفظ الملف في Word أو Excel)
+    const onFocus = () => loadData(true);
+    const onVisibilityChange = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        loadData(true);
+      }
+    };
+
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      clearInterval(bridgeInterval);
+      clearInterval(cloudInterval);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
   }, []);
 
   // إشعار تطبيق سطح المكتب المحلي بالمزامنة الفورية بعد أي عملية رفع أو تعديل عبر الويب
@@ -1668,28 +1730,21 @@ export default function FilesPage() {
       // إذا لم يكن الجسر المحلي يعمل أو تأخر
     }
 
-    // ثانياً: إذا لم يستجب الجسر المحلي (مثلاً لأن التطبيق غير مشغل على هذا الحاسوب)
-    // نضمن أن الملف يفتح فوراً عبر تشغيل البروتوكول وتنزيل نسخة للمستخدم
+    // ثانياً: إذا لم يستجب الجسر المباشر، استدعاء بروتوكول sharecoc:// لفتح الملف في المجلد المشترك المتزامن
     if (!openedViaBridge) {
       try {
         const protocolUrl = `sharecoc://open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder)}&storage_path=${encodeURIComponent(file.storagePath || file.id)}`;
         window.location.assign(protocolUrl);
-      } catch {}
-
-      // تنزيل الملف فوراً حتى لا يبقى المستخدم عالقاً أبداً
-      setTimeout(() => {
         setToastMessage({
-          text: `📥 جاري تنزيل "${file.name}" مباشرة لفتحه في برنامج ${officeName}...`,
-          type: 'info'
+          text: `🚀 جاري فتح "${file.name}" مباشرة في برنامج ${officeName} عبر تطبيق Share COC...`,
+          type: 'success'
         });
-        const downloadUrl = `/api/drive/stream?id=${encodeURIComponent(file.id)}&download=1`;
-        const a = document.createElement('a');
-        a.href = downloadUrl;
-        a.download = file.name;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-      }, 1200);
+      } catch {
+        setToastMessage({
+          text: `⚠️ تعذر تشغيل برنامج ${officeName} تلقائياً. تأكد من تشغيل تطبيق Share COC على جهازك.`,
+          type: 'error'
+        });
+      }
     }
   };
 
@@ -2151,43 +2206,96 @@ export default function FilesPage() {
   const getFileBadge = (type: string) => {
     switch (type) {
       case 'word':
-        return <span className="bg-sky-50 text-sky-700 border border-sky-200 text-[10px] font-bold px-2 py-0.5 rounded">Word</span>;
+        return <span className="bg-[#2B579A]/10 text-[#2B579A] border border-[#2B579A]/25 text-[11px] font-semibold px-2 py-0.5 rounded-md">Word</span>;
       case 'excel':
-        return <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold px-2 py-0.5 rounded">Excel</span>;
+        return <span className="bg-[#217346]/10 text-[#217346] border border-[#217346]/25 text-[11px] font-semibold px-2 py-0.5 rounded-md">Excel</span>;
       case 'access':
-        return <span className="bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-bold px-2 py-0.5 rounded">Access</span>;
+        return <span className="bg-[#A4373A]/10 text-[#A4373A] border border-[#A4373A]/25 text-[11px] font-semibold px-2 py-0.5 rounded-md">Access</span>;
       case 'pdf':
-        return <span className="bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-bold px-2 py-0.5 rounded">PDF</span>;
+        return <span className="bg-[#E5252A]/10 text-[#E5252A] border border-[#E5252A]/25 text-[11px] font-semibold px-2 py-0.5 rounded-md">PDF</span>;
       case 'image':
-        return <span className="bg-purple-50 text-purple-700 border border-purple-200 text-[10px] font-bold px-2 py-0.5 rounded">صورة</span>;
+        return <span className="bg-purple-50 text-purple-700 border border-purple-200 text-[11px] font-semibold px-2 py-0.5 rounded-md">صورة</span>;
       case 'video':
-        return <span className="bg-indigo-50 text-indigo-700 border border-indigo-200 text-[10px] font-bold px-2 py-0.5 rounded">فيديو</span>;
+        return <span className="bg-indigo-50 text-indigo-700 border border-indigo-200 text-[11px] font-semibold px-2 py-0.5 rounded-md">فيديو</span>;
       case 'audio':
-        return <span className="bg-pink-50 text-pink-700 border border-pink-200 text-[10px] font-bold px-2 py-0.5 rounded">صوت</span>;
+        return <span className="bg-pink-50 text-pink-700 border border-pink-200 text-[11px] font-semibold px-2 py-0.5 rounded-md">صوت</span>;
       case 'archive':
-        return <span className="bg-orange-50 text-orange-700 border border-orange-200 text-[10px] font-bold px-2 py-0.5 rounded">مضغوط</span>;
+        return <span className="bg-amber-50 text-amber-800 border border-amber-200 text-[11px] font-semibold px-2 py-0.5 rounded-md">أرشيف</span>;
       default:
-        return <span className="bg-slate-50 text-slate-700 border border-slate-200 text-[10px] font-bold px-2 py-0.5 rounded">ملف عام</span>;
+        return <span className="bg-slate-100 text-[#667085] border border-[#E4E7EC] text-[11px] font-semibold px-2 py-0.5 rounded-md">ملف</span>;
     }
   };
 
-  const getFileIcon = (type: string) => {
+  const getFileIcon = (type: string, size: 'sm' | 'md' | 'lg' = 'md') => {
+    const boxClass =
+      size === 'lg'
+        ? 'w-11 h-11 rounded-xl text-xs'
+        : size === 'sm'
+        ? 'w-8 h-8 rounded-lg text-[10px]'
+        : 'w-10 h-10 rounded-xl text-[11px]';
+    const iconSize = size === 'lg' ? 'w-5 h-5' : 'w-4 h-4';
+
     switch (type) {
-      case 'word': return <FileText className="w-5 h-5 text-sky-600" />;
-      case 'excel': return <FileSpreadsheet className="w-5 h-5 text-emerald-600" />;
-      case 'access': return <Database className="w-5 h-5 text-amber-700" />;
-      case 'pdf': return <FileText className="w-5 h-5 text-rose-600" />;
-      case 'image': return <Camera className="w-5 h-5 text-purple-600" />;
-      case 'video': return <Film className="w-5 h-5 text-indigo-600" />;
-      case 'audio': return <Music className="w-5 h-5 text-pink-600" />;
-      case 'archive': return <Archive className="w-5 h-5 text-orange-600" />;
-      default: return <FileCode className="w-5 h-5 text-slate-500" />;
+      case 'word':
+        return (
+          <div className={`${boxClass} bg-[#2B579A] text-white font-bold flex flex-col items-center justify-center shrink-0 select-none`} title="Microsoft Word">
+            <span className="leading-none font-black tracking-tighter">W</span>
+          </div>
+        );
+      case 'excel':
+        return (
+          <div className={`${boxClass} bg-[#217346] text-white font-bold flex flex-col items-center justify-center shrink-0 select-none`} title="Microsoft Excel">
+            <span className="leading-none font-black tracking-tighter">X</span>
+          </div>
+        );
+      case 'access':
+        return (
+          <div className={`${boxClass} bg-[#A4373A] text-white font-bold flex flex-col items-center justify-center shrink-0 select-none`} title="Microsoft Access">
+            <span className="leading-none font-black tracking-tighter">A</span>
+          </div>
+        );
+      case 'pdf':
+        return (
+          <div className={`${boxClass} bg-[#E5252A] text-white font-bold flex flex-col items-center justify-center shrink-0 select-none`} title="وثيقة PDF">
+            <span className="leading-none font-black tracking-tighter text-[10px]">PDF</span>
+          </div>
+        );
+      case 'image':
+        return (
+          <div className={`${boxClass} bg-purple-600 text-white flex items-center justify-center shrink-0`} title="صورة">
+            <Camera className={iconSize} />
+          </div>
+        );
+      case 'video':
+        return (
+          <div className={`${boxClass} bg-indigo-600 text-white flex items-center justify-center shrink-0`} title="فيديو">
+            <Film className={iconSize} />
+          </div>
+        );
+      case 'audio':
+        return (
+          <div className={`${boxClass} bg-pink-600 text-white flex items-center justify-center shrink-0`} title="ملف صوتي">
+            <Music className={iconSize} />
+          </div>
+        );
+      case 'archive':
+        return (
+          <div className={`${boxClass} bg-amber-600 text-white flex items-center justify-center shrink-0`} title="أرشيف مضغوط">
+            <Archive className={iconSize} />
+          </div>
+        );
+      default:
+        return (
+          <div className={`${boxClass} bg-slate-600 text-white flex items-center justify-center shrink-0`} title="ملف عام">
+            <FileCode className={iconSize} />
+          </div>
+        );
     }
   };
 
   return (
     <div
-      className="p-3 sm:p-6 md:p-8 space-y-4 max-w-7xl mx-auto w-full relative"
+      className="p-4 sm:p-6 md:p-8 space-y-4 max-w-[1400px] mx-auto w-full relative"
       onDragEnter={(e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -2232,65 +2340,46 @@ export default function FilesPage() {
         }
       }}
     >
-      {/* شاشة السحب والإفلات التفاعلية الفورية (Drag and Drop Visual Overlay) */}
+      {/* شاشة السحب والإفلات التفاعلية */}
       {isDraggingOver && (
-        <div className="fixed inset-0 z-50 bg-[#14372e]/85 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-white border-4 border-dashed border-emerald-400 m-4 rounded-3xl animate-in fade-in duration-200 pointer-events-none" dir="rtl">
-          <div className="bg-emerald-500/20 p-6 rounded-3xl mb-4 border border-emerald-400/30 animate-bounce">
-            <UploadCloud className="w-16 h-16 text-amber-300" />
+        <div className="fixed inset-0 z-50 bg-[#14372e]/90 flex flex-col items-center justify-center p-6 text-white border-2 border-dashed border-[#c59b27] m-4 rounded-2xl pointer-events-none" dir="rtl">
+          <div className="bg-white/10 p-5 rounded-2xl mb-4 border border-white/20">
+            <UploadCloud className="w-12 h-12 text-[#ecd58a]" />
           </div>
-          <h3 className="text-2xl font-black mb-2 text-white">
-            أفلت الملفات أو المجلدات هنا للرفع السحابي الفوري
+          <h3 className="text-xl font-bold mb-1 text-white">
+            أفلت الملفات أو المجلدات هنا للرفع المباشر
           </h3>
-          <p className="text-emerald-100 text-sm max-w-lg text-center font-bold leading-relaxed">
-            يدعم النظام سحب الملفات الفردية، المجموعات، والمجلدات الكاملة بهيكليتها مع مؤشر دقيق للسرعة والميغابايت ودعم كامل للملفات الكبيرة.
+          <p className="text-slate-200 text-sm max-w-md text-center">
+            سيتم رفعها إلى القسم النشط ومزامنتها مع كافة أجهزة الغرفة.
           </p>
         </div>
       )}
-      {/* 1. الترويسة وأزرار الإجراءات السريعة (متجاوبة تماماً مع الجوال) */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+
+      {/* 1. الترويسة الرئيسية النظيفة */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-5 rounded-xl border border-[#E4E7EC]">
         <div className="min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-xl sm:text-2xl font-black text-[#14372e] break-words whitespace-normal">
-              {selectedDept === '__ALL__' ? 'كافة المستندات والمجلدات' : selectedDept}
-            </span>
-            <span className="text-xs bg-[#14372e]/10 text-[#14372e] font-bold px-2.5 py-0.5 rounded-full border border-[#14372e]/20 shrink-0">
-              {displayedList.length} مستند
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <h2 className="text-xl sm:text-2xl font-bold text-[#1B1F24] break-words whitespace-normal">
+              {selectedDept === '__ALL__' ? 'كافة المستندات والأقسام' : selectedDept}
+            </h2>
+            <span className="text-xs bg-[#F7F8FA] text-[#667085] font-semibold px-2.5 py-1 rounded-md border border-[#E4E7EC] shrink-0">
+              {displayedList.length} ملف
             </span>
           </div>
-          <p className="text-xs text-slate-600 mt-1 font-medium">
-            مزامنة سحابية مباشرة مع أجهزة الويندوز لغرفة تجارة كربلاء المقدسة
+          <p className="text-[13px] text-[#667085] mt-1">
+            {currentFolder ? `المسار الحالي: ${currentFolder}` : 'مزامنة سحابية مباشرة مع أجهزة الحاسوب في الغرفة'}
           </p>
         </div>
 
-        {/* أزرار العمليات السريعة */}
-        <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
-          {/* زر تصوير كتاب رسمي بالكاميرا (مخصص للهواتف) */}
+        {/* أزرار الإجراءات الرئيسية */}
+        <div className="flex items-center gap-2 flex-wrap">
           {canUploadFolder(activeBrowsePath) && (
             <>
               <button
-                onClick={() => cameraInputRef.current?.click()}
-                disabled={actionLoading}
-                className="flex items-center gap-1.5 bg-[#c59b27] hover:bg-[#b0871d] text-[#0e2720] text-xs font-black px-3 py-2 rounded-xl transition shadow-sm active:scale-95 shrink-0"
-                title="تصوير كتاب رسمي بالكاميرا"
-              >
-                <Camera className="w-4 h-4" />
-                <span>تصوير كتاب</span>
-              </button>
-              <input 
-                type="file" 
-                ref={cameraInputRef} 
-                accept="image/*" 
-                capture="environment" 
-                className="hidden" 
-                onChange={(e) => handleFileUpload(e, true)} 
-              />
-
-              {/* زر رفع ملفات متعددة */}
-              <button
                 onClick={() => fileInputRef.current?.click()}
                 disabled={actionLoading}
-                className="flex items-center gap-1.5 bg-[#14372e] hover:bg-[#1b4b3e] text-white text-xs font-bold px-3 py-2 rounded-xl transition shadow-sm active:scale-95 shrink-0"
-                title="رفع ملفات متعددة دفعة واحدة"
+                className="flex items-center gap-2 bg-[#14372e] hover:bg-[#1b473b] text-white text-xs font-semibold h-10 px-4 rounded-lg transition shrink-0"
+                title="رفع ملفات متعددة"
               >
                 <Upload className="w-4 h-4" />
                 <span>رفع ملفات</span>
@@ -2303,14 +2392,13 @@ export default function FilesPage() {
                 onChange={(e) => handleFileUpload(e, false)} 
               />
 
-              {/* زر رفع مجلد كامل */}
               <button
                 onClick={() => folderInputRef.current?.click()}
                 disabled={actionLoading}
-                className="flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-bold px-3 py-2 rounded-xl transition border border-emerald-200 active:scale-95 shrink-0"
+                className="flex items-center gap-1.5 bg-white hover:bg-[#F7F8FA] text-[#1B1F24] text-xs font-semibold h-10 px-3.5 rounded-lg transition border border-[#E4E7EC] shrink-0"
                 title="رفع مجلد كامل بمحتوياته"
               >
-                <FolderOpen className="w-4 h-4 text-emerald-700" />
+                <FolderOpen className="w-4 h-4 text-[#14372e]" />
                 <span>رفع مجلد</span>
               </button>
               <input 
@@ -2321,10 +2409,27 @@ export default function FilesPage() {
                 className="hidden" 
                 onChange={handleFolderUpload} 
               />
+
+              <button
+                onClick={() => cameraInputRef.current?.click()}
+                disabled={actionLoading}
+                className="flex items-center gap-1.5 bg-white hover:bg-[#F7F8FA] text-[#1B1F24] text-xs font-semibold h-10 px-3.5 rounded-lg transition border border-[#E4E7EC] shrink-0"
+                title="تصوير كتاب رسمي بالكاميرا"
+              >
+                <Camera className="w-4 h-4 text-[#c59b27]" />
+                <span>تصوير كتاب</span>
+              </button>
+              <input 
+                type="file" 
+                ref={cameraInputRef} 
+                accept="image/*" 
+                capture="environment" 
+                className="hidden" 
+                onChange={(e) => handleFileUpload(e, true)} 
+              />
             </>
           )}
 
-          {/* مدخل رفع تحديث المستند بنسخة معدلة */}
           <input 
             type="file" 
             ref={updateFileInputRef} 
@@ -2332,382 +2437,318 @@ export default function FilesPage() {
             onChange={handleUpdateFile} 
           />
 
-          {/* زر إنشاء مجلد جديد */}
           {canCreateSubFolder(activeBrowsePath) && (
             <button
               onClick={() => setShowNewFolderModal(true)}
-              className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold px-3 py-2 rounded-xl transition active:scale-95 shrink-0"
-              title="إنشاء مجلد إداري"
+              className="flex items-center gap-1.5 bg-white hover:bg-[#F7F8FA] text-[#1B1F24] text-xs font-semibold h-10 px-3.5 rounded-lg transition border border-[#E4E7EC] shrink-0"
+              title="إنشاء مجلد فرعي جديد"
             >
-              <FolderPlus className="w-4 h-4 text-amber-600" />
-              <span className="hidden sm:inline">مجلد جديد</span>
+              <FolderPlus className="w-4 h-4 text-[#14372e]" />
+              <span>مجلد جديد</span>
             </button>
           )}
 
-          {/* زر تبديل عرض لوحة الإحصائيات الشاملة */}
           <button
             onClick={() => setShowStats(!showStats)}
-            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition active:scale-95 shrink-0 ${
+            className={`flex items-center gap-1.5 h-10 px-3 rounded-lg text-xs font-semibold transition border shrink-0 ${
               showStats 
-                ? 'bg-amber-100/90 text-amber-950 border border-amber-300 shadow-2xs' 
-                : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                ? 'bg-[#14372e] text-white border-[#14372e]' 
+                : 'bg-white hover:bg-[#F7F8FA] text-[#667085] border-[#E4E7EC]'
             }`}
-            title="عرض إحصائيات المستندات والمساحة حسب النوع"
+            title="إظهار أو إخفاء ملخص الإحصائيات"
           >
-            <BarChart3 className="w-4 h-4 text-amber-700" />
-            <span className="hidden sm:inline">إحصائيات الملفات</span>
+            <BarChart3 className="w-4 h-4" />
+            <span className="hidden sm:inline">الإحصائيات</span>
           </button>
 
-          {/* زر التحديث اللحظي */}
           <button
-            onClick={loadData}
+            onClick={() => loadData()}
             disabled={loading}
-            className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition active:scale-95"
-            title="تحديث البيانات"
+            className="h-10 w-10 flex items-center justify-center bg-white hover:bg-[#F7F8FA] text-[#667085] hover:text-[#1B1F24] rounded-lg border border-[#E4E7EC] transition"
+            title="تحديث الملفات"
           >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-[#14372e]' : ''}`} />
           </button>
         </div>
       </div>
 
-      {/* 1.5. لوحة إحصائيات الملفات والمساحة التخزينية ولكل نوع */}
+      {/* 1.5. ملخص الإحصائيات (يظهر عند الطلب فقط لمنع الازدحام) */}
       {showStats && (
-        <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-xs space-y-3">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
+        <div className="bg-white rounded-xl border border-[#E4E7EC] p-4 space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#E4E7EC] pb-3">
             <div className="flex items-center gap-2">
-              <div className="p-2 bg-[#14372e]/10 text-[#14372e] rounded-xl shrink-0">
-                <BarChart3 className="w-4 h-4 text-[#14372e]" />
-              </div>
-              <div>
-                <h3 className="text-xs sm:text-sm font-black text-slate-800 flex items-center gap-1.5">
-                  <span>إحصائيات المستندات والأنواع</span>
-                  <span className="text-[11px] font-bold text-slate-500">
-                    {selectedDept === '__ALL__' ? '• كافة الأقسام والمجلدات' : `• قسم ${selectedDept}`}
-                  </span>
-                </h3>
-                <p className="text-[11px] text-slate-400">
-                  اضغط على أي نوع لتصفية وعرض مستنداته فوراً
-                </p>
-              </div>
+              <BarChart3 className="w-4 h-4 text-[#14372e]" />
+              <h3 className="text-sm font-bold text-[#1B1F24]">
+                ملخص أنواع المستندات والمساحة التخزينية
+              </h3>
             </div>
-
-            <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
-              <span className="bg-slate-50 text-slate-700 font-bold px-3 py-1 rounded-xl text-xs border border-slate-200 font-mono">
-                💾 إجمالي الحجم: <strong className="text-[#14372e]">{formatSize(stats.totalRawSize)}</strong>
-              </span>
-              <span className="bg-[#14372e]/10 text-[#14372e] font-bold px-3 py-1 rounded-xl text-xs border border-[#14372e]/20 font-mono">
-                🗂️ {stats.totalCount} مستنداً
-              </span>
+            <div className="flex items-center gap-2 text-xs text-[#667085]">
+              <span>إجمالي الحجم: <strong className="text-[#1B1F24] font-mono">{formatSize(stats.totalRawSize)}</strong></span>
+              <span>•</span>
+              <span>العدد: <strong className="text-[#1B1F24] font-mono">{stats.totalCount}</strong></span>
             </div>
           </div>
 
-          {/* شبكة بطاقات الإحصائيات لكل نوع */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
-            {/* 1. الإجمالي العام */}
-            <div 
-              onClick={() => setFilterType('ALL')}
-              className={`cursor-pointer p-3 rounded-xl border transition flex flex-col justify-between ${
-                filterType === 'ALL'
-                  ? 'bg-[#14372e] text-white border-[#14372e] shadow-sm'
-                  : 'bg-slate-50 hover:bg-slate-100/80 text-slate-700 border-slate-200'
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold">كافة الملفات</span>
-                <span className="text-xs">📁</span>
-              </div>
-              <div className="mt-2.5">
-                <div className="text-lg font-black font-mono leading-none">{stats.totalCount}</div>
-                <div className={`text-[10px] mt-1 font-mono font-medium ${filterType === 'ALL' ? 'text-emerald-200' : 'text-slate-400'}`}>
-                  {formatSize(stats.totalRawSize)}
+            {[
+              { key: 'ALL', label: 'الكل', count: stats.totalCount, size: stats.totalRawSize, color: '#14372e' },
+              { key: 'WORD', label: 'Word', count: stats.word.count, size: stats.word.size, color: '#2B579A' },
+              { key: 'EXCEL', label: 'Excel', count: stats.excel.count, size: stats.excel.size, color: '#217346' },
+              { key: 'ACCESS', label: 'Access', count: stats.access.count, size: stats.access.size, color: '#A4373A' },
+              { key: 'PDF', label: 'PDF', count: stats.pdf.count, size: stats.pdf.size, color: '#E5252A' },
+              { key: 'IMAGE', label: 'صور', count: stats.image.count, size: stats.image.size, color: '#7C3AED' },
+            ].map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => setFilterType(filterType === item.key ? 'ALL' : item.key)}
+                className={`p-3 rounded-lg border text-right transition flex flex-col justify-between ${
+                  filterType === item.key
+                    ? 'bg-[#14372e] text-white border-[#14372e]'
+                    : 'bg-[#F7F8FA] hover:bg-white text-[#1B1F24] border-[#E4E7EC]'
+                }`}
+              >
+                <div className="flex items-center justify-between w-full">
+                  <span className="text-xs font-semibold">{item.label}</span>
+                  <span
+                    className="w-2 h-2 rounded-full"
+                    style={{ backgroundColor: filterType === item.key ? '#ffffff' : item.color }}
+                  />
                 </div>
-              </div>
-            </div>
-
-            {/* 2. مستندات Word */}
-            <div 
-              onClick={() => setFilterType(filterType === 'WORD' ? 'ALL' : 'WORD')}
-              className={`cursor-pointer p-3 rounded-xl border transition flex flex-col justify-between ${
-                filterType === 'WORD'
-                  ? 'bg-sky-700 text-white border-sky-700 shadow-sm'
-                  : 'bg-sky-50/60 hover:bg-sky-50 text-sky-950 border-sky-200'
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold">Word</span>
-                <FileText className={`w-4 h-4 ${filterType === 'WORD' ? 'text-white' : 'text-sky-600'}`} />
-              </div>
-              <div className="mt-2.5">
-                <div className="text-lg font-black font-mono leading-none">{stats.word.count}</div>
-                <div className={`text-[10px] mt-1 font-mono font-medium ${filterType === 'WORD' ? 'text-sky-200' : 'text-sky-700'}`}>
-                  {formatSize(stats.word.size)}
+                <div className="mt-2">
+                  <div className="text-lg font-bold font-mono leading-none">{item.count}</div>
+                  <div className={`text-[11px] mt-1 font-mono ${filterType === item.key ? 'text-slate-200' : 'text-[#667085]'}`}>
+                    {formatSize(item.size)}
+                  </div>
                 </div>
-              </div>
-            </div>
-
-            {/* 3. جداول Excel */}
-            <div 
-              onClick={() => setFilterType(filterType === 'EXCEL' ? 'ALL' : 'EXCEL')}
-              className={`cursor-pointer p-3 rounded-xl border transition flex flex-col justify-between ${
-                filterType === 'EXCEL'
-                  ? 'bg-emerald-700 text-white border-emerald-700 shadow-sm'
-                  : 'bg-emerald-50/60 hover:bg-emerald-50 text-emerald-950 border-emerald-200'
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold">Excel</span>
-                <FileSpreadsheet className={`w-4 h-4 ${filterType === 'EXCEL' ? 'text-white' : 'text-emerald-600'}`} />
-              </div>
-              <div className="mt-2.5">
-                <div className="text-lg font-black font-mono leading-none">{stats.excel.count}</div>
-                <div className={`text-[10px] mt-1 font-mono font-medium ${filterType === 'EXCEL' ? 'text-emerald-200' : 'text-emerald-700'}`}>
-                  {formatSize(stats.excel.size)}
-                </div>
-              </div>
-            </div>
-
-            {/* 4. قواعد Access */}
-            <div 
-              onClick={() => setFilterType(filterType === 'ACCESS' ? 'ALL' : 'ACCESS')}
-              className={`cursor-pointer p-3 rounded-xl border transition flex flex-col justify-between ${
-                filterType === 'ACCESS'
-                  ? 'bg-amber-800 text-white border-amber-800 shadow-sm'
-                  : 'bg-amber-50/60 hover:bg-amber-50 text-amber-950 border-amber-200'
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold">Access</span>
-                <Database className={`w-4 h-4 ${filterType === 'ACCESS' ? 'text-white' : 'text-amber-700'}`} />
-              </div>
-              <div className="mt-2.5">
-                <div className="text-lg font-black font-mono leading-none">{stats.access.count}</div>
-                <div className={`text-[10px] mt-1 font-mono font-medium ${filterType === 'ACCESS' ? 'text-amber-200' : 'text-amber-800'}`}>
-                  {formatSize(stats.access.size)}
-                </div>
-              </div>
-            </div>
-
-            {/* 5. وثائق PDF */}
-            <div 
-              onClick={() => setFilterType(filterType === 'PDF' ? 'ALL' : 'PDF')}
-              className={`cursor-pointer p-3 rounded-xl border transition flex flex-col justify-between ${
-                filterType === 'PDF'
-                  ? 'bg-rose-700 text-white border-rose-700 shadow-sm'
-                  : 'bg-rose-50/60 hover:bg-rose-50 text-rose-950 border-rose-200'
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold">PDF</span>
-                <FileText className={`w-4 h-4 ${filterType === 'PDF' ? 'text-white' : 'text-rose-600'}`} />
-              </div>
-              <div className="mt-2.5">
-                <div className="text-lg font-black font-mono leading-none">{stats.pdf.count}</div>
-                <div className={`text-[10px] mt-1 font-mono font-medium ${filterType === 'PDF' ? 'text-rose-200' : 'text-rose-700'}`}>
-                  {formatSize(stats.pdf.size)}
-                </div>
-              </div>
-            </div>
-
-            {/* 6. كتب مصورة / صور */}
-            <div 
-              onClick={() => setFilterType(filterType === 'IMAGE' ? 'ALL' : 'IMAGE')}
-              className={`cursor-pointer p-3 rounded-xl border transition flex flex-col justify-between ${
-                filterType === 'IMAGE'
-                  ? 'bg-purple-700 text-white border-purple-700 shadow-sm'
-                  : 'bg-purple-50/60 hover:bg-purple-50 text-purple-950 border-purple-200'
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold">صور / كاميرا</span>
-                <Camera className={`w-4 h-4 ${filterType === 'IMAGE' ? 'text-white' : 'text-purple-600'}`} />
-              </div>
-              <div className="mt-2.5">
-                <div className="text-lg font-black font-mono leading-none">{stats.image.count}</div>
-                <div className={`text-[10px] mt-1 font-mono font-medium ${filterType === 'IMAGE' ? 'text-purple-200' : 'text-purple-700'}`}>
-                  {formatSize(stats.image.size)}
-                </div>
-              </div>
-            </div>
+              </button>
+            ))}
           </div>
         </div>
       )}
 
-      {/* 2. شريط التبويب: المستندات النشطة مقابل سلة المحذوفات */}
-      <div className="flex items-center justify-between border-b border-slate-200 pb-1">
-        <div className="flex items-center gap-2">
+      {/* 2. شريط الأقسام الأفقية + التبديل بين المستندات النشطة وسلة المحذوفات */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-[#E4E7EC] pb-3">
+        {/* شرائح الأقسام */}
+        <div className="flex items-center gap-1.5 flex-wrap">
           <button
-            onClick={() => setActiveTab('ACTIVE')}
-            className={`flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-xl transition ${
-              activeTab === 'ACTIVE'
-                ? 'bg-[#14372e] text-white shadow-sm'
-                : 'text-slate-600 hover:bg-slate-200'
+            onClick={() => {
+              setActiveTab('ACTIVE');
+              handleSelectDepartment('__ALL__', null);
+            }}
+            className={`px-3.5 py-2 rounded-lg text-xs font-semibold transition border ${
+              activeTab === 'ACTIVE' && selectedDept === '__ALL__'
+                ? 'bg-[#14372e] text-white border-[#14372e]'
+                : 'bg-white text-[#1B1F24] border-[#E4E7EC] hover:bg-[#F7F8FA]'
             }`}
           >
-            <Folder className="w-4 h-4" />
-            <span>المستندات النشطة ({activeFiles.length})</span>
+            كافة الأقسام ({activeFiles.length})
           </button>
 
+          {visibleDepartments.map((dept) => {
+            const count = files.filter(
+              (f) => !f.isDeleted && (f.department === dept || f.folder === dept || f.folder.startsWith(dept + '/'))
+            ).length;
+            const isPinLocked = isDeptPinProtected(dept) && !isDeptUnlocked(dept);
+            const isSelected = activeTab === 'ACTIVE' && selectedDept === dept;
+            return (
+              <button
+                key={dept}
+                onClick={() => {
+                  setActiveTab('ACTIVE');
+                  handleSelectDepartment(dept, null);
+                }}
+                className={`px-3.5 py-2 rounded-lg text-xs font-semibold transition border flex items-center gap-1.5 ${
+                  isSelected
+                    ? 'bg-[#14372e] text-white border-[#14372e]'
+                    : 'bg-white text-[#1B1F24] border-[#E4E7EC] hover:bg-[#F7F8FA]'
+                }`}
+              >
+                {isPinLocked ? (
+                  <Lock className="w-3.5 h-3.5 text-amber-600" />
+                ) : isDeptPinProtected(dept) ? (
+                  <Unlock className="w-3.5 h-3.5 text-emerald-600" />
+                ) : (
+                  <Folder className={`w-3.5 h-3.5 ${isSelected ? 'text-[#ecd58a]' : 'text-[#14372e]'}`} />
+                )}
+                <span>{dept}</span>
+                <span className={`text-[11px] px-1.5 py-0.2 rounded font-mono ${isSelected ? 'bg-white/20 text-white' : 'bg-[#F7F8FA] text-[#667085]'}`}>
+                  {count}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* زر سلة المحذوفات وأزرار إدارتها */}
+        <div className="flex items-center gap-2 shrink-0">
+          {activeTab === 'TRASH' && trashFiles.length > 0 && (
+            <>
+              <button
+                onClick={handleRestoreAll}
+                className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold transition"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>استرجاع الكل</span>
+              </button>
+              <button
+                onClick={handleEmptyTrash}
+                className="flex items-center gap-1.5 px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-semibold transition"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>إفراغ السلة</span>
+              </button>
+            </>
+          )}
+
           <button
-            onClick={() => setActiveTab('TRASH')}
-            className={`flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-xl transition ${
+            onClick={() => setActiveTab(activeTab === 'TRASH' ? 'ACTIVE' : 'TRASH')}
+            className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg border transition ${
               activeTab === 'TRASH'
-                ? 'bg-rose-700 text-white shadow-sm'
-                : 'text-slate-600 hover:bg-slate-200'
+                ? 'bg-[#F04438] text-white border-[#F04438]'
+                : 'bg-white text-[#667085] hover:text-[#1B1F24] border-[#E4E7EC]'
             }`}
           >
-            <Trash2 className="w-4 h-4" />
-            <span>المحذوفات 🗑️ ({trashFiles.length})</span>
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>المحذوفات ({trashFiles.length})</span>
           </button>
         </div>
+      </div>
 
-        {/* أزرار سلة المحذوفات الشاملة (استرجاع الكل / إفراغ) */}
-        {activeTab === 'TRASH' && trashFiles.length > 0 && (
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleRestoreAll}
-              className="flex items-center gap-1 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-bold transition shadow-sm"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>استرجاع الكل</span>
-            </button>
-            <button
-              onClick={handleEmptyTrash}
-              className="flex items-center gap-1 px-3 py-1.5 bg-rose-100 hover:bg-rose-200 text-rose-800 rounded-lg text-xs font-bold transition"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              <span>إفراغ السلة</span>
-            </button>
+      {/* 3. شريط البحث، التصفية بالنوع، ومفتاح تبديل طريقة العرض (قائمة / شبكة) */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-white p-3 rounded-xl border border-[#E4E7EC]">
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          <div className="relative flex-1 max-w-md">
+            <Search className="w-4 h-4 text-[#667085] absolute right-3.5 top-3" />
+            <input
+              type="text"
+              placeholder="ابحث بالاسم الكامل للملف أو القسم..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-8 pr-10 h-10 text-[13px] bg-[#F7F8FA] border border-[#E4E7EC] rounded-lg focus:outline-none focus:border-[#14372e] focus:bg-white text-[#1B1F24]"
+            />
+            {searchTerm && (
+              <button
+                type="button"
+                onClick={() => setSearchTerm('')}
+                className="absolute left-2.5 top-2.5 text-[#667085] hover:text-[#1B1F24]"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
           </div>
-        )}
-      </div>
 
-      {/* 3. شريط الأقسام الأفقية المخصصة للمس بالجوال (Horizontal Department Chips) */}
-      <div className="flex items-center gap-2 flex-wrap pb-1.5">
-        <button
-          onClick={() => handleSelectDepartment('__ALL__', null)}
-          className={`px-3.5 py-2 rounded-xl text-xs font-bold transition shrink-0 border ${
-            selectedDept === '__ALL__'
-              ? 'bg-[#14372e] text-white border-[#14372e] shadow-sm'
-              : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
-          }`}
-        >
-          🗂️ كافة الأقسام ({activeFiles.length})
-        </button>
-
-        {visibleDepartments.map((dept) => {
-          const count = files.filter(
-            (f) => !f.isDeleted && (f.department === dept || f.folder === dept || f.folder.startsWith(dept + '/'))
-          ).length;
-          const isPinLocked = isDeptPinProtected(dept) && !isDeptUnlocked(dept);
-          return (
-            <button
-              key={dept}
-              onClick={() => handleSelectDepartment(dept, null)}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition shrink-0 border flex items-center gap-1.5 ${
-                selectedDept === dept
-                  ? 'bg-[#14372e] text-white border-[#14372e] shadow-sm'
-                  : 'bg-white text-slate-800 border-slate-200 hover:bg-slate-100'
-              }`}
-            >
-              <span>{isPinLocked ? '🔒' : isDeptPinProtected(dept) ? '🔓' : '🏛️'} {dept}</span>
-              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono ${selectedDept === dept ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600'}`}>
-                {count}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* 4. شريط البحث وفلاتر صيغ الملفات (Word, Excel, PDF, etc.) */}
-      <div className="flex flex-col sm:flex-row items-center justify-between gap-2.5 bg-white p-2.5 rounded-2xl border border-slate-200">
-        <div className="relative w-full sm:w-80">
-          <Search className="w-4 h-4 text-slate-400 absolute right-3 top-2.5" />
-          <input
-            type="text"
-            placeholder="بحث سريع في أسماء المستندات..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-3 pr-9 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14372e]"
-          />
-        </div>
-
-        {/* تصفية سريعة بالصيغة + زر تحديد الكل */}
-        <div className="flex items-center gap-1 overflow-x-auto w-full sm:w-auto pb-1 sm:pb-0">
           {(displayedList.length > 0 || visibleSubfolders.length > 0) && (
             <button
               type="button"
               onClick={toggleSelectAllDisplayed}
-              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition whitespace-nowrap flex items-center gap-1 border ${
+              className={`h-10 px-3 rounded-lg text-xs font-semibold transition whitespace-nowrap flex items-center gap-1.5 border shrink-0 ${
                 isAllDisplayedSelected
-                  ? 'bg-[#0f6cbd] text-white border-[#0f6cbd]'
-                  : 'bg-sky-50 text-sky-800 border-sky-200 hover:bg-sky-100'
+                  ? 'bg-[#14372e] text-white border-[#14372e]'
+                  : 'bg-white text-[#1B1F24] border-[#E4E7EC] hover:bg-[#F7F8FA]'
               }`}
             >
-              <Check className="w-3 h-3" />
-              <span>{isAllDisplayedSelected ? 'إلغاء تحديد الكل' : 'تحديد الكل'}</span>
+              <Check className="w-3.5 h-3.5" />
+              <span>{isAllDisplayedSelected ? 'إلغاء التحديد' : 'تحديد الكل'}</span>
             </button>
           )}
-          {[
-            { tag: 'ALL', label: `الكل (${stats.totalCount})` },
-            { tag: 'WORD', label: `Word (${stats.word.count})` },
-            { tag: 'EXCEL', label: `Excel (${stats.excel.count})` },
-            { tag: 'ACCESS', label: `Access (${stats.access.count})` },
-            { tag: 'PDF', label: `PDF (${stats.pdf.count})` },
-            { tag: 'IMAGE', label: `صور (${stats.image.count})` },
-            { tag: 'OTHER', label: `أخرى (${stats.other.count})` },
-          ].map(t => (
+        </div>
+
+        <div className="flex items-center justify-between lg:justify-end gap-2 flex-wrap">
+          {/* فلاتر الأنواع */}
+          <div className="flex items-center gap-1 overflow-x-auto">
+            {[
+              { tag: 'ALL', label: `الكل (${stats.totalCount})` },
+              { tag: 'WORD', label: `Word (${stats.word.count})` },
+              { tag: 'EXCEL', label: `Excel (${stats.excel.count})` },
+              { tag: 'ACCESS', label: `Access (${stats.access.count})` },
+              { tag: 'PDF', label: `PDF (${stats.pdf.count})` },
+              { tag: 'IMAGE', label: `صور (${stats.image.count})` },
+              { tag: 'OTHER', label: `أخرى (${stats.other.count})` },
+            ].map((t) => (
+              <button
+                key={t.tag}
+                onClick={() => setFilterType(t.tag)}
+                className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition whitespace-nowrap ${
+                  filterType === t.tag
+                    ? 'bg-[#14372e] text-white'
+                    : 'bg-[#F7F8FA] text-[#667085] hover:text-[#1B1F24]'
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {/* زر تبديل طريقة العرض: قائمة تفصيلية أو شبكة بطاقات */}
+          <div className="flex items-center bg-[#F7F8FA] p-1 rounded-lg border border-[#E4E7EC] shrink-0">
             <button
-              key={t.tag}
-              onClick={() => setFilterType(t.tag)}
-              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition whitespace-nowrap ${
-                filterType === t.tag
-                  ? 'bg-slate-800 text-white'
-                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              type="button"
+              onClick={() => setViewMode('LIST')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold transition ${
+                viewMode === 'LIST'
+                  ? 'bg-white text-[#14372e] shadow-2xs border border-[#E4E7EC]'
+                  : 'text-[#667085] hover:text-[#1B1F24]'
               }`}
+              title="عرض على شكل قائمة تفصيلية"
             >
-              {t.label}
+              <List className="w-3.5 h-3.5" />
+              <span>قائمة</span>
             </button>
-          ))}
+            <button
+              type="button"
+              onClick={() => setViewMode('GRID')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold transition ${
+                viewMode === 'GRID'
+                  ? 'bg-white text-[#14372e] shadow-2xs border border-[#E4E7EC]'
+                  : 'text-[#667085] hover:text-[#1B1F24]'
+              }`}
+              title="عرض على شكل شبكة بطاقات"
+            >
+              <LayoutGrid className="w-3.5 h-3.5" />
+              <span>شبكة</span>
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* 4.5. شريط مسار المجلدات (Breadcrumb) والمجلدات الفرعية المتداخلة */}
+      {/* 4. شريط مسار المجلدات (Breadcrumb) والمجلدات الفرعية */}
       {activeTab === 'ACTIVE' && (currentFolder || visibleSubfolders.length > 0) && (
-        <div className="bg-white rounded-2xl border border-slate-200 p-3.5 space-y-3 shadow-xs">
-          {/* شريط المسار (Breadcrumb) */}
+        <div className="bg-white rounded-xl border border-[#E4E7EC] p-4 space-y-3">
           <div className="flex items-center justify-between flex-wrap gap-2">
-            <div className="flex items-center gap-1.5 flex-wrap text-xs font-bold">
+            <div className="flex items-center gap-1 flex-wrap text-xs font-semibold">
               <button
                 onClick={() => {
                   setSelectedDept('__ALL__');
                   setCurrentFolder(null);
                 }}
-                className="text-slate-600 hover:text-[#14372e] px-2 py-1 rounded-lg hover:bg-slate-100 transition"
+                className="text-[#667085] hover:text-[#14372e] px-2 py-1 rounded-md hover:bg-[#F7F8FA] transition"
               >
-                🗂️ كافة الأقسام
+                كافة الأقسام
               </button>
-              {activeBrowsePath && activeBrowsePath.split('/').map((part, idx, arr) => {
-                const targetPath = arr.slice(0, idx + 1).join('/');
-                const isLast = idx === arr.length - 1;
-                return (
-                  <div key={targetPath} className="flex items-center gap-1.5">
-                    <ChevronLeft className="w-3.5 h-3.5 text-slate-400" />
-                    <button
-                      onClick={() => {
-                        setSelectedDept(arr[0]);
-                        setCurrentFolder(idx === 0 ? null : targetPath);
-                      }}
-                      className={`px-2.5 py-1 rounded-lg transition ${
-                        isLast
-                          ? 'bg-[#14372e] text-white shadow-xs'
-                          : 'text-slate-700 hover:bg-slate-100'
-                      }`}
-                    >
-                      {idx === 0 ? `🏛️ ${part}` : `📁 ${part}`}
-                    </button>
-                  </div>
-                );
-              })}
+              {activeBrowsePath &&
+                activeBrowsePath.split('/').map((part, idx, arr) => {
+                  const targetPath = arr.slice(0, idx + 1).join('/');
+                  const isLast = idx === arr.length - 1;
+                  return (
+                    <div key={targetPath} className="flex items-center gap-1">
+                      <ChevronLeft className="w-3.5 h-3.5 text-[#667085]" />
+                      <button
+                        onClick={() => {
+                          setSelectedDept(arr[0]);
+                          setCurrentFolder(idx === 0 ? null : targetPath);
+                        }}
+                        className={`px-2.5 py-1 rounded-md transition ${
+                          isLast
+                            ? 'bg-[#14372e] text-white'
+                            : 'text-[#1B1F24] hover:bg-[#F7F8FA]'
+                        }`}
+                      >
+                        {part}
+                      </button>
+                    </div>
+                  );
+                })}
             </div>
 
             {currentFolder && (
@@ -2720,52 +2761,63 @@ export default function FilesPage() {
                     setCurrentFolder(parts.slice(0, -1).join('/'));
                   }
                 }}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition"
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-[#F7F8FA] hover:bg-slate-200/70 text-[#1B1F24] rounded-lg border border-[#E4E7EC] text-xs font-semibold transition"
               >
                 <ArrowRight className="w-3.5 h-3.5" />
-                <span>رجوع للمجلد السابق</span>
+                <span>رجوع للمجلد الأعلى</span>
               </button>
             )}
           </div>
 
-          {/* شبكة المجلدات الفرعية */}
+          {/* شبكة المجلدات الفرعية بأسماء كاملة وواضحة */}
           {visibleSubfolders.length > 0 && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3.5 pt-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 pt-1">
               {visibleSubfolders.map((sub) => {
                 const subFilesCount = activeFiles.filter(
-                  f => f.folder === sub.path || f.folder.startsWith(sub.path + '/')
+                  (f) => f.folder === sub.path || f.folder.startsWith(sub.path + '/')
                 ).length;
                 const childFoldersCount = allFolders.filter(
-                  cf => cf.parentPath === sub.path
+                  (cf) => cf.parentPath === sub.path
                 ).length;
                 const isSubSelected = selectedFolderIds.includes(sub.id);
                 return (
                   <div
                     key={sub.id}
                     onClick={() => handleSelectDepartment(sub.department, sub.path)}
-                    className={`group cursor-pointer rounded-2xl p-4 flex flex-col justify-between transition-all duration-150 border shadow-xs hover:shadow-md min-h-[115px] ${
+                    className={`group cursor-pointer rounded-xl p-3.5 flex flex-col justify-between transition border ${
                       isSubSelected
-                        ? 'bg-sky-50 border-sky-400 ring-2 ring-sky-200'
-                        : 'bg-white hover:bg-amber-50/60 border-slate-200/90 hover:border-amber-400'
+                        ? 'bg-[#14372e]/5 border-[#14372e]'
+                        : 'bg-[#F7F8FA]/60 hover:bg-white border-[#E4E7EC] hover:border-[#14372e]'
                     }`}
                   >
-                    {/* الصف العلوي: الأيقونة والتحديد + أزرار الإجراءات */}
-                    <div className="flex items-center justify-between w-full pb-2.5 border-b border-slate-100 group-hover:border-amber-200/60">
-                      <div className="flex items-center gap-2.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-start gap-2.5 min-w-0 flex-1">
                         <input
                           type="checkbox"
                           checked={isSubSelected}
                           onClick={(e) => e.stopPropagation()}
                           onChange={() => toggleSelectFolder(sub.id)}
-                          className="w-4 h-4 rounded accent-[#0f6cbd] cursor-pointer"
-                          title="تحديد المجلد للنقل أو الحذف الجماعي"
+                          className="w-4 h-4 mt-2.5 rounded accent-[#14372e] cursor-pointer shrink-0"
+                          title="تحديد المجلد"
                         />
-                        <div className="p-2 bg-amber-100/80 text-amber-700 rounded-xl group-hover:scale-105 transition">
-                          <Folder className="w-5 h-5 fill-amber-400" />
+                        <div className="w-9 h-9 bg-[#14372e]/10 text-[#14372e] rounded-lg flex items-center justify-center shrink-0 mt-0.5">
+                          <Folder className="w-5 h-5 fill-[#14372e]/20" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <h4
+                            className="font-semibold text-[15px] text-[#1B1F24] break-words whitespace-normal leading-snug"
+                            title={sub.name}
+                          >
+                            {sub.name}
+                          </h4>
+                          <p className="text-xs text-[#667085] mt-1">
+                            {subFilesCount} ملف
+                            {childFoldersCount > 0 ? ` • ${childFoldersCount} مجلد فرعي` : ''}
+                          </p>
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
                         {canMoveFolder(sub.path) && (
                           <button
                             onClick={() =>
@@ -2775,8 +2827,8 @@ export default function FilesPage() {
                                 sourceDept: sub.department,
                               })
                             }
-                            className="p-1.5 text-slate-400 hover:text-sky-700 hover:bg-sky-50 rounded-lg transition"
-                            title="نقل المجلد إلى قسم أو مجلد آخر"
+                            className="p-1.5 text-[#667085] hover:text-[#1B1F24] hover:bg-white rounded-md transition"
+                            title="نقل المجلد"
                           >
                             <Move className="w-3.5 h-3.5" />
                           </button>
@@ -2788,8 +2840,8 @@ export default function FilesPage() {
                               setNewRenameValue(sub.name);
                               setShowRenameModal(true);
                             }}
-                            className="p-1.5 text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition"
-                            title="تعديل اسم المجلد"
+                            className="p-1.5 text-[#667085] hover:text-[#14372e] hover:bg-white rounded-md transition"
+                            title="إعادة تسمية المجلد"
                           >
                             <Edit3 className="w-3.5 h-3.5" />
                           </button>
@@ -2797,31 +2849,11 @@ export default function FilesPage() {
                         {canDeleteFolder(sub.path) && (
                           <button
                             onClick={() => handleMoveFolderToTrash(sub)}
-                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
-                            title="نقل المجلد للمحذوفات"
+                            className="p-1.5 text-[#667085] hover:text-[#F04438] hover:bg-rose-50 rounded-md transition"
+                            title="نقل للمحذوفات"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* عنوان المجلد وعدد مستنداته بعرض كامل وواضح */}
-                    <div className="pt-2.5 w-full">
-                      <h4
-                        className="font-bold text-sm text-slate-900 group-hover:text-amber-950 transition leading-snug line-clamp-2"
-                        title={sub.name}
-                      >
-                        {sub.name}
-                      </h4>
-                      <div className="flex items-center gap-1.5 mt-1.5">
-                        <span className="text-[11px] font-bold bg-amber-100/70 text-amber-900 px-2 py-0.5 rounded-md">
-                          {subFilesCount} مستند
-                        </span>
-                        {childFoldersCount > 0 && (
-                          <span className="text-[11px] text-slate-500 font-medium">
-                            • {childFoldersCount} مجلد فرعي
-                          </span>
                         )}
                       </div>
                     </div>
@@ -2833,84 +2865,84 @@ export default function FilesPage() {
         </div>
       )}
 
-      {/* 5. عرض الملفات: بطاقات للموبايل وجدول للشاشات الكبيرة */}
+      {/* 5. عرض الملفات (الاسم الكامل دائماً + الأيقونات الواضحة + وضع القائمة أو الشبكة) */}
       {displayedList.length === 0 ? (
         visibleSubfolders.length === 0 ? (
-          <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center flex flex-col items-center justify-center space-y-3">
-            <div className="p-4 bg-slate-50 rounded-full text-slate-400">
-              <Inbox className="w-10 h-10" />
+          <div className="bg-white rounded-xl border border-[#E4E7EC] p-12 text-center flex flex-col items-center justify-center space-y-3">
+            <div className="w-14 h-14 bg-[#F7F8FA] rounded-full text-[#667085] flex items-center justify-center border border-[#E4E7EC]">
+              <Inbox className="w-7 h-7" />
             </div>
-            <h4 className="text-sm font-bold text-slate-700">لا توجد مستندات تطابق هذا الاختيار</h4>
-            <p className="text-xs text-slate-400 max-w-sm leading-relaxed">
-              {activeTab === 'TRASH' 
+            <h4 className="text-[15px] font-semibold text-[#1B1F24]">لا توجد ملفات في هذا العرض</h4>
+            <p className="text-[13px] text-[#667085] max-w-sm leading-relaxed">
+              {activeTab === 'TRASH'
                 ? 'سلة المحذوفات فارغة حالياً.'
-                : 'يمكنك إضافة ملف جديد أو تصوير كتاب رسمي بالكاميرا فوراً من الأزرار بالأعلى.'}
+                : 'يمكنك رفع ملفات جديدة أو إنشاء مجلد فرعي باستخدام الأزرار في الأعلى.'}
             </p>
           </div>
         ) : null
-      ) : (
-        <>
-          {/* نمط بطاقات الجوال (Mobile Touch Cards) */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:hidden gap-3">
-            {displayedList.map((file) => {
-              const isSelected = selectedFileIds.includes(file.id);
-              return (
-                <div 
-                  key={file.id} 
-                  className={`bg-white rounded-2xl p-4 border shadow-sm flex flex-col justify-between space-y-3 transition ${
-                    isSelected
-                      ? 'border-[#0f6cbd] bg-sky-50/30 ring-2 ring-sky-200'
-                      : 'border-slate-200/90 hover:border-[#14372e]/50'
-                  }`}
-                >
-                  <div className="flex items-start gap-3">
-                    <input
-                      type="checkbox"
-                      checked={isSelected}
-                      onChange={() => toggleSelectFile(file.id)}
-                      className="w-4 h-4 mt-1 rounded accent-[#0f6cbd] cursor-pointer shrink-0"
-                      title="تحديد الملف"
-                    />
-                    <div
-                      onClick={() => handleOpenFile(file)}
-                      className="p-2.5 bg-slate-50 rounded-xl shrink-0 border border-slate-100 cursor-pointer"
-                    >
-                      {getFileIcon(file.type)}
+      ) : viewMode === 'GRID' ? (
+        /* =========================================================
+           ب) وضع الشبكة (Grid View) - بطاقات نظيفة بأيقونة بارزة واسم كامل
+           ========================================================= */
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3.5">
+          {displayedList.map((file) => {
+            const isSelected = selectedFileIds.includes(file.id);
+            return (
+              <div
+                key={file.id}
+                className={`bg-white rounded-xl p-4 border flex flex-col justify-between gap-3 transition ${
+                  isSelected
+                    ? 'border-[#14372e] bg-[#14372e]/[0.02] ring-1 ring-[#14372e]'
+                    : 'border-[#E4E7EC] hover:border-[#14372e]/60'
+                }`}
+              >
+                {/* أعلى البطاقة: التحديد + الأيقونة الكبيرة + النوع */}
+                <div className="space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2.5">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleSelectFile(file.id)}
+                        className="w-4 h-4 rounded accent-[#14372e] cursor-pointer shrink-0"
+                        title="تحديد الملف"
+                      />
+                      <div onClick={() => handleOpenFile(file)} className="cursor-pointer">
+                        {getFileIcon(file.type, 'lg')}
+                      </div>
                     </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-start gap-1.5 flex-wrap">
-                        <h4
-                          onClick={() => handleOpenFile(file)}
-                          className="font-bold text-sm text-slate-900 break-words whitespace-normal leading-relaxed cursor-pointer hover:text-[#0f6cbd]"
-                        >
-                          {file.name}
-                        </h4>
-                        {getFileBadge(file.type)}
-                      </div>
-                      <p className="text-xs text-slate-600 mt-1.5 font-semibold break-words whitespace-normal">
-                        📂 {file.folder}
-                      </p>
-                      <div className="flex items-center gap-3 text-[11px] text-slate-500 mt-1.5 font-mono">
-                        <span>💾 {file.size}</span>
-                        <span>📅 {file.lastModifiedAt}</span>
-                      </div>
+                    <div className="flex items-center gap-1.5">
+                      {getFileBadge(file.type)}
                     </div>
                   </div>
 
-                  {/* أزرار العمليات على بطاقة الجوال */}
-                  <div className="flex items-center justify-between border-t border-slate-100 pt-2.5 gap-1.5 flex-wrap">
+                  {/* الاسم الكامل للملف مع الامتداد دون أي اقتطاع */}
+                  <div>
+                    <h4
+                      onClick={() => handleOpenFile(file)}
+                      className="text-[15px] font-medium text-[#1B1F24] hover:text-[#14372e] break-words whitespace-normal leading-relaxed cursor-pointer transition"
+                      title={file.name}
+                    >
+                      {file.name}
+                    </h4>
+                    <p className="text-[13px] text-[#667085] mt-1 break-words whitespace-normal">
+                      {file.folder}
+                    </p>
+                  </div>
+                </div>
+
+                {/* أسفل البطاقة: الحجم والتاريخ + أزرار الإجراءات */}
+                <div className="space-y-2.5 pt-2.5 border-t border-[#E4E7EC]">
+                  <div className="flex items-center justify-between text-[13px] text-[#667085] font-mono">
+                    <span>{file.size}</span>
+                    <span>{file.lastModifiedAt}</span>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-1.5">
                     <button
                       onClick={() => handleOpenFile(file)}
-                      className="flex-1 min-w-[110px] flex items-center justify-center gap-1.5 bg-[#14372e] text-white text-xs font-bold py-2 px-3 rounded-xl hover:bg-[#1a473b] transition active:scale-95 shadow-sm"
-                      title="فتح أو معاينة الملف"
+                      className="flex-1 h-9 flex items-center justify-center gap-1.5 bg-[#14372e] hover:bg-[#1b473b] text-white text-xs font-semibold px-3 rounded-lg transition"
                     >
-                      {file.type === 'word' && <FileText className="w-3.5 h-3.5 text-blue-300" />}
-                      {file.type === 'excel' && <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-300" />}
-                      {file.type === 'access' && <Database className="w-3.5 h-3.5 text-rose-300" />}
-                      {['image', 'pdf', 'video', 'audio'].includes(file.type) && <Eye className="w-3.5 h-3.5 text-amber-300" />}
-                      {!['word', 'excel', 'access', 'image', 'pdf', 'video', 'audio'].includes(file.type) && (
-                        <ExternalLink className="w-3.5 h-3.5 text-amber-300" />
-                      )}
                       <span>
                         {file.type === 'word'
                           ? 'فتح Word'
@@ -2919,7 +2951,162 @@ export default function FilesPage() {
                           : file.type === 'access'
                           ? 'فتح Access'
                           : ['image', 'pdf', 'video', 'audio'].includes(file.type)
-                          ? 'معاينة وفتح'
+                          ? 'معاينة'
+                          : 'فتح'}
+                      </span>
+                    </button>
+
+                    {activeTab === 'ACTIVE' && canEditFolder(file.folder) && ['word', 'excel', 'file', 'pdf'].includes(file.type) && (
+                      <button
+                        onClick={() => triggerUpdateFile(file)}
+                        disabled={actionLoading}
+                        className="h-9 px-2.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-semibold rounded-lg transition flex items-center gap-1 shrink-0"
+                        title="رفع نسخة معدلة وحفظ التعديلات"
+                      >
+                        <UploadCloud className="w-3.5 h-3.5" />
+                        <span>تحديث</span>
+                      </button>
+                    )}
+
+                    {canDownloadFolder(file.folder) && (
+                      <button
+                        onClick={() => handleDownloadFile(file)}
+                        className="h-9 w-9 flex items-center justify-center text-[#667085] hover:text-[#1B1F24] bg-[#F7F8FA] hover:bg-slate-200/60 rounded-lg border border-[#E4E7EC] transition shrink-0"
+                        title="تنزيل الملف"
+                      >
+                        <Download className="w-4 h-4" />
+                      </button>
+                    )}
+
+                    {activeTab === 'ACTIVE' ? (
+                      <>
+                        {canRenameFolder(file.folder) && (
+                          <button
+                            onClick={() => {
+                              setItemToRename({ id: file.id, name: file.name });
+                              setNewRenameValue(file.name);
+                              setShowRenameModal(true);
+                            }}
+                            className="h-9 w-9 flex items-center justify-center text-[#667085] hover:text-[#14372e] bg-[#F7F8FA] hover:bg-slate-200/60 rounded-lg border border-[#E4E7EC] transition shrink-0"
+                            title="تعديل الاسم"
+                          >
+                            <Edit3 className="w-4 h-4" />
+                          </button>
+                        )}
+                        {canMoveFolder(file.folder) && (
+                          <button
+                            onClick={() =>
+                              openMoveDialog({
+                                fileIds: [file.id],
+                                label: file.name,
+                                sourceDept: file.department,
+                              })
+                            }
+                            className="h-9 w-9 flex items-center justify-center text-[#667085] hover:text-[#1B1F24] bg-[#F7F8FA] hover:bg-slate-200/60 rounded-lg border border-[#E4E7EC] transition shrink-0"
+                            title="نقل الملف"
+                          >
+                            <Move className="w-4 h-4" />
+                          </button>
+                        )}
+                        {canDeleteFolder(file.folder) && (
+                          <button
+                            onClick={() => handleMoveToTrash(file)}
+                            className="h-9 w-9 flex items-center justify-center text-[#667085] hover:text-[#F04438] bg-[#F7F8FA] hover:bg-rose-50 rounded-lg border border-[#E4E7EC] transition shrink-0"
+                            title="نقل للمحذوفات"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => handleRestoreFile(file)}
+                          className="h-9 px-2.5 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition font-semibold text-xs flex items-center gap-1"
+                          title="استرجاع المستند"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          <span>استرجاع</span>
+                        </button>
+                        {canPermanentDeleteFolder(file.folder) && (
+                          <button
+                            onClick={() => handlePermanentDelete(file)}
+                            className="h-9 w-9 flex items-center justify-center text-[#F04438] bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition shrink-0"
+                            title="حذف نهائي"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        /* =========================================================
+           أ) وضع القائمة التفصيلية (List View - الافتراضي)
+           ========================================================= */
+        <>
+          {/* عرض الجوال والشاشات الصغيرة */}
+          <div className="grid grid-cols-1 gap-2.5 lg:hidden">
+            {displayedList.map((file) => {
+              const isSelected = selectedFileIds.includes(file.id);
+              return (
+                <div
+                  key={file.id}
+                  className={`bg-white rounded-xl p-4 border space-y-3 transition ${
+                    isSelected
+                      ? 'border-[#14372e] bg-[#14372e]/[0.02]'
+                      : 'border-[#E4E7EC]'
+                  }`}
+                >
+                  <div className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => toggleSelectFile(file.id)}
+                      className="w-4 h-4 mt-2.5 rounded accent-[#14372e] cursor-pointer shrink-0"
+                    />
+                    <div onClick={() => handleOpenFile(file)} className="cursor-pointer shrink-0">
+                      {getFileIcon(file.type, 'md')}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-start justify-between gap-2">
+                        <h4
+                          onClick={() => handleOpenFile(file)}
+                          className="text-[15px] font-medium text-[#1B1F24] break-words whitespace-normal leading-relaxed cursor-pointer hover:text-[#14372e]"
+                        >
+                          {file.name}
+                        </h4>
+                        <div className="shrink-0">{getFileBadge(file.type)}</div>
+                      </div>
+                      <div className="flex items-center gap-3 text-[13px] text-[#667085] mt-1 flex-wrap">
+                        <span>{file.folder}</span>
+                        <span>•</span>
+                        <span className="font-mono">{file.size}</span>
+                        <span>•</span>
+                        <span className="font-mono">{file.lastModifiedAt}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between border-t border-[#E4E7EC] pt-2.5 gap-1.5 flex-wrap">
+                    <button
+                      onClick={() => handleOpenFile(file)}
+                      className="flex-1 min-w-[100px] h-9 flex items-center justify-center gap-1.5 bg-[#14372e] text-white text-xs font-semibold px-3 rounded-lg hover:bg-[#1a473b] transition"
+                    >
+                      <span>
+                        {file.type === 'word'
+                          ? 'فتح Word'
+                          : file.type === 'excel'
+                          ? 'فتح Excel'
+                          : file.type === 'access'
+                          ? 'فتح Access'
+                          : ['image', 'pdf', 'video', 'audio'].includes(file.type)
+                          ? 'معاينة'
                           : 'فتح المستند'}
                       </span>
                     </button>
@@ -2928,28 +3115,17 @@ export default function FilesPage() {
                       <button
                         onClick={() => triggerUpdateFile(file)}
                         disabled={actionLoading}
-                        className="flex items-center justify-center gap-1 bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-black py-2 px-2.5 rounded-xl transition active:scale-95 shadow-sm shrink-0"
-                        title="حفظ التعديلات التي أجريتها في الهاتف ومشاركتها فوراً مع النظام"
+                        className="h-9 flex items-center justify-center gap-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-semibold px-3 rounded-lg transition shrink-0"
                       >
-                        <UploadCloud className="w-3.5 h-3.5 text-slate-950" />
+                        <UploadCloud className="w-3.5 h-3.5" />
                         <span>حفظ التعديلات</span>
-                      </button>
-                    )}
-
-                    {['word', 'excel'].includes(file.type) && (
-                      <button
-                        onClick={() => handleOpenOfficeOnline(file)}
-                        className="p-2 text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-xl transition"
-                        title="معاينة في المتصفح عبر Office Online"
-                      >
-                        <Eye className="w-4 h-4" />
                       </button>
                     )}
 
                     <button
                       onClick={() => handleOpenInMobileApp(file)}
-                      className="p-2 text-emerald-800 bg-emerald-50 hover:bg-emerald-100 rounded-xl transition"
-                      title="تشغيل في تطبيقات الهاتف أو مشاركة المستند"
+                      className="h-9 w-9 flex items-center justify-center text-[#14372e] bg-[#F7F8FA] hover:bg-slate-200/60 border border-[#E4E7EC] rounded-lg transition"
+                      title="فتح في تطبيقات الهاتف أو مشاركة"
                     >
                       <Smartphone className="w-4 h-4" />
                     </button>
@@ -2957,8 +3133,8 @@ export default function FilesPage() {
                     {canDownloadFolder(file.folder) && (
                       <button
                         onClick={() => handleDownloadFile(file)}
-                        className="p-2 text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition"
-                        title="تنزيل نسخة للملف"
+                        className="h-9 w-9 flex items-center justify-center text-[#667085] hover:text-[#1B1F24] bg-[#F7F8FA] border border-[#E4E7EC] rounded-lg transition"
+                        title="تنزيل"
                       >
                         <Download className="w-4 h-4" />
                       </button>
@@ -2975,13 +3151,12 @@ export default function FilesPage() {
                                 sourceDept: file.department,
                               })
                             }
-                            className="p-2 text-sky-700 bg-sky-50 hover:bg-sky-100 rounded-xl transition"
-                            title="نقل الملف إلى قسم أو مجلد آخر"
+                            className="h-9 w-9 flex items-center justify-center text-[#667085] bg-[#F7F8FA] border border-[#E4E7EC] rounded-lg transition"
+                            title="نقل"
                           >
                             <Move className="w-4 h-4" />
                           </button>
                         )}
-
                         {canRenameFolder(file.folder) && (
                           <button
                             onClick={() => {
@@ -2989,18 +3164,17 @@ export default function FilesPage() {
                               setNewRenameValue(file.name);
                               setShowRenameModal(true);
                             }}
-                            className="p-2 text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition"
-                            title="تعديل الاسم"
+                            className="h-9 w-9 flex items-center justify-center text-[#667085] bg-[#F7F8FA] border border-[#E4E7EC] rounded-lg transition"
+                            title="إعادة تسمية"
                           >
-                            <Edit3 className="w-4 h-4 text-emerald-700" />
+                            <Edit3 className="w-4 h-4" />
                           </button>
                         )}
-
                         {canDeleteFolder(file.folder) && (
                           <button
                             onClick={() => handleMoveToTrash(file)}
-                            className="p-2 text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-xl transition"
-                            title="نقل للمحذوفات"
+                            className="h-9 w-9 flex items-center justify-center text-[#F04438] bg-rose-50 border border-rose-200 rounded-lg transition"
+                            title="حذف للسلة"
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
@@ -3010,18 +3184,15 @@ export default function FilesPage() {
                       <>
                         <button
                           onClick={() => handleRestoreFile(file)}
-                          className="p-2 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-xl transition font-bold text-xs flex items-center gap-1"
-                          title="استرجاع المستند"
+                          className="h-9 px-3 text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg transition font-semibold text-xs flex items-center gap-1"
                         >
-                          <RotateCcw className="w-4 h-4" />
+                          <RotateCcw className="w-3.5 h-3.5" />
                           <span>استرجاع</span>
                         </button>
-
                         {canPermanentDeleteFolder(file.folder) && (
                           <button
                             onClick={() => handlePermanentDelete(file)}
-                            className="p-2 text-rose-700 bg-rose-50 hover:bg-rose-100 rounded-xl transition"
-                            title="حذف نهائي"
+                            className="h-9 w-9 flex items-center justify-center text-[#F04438] bg-rose-50 border border-rose-200 rounded-lg transition"
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
@@ -3034,85 +3205,91 @@ export default function FilesPage() {
             })}
           </div>
 
-          {/* نمط الجدول للشاشات الكبيرة (Desktop Table View) */}
-          <div className="hidden lg:block bg-white rounded-2xl border border-slate-200 shadow-sm overflow-x-auto relative">
-            <table className="w-full text-right text-sm min-w-[1020px]">
-              <thead className="bg-[#f8fafc] text-slate-700 text-xs font-black border-b border-slate-200">
+          {/* جدول الشاشات الكبيرة النظيف (الاسم الكامل يأخذ أكبر مساحة + أيقونة واضحة) */}
+          <div className="hidden lg:block bg-white rounded-xl border border-[#E4E7EC] overflow-x-auto">
+            <table className="w-full text-right text-sm">
+              <thead className="bg-[#F7F8FA] text-[#667085] text-xs font-semibold border-b border-[#E4E7EC]">
                 <tr>
-                  <th className="p-4 w-10 text-center">
+                  <th className="py-3.5 px-4 w-10 text-center">
                     <input
                       type="checkbox"
                       checked={isAllDisplayedSelected}
                       onChange={toggleSelectAllDisplayed}
-                      className="w-4 h-4 rounded accent-[#0f6cbd] cursor-pointer"
-                      title="تحديد / إلغاء تحديد الكل"
+                      className="w-4 h-4 rounded accent-[#14372e] cursor-pointer"
+                      title="تحديد الكل"
                     />
                   </th>
-                  <th className="p-4 min-w-[300px]">اسم المستند الكامل</th>
-                  <th className="p-4 min-w-[160px]">القسم / المجلد</th>
-                  <th className="p-4 whitespace-nowrap">النوع</th>
-                  <th className="p-4 whitespace-nowrap">الحجم</th>
-                  <th className="p-4 whitespace-nowrap">تاريخ الاعتماد</th>
-                  <th className="p-4 whitespace-nowrap">المصدر</th>
-                  <th className="p-4 text-center sticky left-0 bg-[#f8fafc] z-20 shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.06)] min-w-[295px] whitespace-nowrap">الإجراءات</th>
+                  <th className="py-3.5 px-4 min-w-[360px]">اسم الملف الكامل</th>
+                  <th className="py-3.5 px-4 min-w-[150px]">القسم / المجلد</th>
+                  <th className="py-3.5 px-4 whitespace-nowrap">الحجم</th>
+                  <th className="py-3.5 px-4 whitespace-nowrap">آخر تعديل</th>
+                  <th className="py-3.5 px-4 whitespace-nowrap">الحالة</th>
+                  <th className="py-3.5 px-4 text-left whitespace-nowrap min-w-[260px]">الإجراءات</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-[#E4E7EC]">
                 {displayedList.map((file) => {
                   const isSelected = selectedFileIds.includes(file.id);
                   return (
                     <tr
                       key={file.id}
-                      className={`group transition ${
-                        isSelected ? 'bg-sky-50/70 hover:bg-sky-50' : 'hover:bg-slate-50/80'
+                      className={`group transition min-h-[56px] ${
+                        isSelected ? 'bg-[#14372e]/[0.04]' : 'hover:bg-[#F7F8FA]/80'
                       }`}
                     >
-                      <td className="p-4 text-center">
+                      <td className="py-3.5 px-4 text-center">
                         <input
                           type="checkbox"
                           checked={isSelected}
                           onChange={() => toggleSelectFile(file.id)}
-                          className="w-4 h-4 rounded accent-[#0f6cbd] cursor-pointer"
-                          title="تحديد هذا الملف"
+                          className="w-4 h-4 rounded accent-[#14372e] cursor-pointer"
                         />
                       </td>
-                      <td className="p-4 min-w-[300px] max-w-[520px]">
+
+                      {/* الأيقونة المميزة + الاسم الكامل مع الامتداد دون أي اقتطاع */}
+                      <td className="py-3.5 px-4 min-w-[360px] max-w-[600px]">
                         <div
                           onClick={() => handleOpenFile(file)}
-                          className="flex items-start gap-2.5 cursor-pointer group/title"
+                          className="flex items-center gap-3 cursor-pointer group/title"
                         >
-                          <span className="shrink-0 mt-0.5">{getFileIcon(file.type)}</span>
-                          <span 
-                            className="font-bold text-slate-900 group-hover/title:text-[#0f6cbd] text-sm break-words whitespace-normal leading-relaxed block transition"
-                            title={file.name}
-                          >
-                            {file.name}
-                          </span>
+                          {getFileIcon(file.type, 'md')}
+                          <div className="min-w-0 flex-1">
+                            <span
+                              className="text-[15px] font-medium text-[#1B1F24] group-hover/title:text-[#14372e] break-words whitespace-normal leading-relaxed block transition"
+                              title={file.name}
+                            >
+                              {file.name}
+                            </span>
+                          </div>
                         </div>
                       </td>
-                      <td className="p-4 text-xs font-semibold text-slate-700 break-words whitespace-normal max-w-[240px] leading-relaxed">{file.folder}</td>
-                      <td className="p-4 whitespace-nowrap">{getFileBadge(file.type)}</td>
-                      <td className="p-4 text-xs font-mono font-bold text-slate-700 whitespace-nowrap">{file.size}</td>
-                      <td className="p-4 text-xs text-slate-600 font-mono whitespace-nowrap">{file.lastModifiedAt}</td>
-                      <td className="p-4 text-xs whitespace-nowrap">
-                        <span className="bg-slate-100 text-slate-700 font-bold px-2 py-0.5 rounded text-[10px]">
-                          {file.lastModifiedBy}
+
+                      <td className="py-3.5 px-4 text-[13px] text-[#667085] break-words whitespace-normal max-w-[220px]">
+                        {file.folder}
+                      </td>
+
+                      <td className="py-3.5 px-4 text-[13px] font-mono text-[#667085] whitespace-nowrap">
+                        {file.size}
+                      </td>
+
+                      <td className="py-3.5 px-4 text-[13px] font-mono text-[#667085] whitespace-nowrap">
+                        {file.lastModifiedAt}
+                      </td>
+
+                      <td className="py-3.5 px-4 whitespace-nowrap">
+                        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-[#12B76A] bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                          <span className="w-1.5 h-1.5 rounded-full bg-[#12B76A]" />
+                          متزامن
                         </span>
                       </td>
-                      <td className="p-4 text-center sticky left-0 bg-white group-hover:bg-slate-50 transition z-10 shadow-[-4px_0_8px_-2px_rgba(0,0,0,0.06)] min-w-[295px] whitespace-nowrap">
-                        <div className="inline-flex items-center gap-1.5 justify-center">
+
+                      <td className="py-3.5 px-4 text-left whitespace-nowrap">
+                        <div className="inline-flex items-center gap-1.5 justify-end">
                           <button
                             onClick={() => handleOpenFile(file)}
-                            className="flex items-center gap-1.5 bg-[#14372e] hover:bg-[#1a473b] text-white text-xs font-bold py-1.5 px-3 rounded-lg transition active:scale-95 shadow-xs"
+                            className="h-8 flex items-center gap-1.5 bg-[#14372e] hover:bg-[#1b473b] text-white text-xs font-semibold px-3 rounded-lg transition"
                             title="فتح أو معاينة الملف"
                           >
-                            {file.type === 'word' && <FileText className="w-3.5 h-3.5 text-blue-300" />}
-                            {file.type === 'excel' && <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-300" />}
-                            {file.type === 'access' && <Database className="w-3.5 h-3.5 text-rose-300" />}
-                            {['image', 'pdf', 'video', 'audio'].includes(file.type) && <Eye className="w-3.5 h-3.5 text-amber-300" />}
-                            {!['word', 'excel', 'access', 'image', 'pdf', 'video', 'audio'].includes(file.type) && (
-                              <ExternalLink className="w-3.5 h-3.5 text-amber-300" />
-                            )}
                             <span>
                               {file.type === 'word'
                                 ? 'فتح Word'
@@ -3129,10 +3306,10 @@ export default function FilesPage() {
                           {activeTab === 'ACTIVE' && canEditFolder(file.folder) && ['word', 'excel', 'file', 'pdf'].includes(file.type) && (
                             <button
                               onClick={() => triggerUpdateFile(file)}
-                              className="flex items-center gap-1 bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-bold py-1.5 px-2 rounded-lg transition active:scale-95 shadow-xs"
-                              title="رفع نسخة معدلة وتحديث المستند في السحابة ومشاركته فوراً"
+                              className="h-8 flex items-center gap-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-semibold px-2.5 rounded-lg transition"
+                              title="رفع نسخة معدلة وحفظ التعديلات في السحابة"
                             >
-                              <UploadCloud className="w-3.5 h-3.5 text-slate-950" />
+                              <UploadCloud className="w-3.5 h-3.5" />
                               <span>حفظ التعديلات</span>
                             </button>
                           )}
@@ -3140,8 +3317,8 @@ export default function FilesPage() {
                           {['word', 'excel'].includes(file.type) && (
                             <button
                               onClick={() => handleOpenOfficeOnline(file)}
-                              className="p-1.5 text-slate-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition"
-                              title="معاينة في المتصفح عبر Office Online"
+                              className="h-8 w-8 flex items-center justify-center text-[#667085] hover:text-[#2B579A] hover:bg-[#F7F8FA] rounded-lg border border-transparent hover:border-[#E4E7EC] transition"
+                              title="معاينة عبر Office Online"
                             >
                               <Eye className="w-4 h-4" />
                             </button>
@@ -3150,7 +3327,7 @@ export default function FilesPage() {
                           {canDownloadFolder(file.folder) && (
                             <button
                               onClick={() => handleDownloadFile(file)}
-                              className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition"
+                              className="h-8 w-8 flex items-center justify-center text-[#667085] hover:text-[#1B1F24] hover:bg-[#F7F8FA] rounded-lg border border-transparent hover:border-[#E4E7EC] transition"
                               title="تنزيل نسخة للملف"
                             >
                               <Download className="w-4 h-4" />
@@ -3159,16 +3336,16 @@ export default function FilesPage() {
 
                           <button
                             onClick={() => handleRevealInExplorer(file)}
-                            className="p-1.5 text-slate-500 hover:text-amber-700 hover:bg-amber-50 rounded-lg transition"
-                            title="إظهار المستند في مجلد الويندوز المحلي"
+                            className="h-8 w-8 flex items-center justify-center text-[#667085] hover:text-[#1B1F24] hover:bg-[#F7F8FA] rounded-lg border border-transparent hover:border-[#E4E7EC] transition"
+                            title="إظهار في مجلد الويندوز المحلي"
                           >
                             <FolderOpen className="w-4 h-4" />
                           </button>
 
                           <button
                             onClick={() => handleShareFile(file)}
-                            className="p-1.5 text-slate-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition"
-                            title="فتح عبر تطبيقات الهاتف أو مشاركة المستند"
+                            className="h-8 w-8 flex items-center justify-center text-[#667085] hover:text-[#14372e] hover:bg-[#F7F8FA] rounded-lg border border-transparent hover:border-[#E4E7EC] transition"
+                            title="مشاركة المستند"
                           >
                             <Share2 className="w-4 h-4" />
                           </button>
@@ -3184,8 +3361,8 @@ export default function FilesPage() {
                                       sourceDept: file.department,
                                     })
                                   }
-                                  className="p-1.5 text-slate-600 hover:text-sky-700 hover:bg-sky-50 rounded-lg transition"
-                                  title="نقل الملف إلى قسم أو مجلد آخر"
+                                  className="h-8 w-8 flex items-center justify-center text-[#667085] hover:text-[#1B1F24] hover:bg-[#F7F8FA] rounded-lg border border-transparent hover:border-[#E4E7EC] transition"
+                                  title="نقل الملف"
                                 >
                                   <Move className="w-4 h-4" />
                                 </button>
@@ -3198,8 +3375,8 @@ export default function FilesPage() {
                                     setNewRenameValue(file.name);
                                     setShowRenameModal(true);
                                   }}
-                                  className="p-1.5 text-slate-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition"
-                                  title="تعديل الاسم"
+                                  className="h-8 w-8 flex items-center justify-center text-[#667085] hover:text-[#14372e] hover:bg-[#F7F8FA] rounded-lg border border-transparent hover:border-[#E4E7EC] transition"
+                                  title="إعادة تسمية"
                                 >
                                   <Edit3 className="w-4 h-4" />
                                 </button>
@@ -3208,7 +3385,7 @@ export default function FilesPage() {
                               {canDeleteFolder(file.folder) && (
                                 <button
                                   onClick={() => handleMoveToTrash(file)}
-                                  className="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                                  className="h-8 w-8 flex items-center justify-center text-[#667085] hover:text-[#F04438] hover:bg-rose-50 rounded-lg transition"
                                   title="نقل للمحذوفات"
                                 >
                                   <Trash2 className="w-4 h-4" />
@@ -3219,16 +3396,17 @@ export default function FilesPage() {
                             <>
                               <button
                                 onClick={() => handleRestoreFile(file)}
-                                className="p-1.5 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition font-bold text-xs"
+                                className="h-8 px-2.5 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition font-semibold text-xs flex items-center gap-1"
                                 title="استرجاع المستند"
                               >
-                                <RotateCcw className="w-4 h-4 inline" />
+                                <RotateCcw className="w-3.5 h-3.5" />
+                                <span>استرجاع</span>
                               </button>
 
                               {canPermanentDeleteFolder(file.folder) && (
                                 <button
                                   onClick={() => handlePermanentDelete(file)}
-                                  className="p-1.5 text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-lg transition"
+                                  className="h-8 w-8 flex items-center justify-center text-[#F04438] hover:bg-rose-50 rounded-lg transition"
                                   title="حذف نهائي"
                                 >
                                   <Trash2 className="w-4 h-4" />
@@ -3249,241 +3427,210 @@ export default function FilesPage() {
 
       {/* مؤشر تقدم الرفع والتحميل السحابي الدقيق واللحظي (Detailed Accurate Upload/Download Progress Dialog) */}
       {uploadProgress && uploadProgress.show && !uploadProgress.minimized && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-200" dir="rtl">
-          <div className="bg-white rounded-3xl shadow-2xl border border-emerald-100 max-w-lg w-full overflow-hidden text-right space-y-4 animate-in zoom-in-95 duration-200">
-            {/* رأس النافذة مع هوية غرفة تجارة كربلاء وزر التصغير للعمل بالخلفية */}
-            <div className="bg-gradient-to-r from-[#14372e] via-[#1b493d] to-[#14372e] p-4 text-white flex items-center justify-between">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" dir="rtl">
+          <div className="bg-white rounded-2xl shadow-xl border border-[#E4E7EC] max-w-lg w-full overflow-hidden text-right">
+            {/* رأس النافذة */}
+            <div className="bg-[#14372e] px-5 py-3.5 text-white flex items-center justify-between">
               <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-xl bg-white/10 flex items-center justify-center text-amber-400">
+                <div className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center text-[#c59b27]">
                   {uploadProgress.mode === 'download' ? (
-                    <Download className="w-5 h-5 animate-bounce" />
+                    <Download className="w-4 h-4" />
                   ) : (
-                    <UploadCloud className="w-5 h-5 animate-pulse" />
+                    <UploadCloud className="w-4 h-4" />
                   )}
                 </div>
                 <div>
-                  <h3 className="text-sm font-black tracking-wide">
+                  <h3 className="text-[14px] font-bold">
                     {uploadProgress.mode === 'download'
-                      ? 'مؤشر التنزيل السحابي الحقيقي والمباشر'
-                      : 'مؤشر الرفع السحابي الحقيقي والمباشر'}
+                      ? 'تنزيل المستند من السحابة'
+                      : 'رفع المستندات إلى السحابة'}
                   </h3>
-                  <p className="text-[11px] text-emerald-200/80 font-medium">غرفة تجارة كربلاء المقدسة • Google Drive</p>
+                  <p className="text-[11px] text-white/70">غرفة تجارة كربلاء المقدسة • Google Drive</p>
                 </div>
               </div>
 
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => setUploadProgress(prev => prev ? { ...prev, minimized: true } : null)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-xs text-white font-bold transition-all shadow-xs"
-                  title="تصغير ومتابعة العمل بالخلفية"
-                >
-                  <Minimize2 className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">تصغير للخلفية</span>
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => setUploadProgress(prev => prev ? { ...prev, minimized: true } : null)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-[12px] text-white font-semibold transition"
+                title="تصغير ومتابعة العمل بالخلفية"
+              >
+                <Minimize2 className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">تصغير للخلفية</span>
+              </button>
             </div>
 
-            <div className="p-6 pt-2 space-y-5">
+            <div className="p-5 space-y-4">
               {/* أيقونة الحالة والعنوان واسم الملف الكامل */}
-              <div className="text-center space-y-2.5">
-                <div className="flex items-center justify-center w-16 h-16 mx-auto rounded-2xl bg-emerald-50 text-emerald-600 shadow-inner">
+              <div className="text-center space-y-2">
+                <div className="flex items-center justify-center w-12 h-12 mx-auto rounded-xl bg-[#EDF5F2] text-[#14372e]">
                   {uploadProgress.completed ? (
-                    <CheckCircle2 className="w-10 h-10 text-emerald-600 animate-bounce" />
+                    <CheckCircle2 className="w-6 h-6 text-[#12B76A]" />
                   ) : uploadProgress.mode === 'download' ? (
-                    <Download className="w-10 h-10 text-emerald-600 animate-bounce" />
+                    <Download className="w-6 h-6 text-[#14372e]" />
                   ) : (
-                    <UploadCloud className="w-10 h-10 text-emerald-600 animate-pulse" />
+                    <UploadCloud className="w-6 h-6 text-[#14372e]" />
                   )}
                 </div>
 
                 <div className="space-y-1.5">
-                  <h4 className="text-base font-black text-slate-900">
+                  <h4 className="text-[15px] font-bold text-[#1B1F24]">
                     {uploadProgress.completed
                       ? uploadProgress.mode === 'download'
-                        ? '✅ اكتمل تنزيل المستند بنجاح!'
-                        : '✅ اكتمل الرفع والمزامنة بنجاح!'
+                        ? 'اكتمل تنزيل المستند بنجاح'
+                        : 'اكتمل الرفع والمزامنة بنجاح'
                       : uploadProgress.statusText
                       ? uploadProgress.statusText
                       : uploadProgress.mode === 'download'
-                      ? 'جاري تنزيل المستند من السحابة بحجمه وسرعته الحقيقية...'
+                      ? 'جاري تنزيل المستند من السحابة...'
                       : uploadProgress.total > 1
                       ? `جاري رفع المجلد والملفات (${uploadProgress.current} من ${uploadProgress.total})...`
-                      : 'جاري رفع المستند إلى السحابة بحجمه وسرعته الحقيقية...'}
+                      : 'جاري رفع المستند إلى السحابة...'}
                   </h4>
-                  <div className="inline-flex items-center justify-center px-3.5 py-1.5 bg-slate-100 rounded-xl text-xs font-bold text-slate-800 max-w-full break-words whitespace-normal leading-relaxed border border-slate-200/80">
+                  <div className="inline-flex items-center justify-center px-3 py-1.5 bg-[#F7F8FA] rounded-lg text-[13px] font-medium text-[#1B1F24] max-w-full break-words whitespace-normal leading-relaxed border border-[#E4E7EC]">
                     <span className="break-words whitespace-normal">{uploadProgress.currentFileName}</span>
                   </div>
                 </div>
               </div>
 
-              {/* النسبة المئوية وأشرطة التحميل الدقيقة (إجمالي الدفعة + الملف الفردي النشط) */}
+              {/* النسبة المئوية وأشرطة التحميل الدقيقة */}
               {uploadProgress.total > 1 ? (
-                <div className="space-y-3 bg-slate-50 p-3.5 rounded-2xl border border-slate-200/80">
-                  {/* شريط تقدم المجلد أو الدفعة بالكامل */}
+                <div className="space-y-3 bg-[#F7F8FA] p-3.5 rounded-xl border border-[#E4E7EC]">
                   <div className="space-y-1.5">
-                    <div className="flex justify-between items-baseline px-1">
+                    <div className="flex justify-between items-baseline">
                       <div className="flex items-baseline gap-2">
-                        <span className="text-2xl font-black text-[#14372e] tracking-tight font-mono">
+                        <span className="text-xl font-bold text-[#14372e] font-mono">
                           {uploadProgress.percentage}%
                         </span>
-                        <span className="text-[11px] font-black text-emerald-850 bg-emerald-100 px-2 py-0.5 rounded-lg border border-emerald-300">
-                          إنجاز المجلد بالكامل
+                        <span className="text-[11px] font-semibold text-[#14372e] bg-[#EDF5F2] px-2 py-0.5 rounded-md">
+                          إنجاز الدفعة
                         </span>
                       </div>
-                      <span className="text-xs font-bold text-slate-600 font-mono">
+                      <span className="text-[12px] font-semibold text-[#667085] font-mono">
                         مستند {uploadProgress.current} من {uploadProgress.total}
                       </span>
                     </div>
 
-                    <div className="w-full bg-slate-200 rounded-full h-3.5 overflow-hidden p-0.5 border border-slate-300 shadow-inner relative">
+                    <div className="w-full bg-[#E4E7EC] rounded-full h-2.5 overflow-hidden">
                       <div
-                        className="bg-gradient-to-r from-emerald-600 via-teal-500 to-amber-500 h-full rounded-full transition-all duration-150 ease-out shadow-sm relative overflow-hidden"
+                        className="bg-[#14372e] h-full rounded-full transition-all duration-150"
                         style={{ width: `${Math.max(2, uploadProgress.percentage)}%` }}
-                      >
-                        {!uploadProgress.completed && (
-                          <div className="absolute inset-0 bg-white/25 animate-pulse" />
-                        )}
-                      </div>
+                      />
                     </div>
                   </div>
 
-                  {/* شريط تقدم الملف الفردي النشط حالياً */}
-                  <div className="space-y-1 pt-1 border-t border-slate-200/70">
-                    <div className="flex justify-between items-center text-xs px-1">
-                      <span className="font-bold text-slate-700 flex items-center gap-1.5">
-                        <FileText className="w-3.5 h-3.5 text-emerald-600" />
+                  <div className="space-y-1 pt-2 border-t border-[#E4E7EC]">
+                    <div className="flex justify-between items-center text-[12px]">
+                      <span className="font-semibold text-[#1B1F24] flex items-center gap-1.5">
+                        <FileText className="w-3.5 h-3.5 text-[#14372e]" />
                         <span>الملف الحالي:</span>
-                        <span className="font-black text-emerald-900 font-mono">{uploadProgress.currentFilePercentage}%</span>
+                        <span className="font-bold text-[#14372e] font-mono">{uploadProgress.currentFilePercentage}%</span>
                       </span>
-                      <span className="text-[11px] text-slate-500 font-mono" dir="ltr">
+                      <span className="text-[11px] text-[#667085] font-mono" dir="ltr">
                         {uploadProgress.megabytesFormatted}
                       </span>
                     </div>
 
-                    <div className="w-full bg-slate-200/70 rounded-full h-2 overflow-hidden">
+                    <div className="w-full bg-[#E4E7EC] rounded-full h-1.5 overflow-hidden">
                       <div
-                        className="bg-emerald-600 h-full rounded-full transition-all duration-150"
+                        className="bg-[#12B76A] h-full rounded-full transition-all duration-150"
                         style={{ width: `${Math.max(2, uploadProgress.currentFilePercentage)}%` }}
                       />
                     </div>
                   </div>
                 </div>
               ) : (
-                /* شريط التحميل الدقيق لملف فردي */
-                <div className="space-y-2">
-                  <div className="flex justify-between items-baseline px-1">
-                    <div className="flex items-baseline gap-2">
-                      <span className="text-3xl font-black text-[#14372e] tracking-tight font-mono">
-                        {uploadProgress.percentage}%
-                      </span>
-                      <span className="text-xs font-black text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-200">
-                        نسبة الإنجاز الحقيقية
-                      </span>
-                    </div>
-                    <span className="text-xs font-bold text-slate-600 font-mono" dir="ltr">
+                <div className="space-y-1.5">
+                  <div className="flex justify-between items-baseline">
+                    <span className="text-2xl font-bold text-[#14372e] font-mono">
+                      {uploadProgress.percentage}%
+                    </span>
+                    <span className="text-[12px] font-semibold text-[#667085] font-mono" dir="ltr">
                       {uploadProgress.megabytesFormatted}
                     </span>
                   </div>
 
-                  <div className="w-full bg-slate-100 rounded-full h-4 overflow-hidden p-0.5 border border-slate-200/90 shadow-inner relative">
+                  <div className="w-full bg-[#E4E7EC] rounded-full h-2.5 overflow-hidden">
                     <div
-                      className="bg-gradient-to-r from-emerald-600 via-teal-500 to-amber-500 h-full rounded-full transition-all duration-150 ease-out shadow-sm relative overflow-hidden"
+                      className="bg-[#14372e] h-full rounded-full transition-all duration-150"
                       style={{ width: `${Math.max(2, uploadProgress.percentage)}%` }}
-                    >
-                      {!uploadProgress.completed && (
-                        <div className="absolute inset-0 bg-white/25 animate-pulse" />
-                      )}
-                    </div>
+                    />
                   </div>
                 </div>
               )}
 
-              {/* بطاقات الإحصاءات الحية (Stat Cards): الميغات + سرعة الإنترنت + الوقت المتبقي + الحالة */}
-              <div className="grid grid-cols-2 gap-3 pt-1">
-                {/* 1. الميغات للملف بدقة (MB) */}
-                <div className="p-3.5 rounded-2xl bg-emerald-50/60 border border-emerald-200/80 space-y-1">
-                  <div className="flex items-center gap-1.5 text-emerald-900 text-xs font-black">
-                    <Database className="w-4 h-4 text-emerald-600" />
-                    <span>حجم الملف بالميغابايت (MB)</span>
+              {/* بطاقات الإحصاءات الحية */}
+              <div className="grid grid-cols-2 gap-2.5">
+                <div className="p-3 rounded-xl bg-[#F7F8FA] border border-[#E4E7EC] space-y-0.5">
+                  <div className="flex items-center gap-1.5 text-[#667085] text-[11px] font-semibold">
+                    <Database className="w-3.5 h-3.5 text-[#14372e]" />
+                    <span>الحجم المنقول</span>
                   </div>
-                  <p className="text-sm font-black text-slate-900 font-mono" dir="ltr">
+                  <p className="text-[13px] font-bold text-[#1B1F24] font-mono" dir="ltr">
                     {uploadProgress.megabytesFormatted}
                   </p>
-                  <p className="text-[11px] text-slate-600 font-bold" dir="ltr">
-                    ({formatBytes(uploadProgress.currentFileUploaded)} / {formatBytes(uploadProgress.currentFileSize)})
-                  </p>
                   {uploadProgress.total > 1 && (
-                    <p className="text-[11px] text-emerald-800 font-bold break-words whitespace-normal" dir="ltr">
-                      إجمالي الدفعة: {uploadProgress.batchMegabytesFormatted}
+                    <p className="text-[11px] text-[#667085] break-words whitespace-normal" dir="ltr">
+                      الإجمالي: {uploadProgress.batchMegabytesFormatted}
                     </p>
                   )}
                 </div>
 
-                {/* 2. سرعة الإنترنت الحقيقية */}
-                <div className="p-3.5 rounded-2xl bg-amber-50/60 border border-amber-200/80 space-y-1">
-                  <div className="flex items-center gap-1.5 text-amber-950 text-xs font-black">
-                    <Zap className="w-4 h-4 text-amber-600" />
-                    <span>سرعة الإنترنت الفورية</span>
+                <div className="p-3 rounded-xl bg-[#F7F8FA] border border-[#E4E7EC] space-y-0.5">
+                  <div className="flex items-center gap-1.5 text-[#667085] text-[11px] font-semibold">
+                    <Zap className="w-3.5 h-3.5 text-[#c59b27]" />
+                    <span>السرعة الفورية</span>
                   </div>
-                  <p className="text-base font-black text-slate-900 font-mono" dir="ltr">
+                  <p className="text-[13px] font-bold text-[#1B1F24] font-mono" dir="ltr">
                     {uploadProgress.speedFormatted}
                   </p>
-                  <p className="text-[11px] text-emerald-700 font-bold">
-                    {uploadProgress.completed ? 'تم النقل بالكامل 100%' : 'قياس حقيقي مباشر للشبكة'}
-                  </p>
                 </div>
 
-                {/* 3. الوقت التقديري المتبقي */}
-                <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-1">
-                  <div className="flex items-center gap-1.5 text-slate-600 text-xs font-bold">
-                    <Clock className="w-3.5 h-3.5 text-teal-600" />
+                <div className="p-3 rounded-xl bg-[#F7F8FA] border border-[#E4E7EC] space-y-0.5">
+                  <div className="flex items-center gap-1.5 text-[#667085] text-[11px] font-semibold">
+                    <Clock className="w-3.5 h-3.5 text-[#14372e]" />
                     <span>الوقت المتبقي</span>
                   </div>
-                  <p className="text-xs font-black text-slate-900">
+                  <p className="text-[12px] font-bold text-[#1B1F24]">
                     {uploadProgress.completed ? 'تم الانتهاء' : uploadProgress.timeRemainingFormatted}
                   </p>
-                  <p className="text-[10px] text-slate-500 font-semibold">حساب ديناميكي حسب السرعة</p>
                 </div>
 
-                {/* 4. حالة النقل الحقيقي */}
-                <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-1">
-                  <div className="flex items-center gap-1.5 text-slate-600 text-xs font-bold">
-                    <Activity className="w-3.5 h-3.5 text-blue-600" />
-                    <span>حالة النقل السحابي</span>
+                <div className="p-3 rounded-xl bg-[#F7F8FA] border border-[#E4E7EC] space-y-0.5">
+                  <div className="flex items-center gap-1.5 text-[#667085] text-[11px] font-semibold">
+                    <Activity className="w-3.5 h-3.5 text-[#14372e]" />
+                    <span>الحالة</span>
                   </div>
-                  <p className="text-xs font-black text-slate-900 break-words whitespace-normal">
-                    {uploadProgress.chunkText || (uploadProgress.total > 1 ? `الملف ${uploadProgress.current} من ${uploadProgress.total}` : 'نقل مباشر مؤكد')}
+                  <p className="text-[12px] font-bold text-[#1B1F24] break-words whitespace-normal">
+                    {uploadProgress.chunkText || (uploadProgress.total > 1 ? `الملف ${uploadProgress.current} من ${uploadProgress.total}` : 'نقل مباشر')}
                   </p>
-                  <p className="text-[10px] text-slate-500 font-semibold">تأكيد بايت تلو الآخر من السحابة</p>
                 </div>
               </div>
 
-              {/* أزرار المتابعة بالخلفية أو الإلغاء أو إشعار الإتمام */}
+              {/* أزرار المتابعة بالخلفية أو الإلغاء */}
               {uploadProgress.completed ? (
-                <div className="text-xs text-emerald-800 font-bold bg-emerald-50 py-3 px-4 rounded-2xl border border-emerald-200 text-center animate-in fade-in">
+                <div className="text-[13px] text-[#14372e] font-semibold bg-[#EDF5F2] py-2.5 px-4 rounded-xl border border-[#14372e]/20 text-center">
                   {uploadProgress.mode === 'download'
-                    ? '🎉 اكتمل تنزيل المستند بنجاح إلى جهازك!'
-                    : '🎉 تمت المزامنة وتأكيد وصول الملفات 100% لجميع الأجهزة وتطبيق الحاسوب!'}
+                    ? 'اكتمل تنزيل المستند بنجاح إلى جهازك'
+                    : 'تمت المزامنة وتأكيد وصول الملفات لجميع الأجهزة'}
                 </div>
               ) : (
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={() => setUploadProgress(prev => prev ? { ...prev, minimized: true } : null)}
-                    className="flex-1 py-2.5 px-4 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold transition-all text-center flex items-center justify-center gap-2"
+                    className="flex-1 py-2.5 px-4 rounded-lg bg-[#F7F8FA] hover:bg-[#EDF0F5] text-[#1B1F24] border border-[#E4E7EC] text-[12px] font-semibold transition text-center flex items-center justify-center gap-2"
                   >
-                    <Minimize2 className="w-4 h-4 text-slate-600" />
-                    <span>تصفح المستندات والمتابعة بالخلفية</span>
+                    <Minimize2 className="w-3.5 h-3.5 text-[#667085]" />
+                    <span>المتابعة بالخلفية</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={handleAbortActiveTransfer}
-                    className="py-2.5 px-4 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold transition-all flex items-center justify-center gap-1.5 shrink-0"
-                    title="إلغاء عملية النقل الحالية"
+                    className="py-2.5 px-4 rounded-lg bg-rose-50 hover:bg-rose-100 text-[#F04438] border border-rose-200 text-[12px] font-semibold transition flex items-center justify-center gap-1.5 shrink-0"
                   >
-                    <X className="w-4 h-4" />
+                    <X className="w-3.5 h-3.5" />
                     <span>إلغاء</span>
                   </button>
                 </div>
@@ -3496,48 +3643,48 @@ export default function FilesPage() {
       {/* المؤشر العائم المصغر بالزاوية لمتابعة الرفع أو التنزيل بالخلفية (Floating Minimized Progress Pill) */}
       {uploadProgress && uploadProgress.show && uploadProgress.minimized && (
         <div
-          className="fixed bottom-6 left-6 z-50 bg-slate-900/95 text-white backdrop-blur-md rounded-2xl shadow-2xl border border-emerald-500/40 p-4 max-w-sm w-84 animate-in slide-in-from-bottom-5 duration-200"
+          className="fixed bottom-6 left-6 z-50 bg-white text-[#1B1F24] rounded-xl shadow-lg border border-[#E4E7EC] p-4 max-w-sm w-80"
           dir="rtl"
         >
-          <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+          <div className="flex items-center justify-between pb-2 border-b border-[#E4E7EC]">
             <div className="flex items-center gap-2">
-              <span className={`w-2.5 h-2.5 rounded-full ${uploadProgress.completed ? 'bg-emerald-400' : 'bg-amber-400 animate-ping'}`} />
-              <span className="text-xs font-black">
+              <span className={`w-2 h-2 rounded-full ${uploadProgress.completed ? 'bg-[#12B76A]' : 'bg-[#c59b27]'}`} />
+              <span className="text-[12px] font-bold">
                 {uploadProgress.completed
-                  ? uploadProgress.mode === 'download' ? 'اكتمل التنزيل!' : 'اكتمل الرفع!'
+                  ? uploadProgress.mode === 'download' ? 'اكتمل التنزيل' : 'اكتمل الرفع'
                   : uploadProgress.mode === 'download' ? 'جاري التنزيل بالخلفية' : 'جاري الرفع بالخلفية'}
               </span>
             </div>
 
             <div className="flex items-center gap-2">
-              <span className="text-xs font-black text-amber-400 font-mono" dir="ltr">
+              <span className="text-[11px] font-bold text-[#14372e] font-mono" dir="ltr">
                 {uploadProgress.speedFormatted}
               </span>
               <button
                 type="button"
                 onClick={() => setUploadProgress(prev => prev ? { ...prev, minimized: false } : null)}
-                className="p-1 rounded-lg hover:bg-white/10 text-slate-300 hover:text-white transition-colors"
+                className="p-1 rounded-md hover:bg-[#F7F8FA] text-[#667085] hover:text-[#1B1F24] transition-colors"
                 title="توسيع نافذة المؤشر التفصيلي"
               >
-                <Maximize2 className="w-4 h-4" />
+                <Maximize2 className="w-3.5 h-3.5" />
               </button>
             </div>
           </div>
 
           <div className="pt-2.5 space-y-2">
-            <p className="text-xs text-slate-200 font-bold break-words whitespace-normal leading-snug">
+            <p className="text-[12px] text-[#1B1F24] font-medium break-words whitespace-normal leading-snug">
               {uploadProgress.currentFileName}
             </p>
 
-            <div className="w-full bg-slate-800 rounded-full h-2.5 overflow-hidden">
+            <div className="w-full bg-[#E4E7EC] rounded-full h-2 overflow-hidden">
               <div
-                className="bg-gradient-to-r from-emerald-500 to-amber-500 h-full rounded-full transition-all duration-150"
+                className="bg-[#14372e] h-full rounded-full transition-all duration-150"
                 style={{ width: `${Math.max(3, uploadProgress.percentage)}%` }}
               />
             </div>
 
-            <div className="flex justify-between items-center text-[11px] font-bold text-slate-300 pt-0.5 font-mono">
-              <span className="text-emerald-400 text-xs font-black">
+            <div className="flex justify-between items-center text-[11px] font-semibold text-[#667085] font-mono">
+              <span className="text-[#14372e] font-bold">
                 {uploadProgress.percentage}% {uploadProgress.total > 1 ? `(${uploadProgress.current}/${uploadProgress.total})` : ''}
               </span>
               <span dir="ltr">{uploadProgress.total > 1 ? uploadProgress.batchMegabytesFormatted : uploadProgress.megabytesFormatted}</span>
@@ -3549,11 +3696,11 @@ export default function FilesPage() {
 
       {/* نافذة التحقق من الرمز السري للقسم المحمي (Department PIN Prompt Modal) */}
       {pinPromptDept && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4" dir="rtl">
-          <div className="bg-white rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl border border-amber-300">
-            <div className="flex items-center justify-between border-b pb-3">
-              <h3 className="font-black text-base text-[#14372e] flex items-center gap-2">
-                <Lock className="w-5 h-5 text-amber-600" />
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" dir="rtl">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full space-y-4 shadow-xl border border-[#E4E7EC]">
+            <div className="flex items-center justify-between border-b border-[#E4E7EC] pb-3">
+              <h3 className="font-bold text-[16px] text-[#1B1F24] flex items-center gap-2">
+                <Lock className="w-4 h-4 text-[#c59b27]" />
                 <span>قسم محمي برمز سري (PIN)</span>
               </h3>
               <button
@@ -3563,14 +3710,14 @@ export default function FilesPage() {
                   setPinPromptInput('');
                   setPinPromptError('');
                 }}
-                className="text-slate-400 hover:text-slate-600"
+                className="text-[#667085] hover:text-[#1B1F24]"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <p className="text-xs text-slate-600 leading-relaxed font-medium">
-              القسم <strong className="text-[#14372e]">({pinPromptDept})</strong> محمي برمز سري من قِبل الإدارة. يرجى إدخال الرمز السري لفتح القسم واستعراض مستنداته:
+            <p className="text-[13px] text-[#667085] leading-relaxed">
+              القسم <strong className="text-[#1B1F24]">({pinPromptDept})</strong> محمي برمز سري من قِبل الإدارة. يرجى إدخال الرمز السري لفتح القسم واستعراض مستنداته:
             </p>
 
             <form onSubmit={handleVerifyDeptPin} className="space-y-3">
@@ -3582,17 +3729,17 @@ export default function FilesPage() {
                   setPinPromptError('');
                 }}
                 placeholder="أدخل الرمز السري للقسم..."
-                className="w-full px-4 py-3 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14372e] text-center font-mono font-bold tracking-widest"
+                className="w-full px-4 py-2.5 text-[14px] bg-[#F7F8FA] border border-[#E4E7EC] rounded-lg focus:outline-none focus:border-[#14372e] text-center font-mono font-bold tracking-widest"
                 autoFocus
               />
 
               {pinPromptError && (
-                <p className="text-xs text-rose-600 font-bold text-center">
+                <p className="text-[12px] text-[#F04438] font-semibold text-center">
                   {pinPromptError}
                 </p>
               )}
 
-              <div className="flex items-center justify-end gap-2 pt-2 border-t">
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-[#E4E7EC]">
                 <button
                   type="button"
                   onClick={() => {
@@ -3601,15 +3748,15 @@ export default function FilesPage() {
                     setPinPromptInput('');
                     setPinPromptError('');
                   }}
-                  className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition"
+                  className="px-4 py-2 text-[13px] font-semibold text-[#667085] hover:bg-[#F7F8FA] rounded-lg transition"
                 >
                   إلغاء
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2.5 text-xs font-black bg-[#14372e] text-white rounded-xl hover:bg-[#1a473b] transition shadow-sm"
+                  className="px-5 py-2 text-[13px] font-semibold bg-[#14372e] text-white rounded-lg hover:bg-[#1b493d] transition"
                 >
-                  🔓 فتح القسم
+                  فتح القسم
                 </button>
               </div>
             </form>
@@ -3619,19 +3766,19 @@ export default function FilesPage() {
 
       {/* 6. نافذة إنشاء مجلد جديد (New Folder Modal) */}
       {showNewFolderModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl border border-slate-200">
-            <div className="flex items-center justify-between border-b pb-3">
-              <h3 className="font-bold text-base text-[#14372e] flex items-center gap-2">
-                <FolderPlus className="w-5 h-5 text-amber-600" />
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full space-y-4 shadow-xl border border-[#E4E7EC]">
+            <div className="flex items-center justify-between border-b border-[#E4E7EC] pb-3">
+              <h3 className="font-bold text-[16px] text-[#1B1F24] flex items-center gap-2">
+                <FolderPlus className="w-5 h-5 text-[#14372e]" />
                 <span>إنشاء مجلد إداري جديد</span>
               </h3>
-              <button onClick={() => setShowNewFolderModal(false)} className="text-slate-400 hover:text-slate-600">
+              <button onClick={() => setShowNewFolderModal(false)} className="text-[#667085] hover:text-[#1B1F24]">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <p className="text-xs text-slate-500">
+            <p className="text-[13px] text-[#667085]">
               أدخل اسم المجلد لتنظيم الكتب الرسمية والمستندات في السحابة:
             </p>
 
@@ -3640,18 +3787,18 @@ export default function FilesPage() {
               placeholder="مثال: الكتب الصادرة 2026..."
               value={newFolderName}
               onChange={(e) => setNewFolderName(e.target.value)}
-              className="w-full px-4 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14372e]"
+              className="w-full px-4 py-2.5 text-[14px] bg-[#F7F8FA] border border-[#E4E7EC] rounded-lg focus:outline-none focus:border-[#14372e]"
               autoFocus
             />
 
             <div className="space-y-1.5">
-              <span className="text-[11px] text-slate-400 font-semibold">اقتراحات سريعة لأقسام الغرفة:</span>
+              <span className="text-[12px] text-[#667085]">اقتراحات سريعة:</span>
               <div className="flex items-center gap-1.5 flex-wrap">
                 {['الكتب الصادرة', 'الكتب الواردة', 'أضابير الكفالات', 'التقارير المالية'].map(sug => (
                   <button
                     key={sug}
                     onClick={() => setNewFolderName(sug)}
-                    className="text-[10px] bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-2 py-1 rounded-lg"
+                    className="text-[12px] bg-[#F7F8FA] hover:bg-[#EDF5F2] text-[#1B1F24] border border-[#E4E7EC] font-medium px-2.5 py-1 rounded-md transition"
                   >
                     {sug}
                   </button>
@@ -3659,16 +3806,16 @@ export default function FilesPage() {
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2 pt-2 border-t">
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-[#E4E7EC]">
               <button
                 onClick={() => setShowNewFolderModal(false)}
-                className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition"
+                className="px-4 py-2 text-[13px] font-semibold text-[#667085] hover:bg-[#F7F8FA] rounded-lg transition"
               >
                 إلغاء
               </button>
               <button
                 onClick={handleCreateFolder}
-                className="px-5 py-2 text-xs font-bold bg-[#14372e] text-white rounded-xl hover:bg-[#1a473b] transition shadow-sm"
+                className="px-5 py-2 text-[13px] font-semibold bg-[#14372e] text-white rounded-lg hover:bg-[#1b493d] transition"
               >
                 إنشاء المجلد
               </button>
@@ -3679,44 +3826,44 @@ export default function FilesPage() {
 
       {/* 7. نافذة تعديل الاسم (Rename Modal) */}
       {showRenameModal && itemToRename && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl border border-slate-200">
-            <div className="flex items-center justify-between border-b pb-3">
-              <h3 className="font-bold text-base text-[#14372e] flex items-center gap-2">
-                <Edit3 className="w-5 h-5 text-emerald-700" />
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full space-y-4 shadow-xl border border-[#E4E7EC]">
+            <div className="flex items-center justify-between border-b border-[#E4E7EC] pb-3">
+              <h3 className="font-bold text-[16px] text-[#1B1F24] flex items-center gap-2">
+                <Edit3 className="w-5 h-5 text-[#14372e]" />
                 <span>تعديل اسم المستند</span>
               </h3>
-              <button onClick={() => setShowRenameModal(false)} className="text-slate-400 hover:text-slate-600">
+              <button onClick={() => setShowRenameModal(false)} className="text-[#667085] hover:text-[#1B1F24]">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <p className="text-xs text-slate-500">
-              الاسم الحالي: <strong className="text-slate-800">{itemToRename.name}</strong>
+            <p className="text-[13px] text-[#667085] break-words whitespace-normal">
+              الاسم الحالي: <strong className="text-[#1B1F24]">{itemToRename.name}</strong>
             </p>
 
             <input
               type="text"
               value={newRenameValue}
               onChange={(e) => setNewRenameValue(e.target.value)}
-              className="w-full px-4 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14372e]"
+              className="w-full px-4 py-2.5 text-[14px] bg-[#F7F8FA] border border-[#E4E7EC] rounded-lg focus:outline-none focus:border-[#14372e]"
               autoFocus
             />
 
-            <p className="text-[10px] text-slate-400">
-              ملاحظة: سيتم الحفاظ على صيغة المستند تلقائياً، وتحديث الاسم فوراً على السحابة وتطبيق الكمبيوتر.
+            <p className="text-[12px] text-[#667085]">
+              سيتم الحفاظ على صيغة المستند تلقائياً، وتحديث الاسم فوراً على السحابة وتطبيق الكمبيوتر.
             </p>
 
-            <div className="flex items-center justify-end gap-2 pt-2 border-t">
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-[#E4E7EC]">
               <button
                 onClick={() => setShowRenameModal(false)}
-                className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition"
+                className="px-4 py-2 text-[13px] font-semibold text-[#667085] hover:bg-[#F7F8FA] rounded-lg transition"
               >
                 إلغاء
               </button>
               <button
                 onClick={handleSaveRename}
-                className="px-5 py-2 text-xs font-bold bg-[#14372e] text-white rounded-xl hover:bg-[#1a473b] transition shadow-sm"
+                className="px-5 py-2 text-[13px] font-semibold bg-[#14372e] text-white rounded-lg hover:bg-[#1b493d] transition"
               >
                 حفظ التعديل
               </button>
@@ -3727,63 +3874,59 @@ export default function FilesPage() {
 
       {/* 8. نافذة إرشاد وتشغيل وحفظ المستند في تطبيقات الهاتف الأصلية (Mobile Sheet) */}
       {selectedMobileFile && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
-          <div className="bg-white rounded-t-3xl sm:rounded-3xl p-5 sm:p-6 max-w-lg w-full space-y-4 shadow-2xl border border-slate-200 animate-in slide-in-from-bottom duration-200 max-h-[92vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+          <div className="bg-white rounded-t-2xl sm:rounded-2xl p-5 sm:p-6 max-w-lg w-full space-y-4 shadow-xl border border-[#E4E7EC] max-h-[92vh] overflow-y-auto">
             {/* الترويسة */}
-            <div className="flex items-start justify-between border-b pb-3 gap-2">
-              <div className="flex items-start gap-2.5 min-w-0 flex-1">
-                <div className="mt-0.5 shrink-0">{getFileIcon(selectedMobileFile.type)}</div>
+            <div className="flex items-start justify-between border-b border-[#E4E7EC] pb-3 gap-3">
+              <div className="flex items-start gap-3 min-w-0 flex-1">
+                {getFileIcon(selectedMobileFile.type, 'md')}
                 <div className="min-w-0 flex-1">
-                  <h3 className="font-bold text-sm text-[#14372e] break-words whitespace-normal leading-snug">
+                  <h3 className="font-medium text-[15px] text-[#1B1F24] break-words whitespace-normal leading-relaxed">
                     {selectedMobileFile.name}
                   </h3>
-                  <div className="flex items-center gap-2 text-[11px] text-slate-500 mt-1 flex-wrap">
-                    <span className="break-words whitespace-normal">📂 {selectedMobileFile.folder}</span>
+                  <div className="flex items-center gap-2 text-[12px] text-[#667085] mt-1 flex-wrap">
+                    <span className="break-words whitespace-normal">{selectedMobileFile.folder}</span>
                     <span>•</span>
-                    <span className="font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200">
-                      الإصدار V{selectedMobileFile.version}
+                    <span className="font-semibold text-[#14372e] bg-[#EDF5F2] px-1.5 py-0.5 rounded">
+                      V{selectedMobileFile.version}
                     </span>
                   </div>
                 </div>
               </div>
               <button 
                 onClick={() => setSelectedMobileFile(null)} 
-                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-full hover:bg-slate-100 shrink-0"
+                className="text-[#667085] hover:text-[#1B1F24] p-1.5 rounded-lg hover:bg-[#F7F8FA] shrink-0"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             {/* 1. الخطوة الأولى: تشغيل وتعديل المستند في تطبيقات الهاتف */}
-            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5 space-y-2.5">
+            <div className="bg-[#F7F8FA] border border-[#E4E7EC] rounded-xl p-4 space-y-3">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                  <span className="w-5 h-5 rounded-full bg-[#14372e] text-white flex items-center justify-center text-[10px]">1</span>
+                <span className="text-[13px] font-bold text-[#1B1F24] flex items-center gap-2">
+                  <span className="w-5 h-5 rounded-full bg-[#14372e] text-white flex items-center justify-center text-[11px]">1</span>
                   <span>الخطوة الأولى: فتح وتعديل المستند</span>
                 </span>
-                <span className="text-[10px] text-slate-500">اختر التطبيق</span>
               </div>
 
-              {/* زر التشغيل في تطبيق الهاتف المثبت (Primary) */}
               <button
                 onClick={() => handleOpenInMobileApp(selectedMobileFile)}
                 disabled={preparingMobileOpen}
-                className="w-full flex items-center justify-center gap-2 p-3 bg-[#14372e] hover:bg-[#1a473b] text-white rounded-xl font-bold text-xs transition active:scale-98 shadow-sm"
+                className="w-full flex items-center justify-center gap-2 p-3 bg-[#14372e] hover:bg-[#1b493d] text-white rounded-lg font-semibold text-[13px] transition"
               >
-                <Smartphone className="w-4 h-4 text-emerald-300" />
+                <Smartphone className="w-4 h-4" />
                 <span>
-                  {preparingMobileOpen ? '⏳ جاري تحضير التطبيق...' : `📱 تشغيل وتعديل في تطبيق ${selectedMobileFile.type === 'word' ? 'Word' : 'Excel'} بهاتفك`}
+                  {preparingMobileOpen ? 'جاري تحضير التطبيق...' : `تشغيل وتعديل في تطبيق ${selectedMobileFile.type === 'word' ? 'Word' : 'Excel'} بهاتفك`}
                 </span>
               </button>
 
-              {/* أزرار مساعدة سريعة */}
-              <div className="grid grid-cols-2 gap-2 pt-1">
+              <div className="grid grid-cols-2 gap-2">
                 <button
                   onClick={() => handleLaunchOfficeProtocol(selectedMobileFile)}
-                  className="flex items-center justify-center gap-1.5 p-2 bg-white hover:bg-slate-100 text-slate-700 rounded-xl font-bold text-[11px] border border-slate-200 transition"
-                  title="استدعاء بروتوكول Microsoft 365"
+                  className="flex items-center justify-center gap-1.5 p-2 bg-white hover:bg-[#EDF0F5] text-[#1B1F24] rounded-lg font-semibold text-[12px] border border-[#E4E7EC] transition"
                 >
-                  <Sparkles className="w-3.5 h-3.5 text-blue-600" />
+                  <Sparkles className="w-3.5 h-3.5 text-[#14372e]" />
                   <span>بروتوكول Office</span>
                 </button>
 
@@ -3793,48 +3936,47 @@ export default function FilesPage() {
                     setSelectedMobileFile(null);
                     handleOpenOfficeOnline(f);
                   }}
-                  className="flex items-center justify-center gap-1.5 p-2 bg-white hover:bg-slate-100 text-slate-700 rounded-xl font-bold text-[11px] border border-slate-200 transition"
-                  title="معاينة في المتصفح عبر Office Online"
+                  className="flex items-center justify-center gap-1.5 p-2 bg-white hover:bg-[#EDF0F5] text-[#1B1F24] rounded-lg font-semibold text-[12px] border border-[#E4E7EC] transition"
                 >
-                  <Eye className="w-3.5 h-3.5 text-blue-600" />
+                  <Eye className="w-3.5 h-3.5 text-[#14372e]" />
                   <span>معاينة بالمتصفح</span>
                 </button>
               </div>
 
               <button
                 onClick={() => handleDownloadFile(selectedMobileFile)}
-                className="w-full flex items-center justify-center gap-1.5 py-1.5 text-slate-500 hover:text-slate-800 text-[11px] font-medium transition"
+                className="w-full flex items-center justify-center gap-1.5 py-1.5 text-[#667085] hover:text-[#1B1F24] text-[12px] font-medium transition"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>تنزيل نسخة عادية إلى الهاتف</span>
               </button>
             </div>
 
-            {/* 2. الخطوة الثانية: حفظ التعديلات ومشاركتها في النظام (Core Feature) */}
-            <div className="bg-gradient-to-br from-amber-50 to-emerald-50 border border-amber-300 rounded-2xl p-4 space-y-3 shadow-xs">
+            {/* 2. الخطوة الثانية: حفظ التعديلات ومشاركتها في النظام */}
+            <div className="bg-[#EDF5F2] border border-[#14372e]/20 rounded-xl p-4 space-y-3">
               <div className="flex items-center gap-2">
-                <span className="w-5 h-5 rounded-full bg-amber-600 text-white flex items-center justify-center text-[10px] font-bold">2</span>
-                <span className="text-xs font-bold text-slate-900">الخطوة الثانية: حفظ ومشاركة التعديلات</span>
+                <span className="w-5 h-5 rounded-full bg-[#c59b27] text-white flex items-center justify-center text-[11px] font-bold">2</span>
+                <span className="text-[13px] font-bold text-[#1B1F24]">الخطوة الثانية: حفظ ومشاركة التعديلات</span>
               </div>
 
-              <p className="text-xs text-slate-600 leading-relaxed">
-                بعد فتح المستند في برنامج <strong>{selectedMobileFile.type === 'word' ? 'Word' : 'Excel'}</strong> وإجراء التعديلات وحفظها بهاتفك، اضغط الزر أدناه لاختيار الملف المعدل. سيتم حفظ التعديلات في النظام فوراً ومشاركتها مع جميع أجهزة الغرفة والمستخدمين.
+              <p className="text-[12px] text-[#667085] leading-relaxed">
+                بعد إجراء التعديلات وحفظها بهاتفك، اضغط الزر أدناه لاختيار الملف المعدل ليتم تحديثه ومشاركته مع جميع أجهزة الغرفة.
               </p>
 
               <button
                 onClick={() => triggerUpdateFile(selectedMobileFile)}
                 disabled={actionLoading}
-                className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-xl font-black text-xs transition active:scale-98 shadow-md"
+                className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-[#c59b27] hover:bg-[#b08920] text-white rounded-lg font-bold text-[13px] transition"
               >
-                <UploadCloud className="w-4 h-4 text-slate-950" />
-                <span>📤 اضغط هنا لاختيار الملف المعدل وحفظ التعديلات في النظام</span>
+                <UploadCloud className="w-4 h-4" />
+                <span>اختيار الملف المعدل وحفظ التعديلات</span>
               </button>
             </div>
 
-            <div className="pt-2 border-t">
+            <div className="pt-2 border-t border-[#E4E7EC]">
               <button
                 onClick={() => setSelectedMobileFile(null)}
-                className="w-full py-2.5 text-xs font-bold text-slate-500 hover:text-slate-800 rounded-xl transition"
+                className="w-full py-2 text-[13px] font-semibold text-[#667085] hover:text-[#1B1F24] rounded-lg transition"
               >
                 إغلاق النافذة
               </button>
@@ -3846,14 +3988,14 @@ export default function FilesPage() {
       {/* شريط الإجراءات الجماعية العائم عند تحديد ملفات أو مجلدات (Floating Bulk Action Bar) */}
       {(selectedFileIds.length > 0 || selectedFolderIds.length > 0) && (
         <div
-          className="fixed bottom-5 left-1/2 -translate-x-1/2 z-40 bg-slate-900/95 text-white backdrop-blur-md px-4 py-3 rounded-2xl shadow-2xl border border-slate-700 flex items-center gap-3 flex-wrap justify-center max-w-[95vw]"
+          className="fixed bottom-5 left-1/2 -translate-x-1/2 z-40 bg-[#1B1F24] text-white px-4 py-2.5 rounded-xl shadow-xl border border-white/10 flex items-center gap-3 flex-wrap justify-center max-w-[95vw]"
           dir="rtl"
         >
-          <div className="flex items-center gap-2 pl-2 border-l border-slate-700">
-            <span className="w-6 h-6 rounded-full bg-[#0f6cbd] text-white text-xs font-black flex items-center justify-center">
+          <div className="flex items-center gap-2 pl-2 border-l border-white/15">
+            <span className="w-6 h-6 rounded-full bg-[#14372e] text-white text-[12px] font-bold flex items-center justify-center">
               {selectedFileIds.length + selectedFolderIds.length}
             </span>
-            <span className="text-xs font-bold">عنصر محدد</span>
+            <span className="text-[12px] font-semibold">عنصر محدد</span>
           </div>
 
           {activeTab === 'ACTIVE' && (
@@ -3868,10 +4010,10 @@ export default function FilesPage() {
                 })
               }
               disabled={actionLoading}
-              className="px-3.5 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
+              className="px-3 py-1.5 rounded-lg bg-[#14372e] hover:bg-[#1b493d] text-white text-[12px] font-semibold transition flex items-center gap-1.5"
             >
               <Move className="w-3.5 h-3.5" />
-              <span>نقل المحدد إلى...</span>
+              <span>نقل المحدد</span>
             </button>
           )}
 
@@ -3893,7 +4035,7 @@ export default function FilesPage() {
                   notifyLocalDesktopSync();
                   await loadData();
                   setToastMessage({
-                    text: `♻️ تم استرجاع (${selectedFileIds.length}) ملف بنجاح!`,
+                    text: `تم استرجاع (${selectedFileIds.length}) ملف بنجاح`,
                     type: 'success',
                   });
                 } catch (err: any) {
@@ -3903,7 +4045,7 @@ export default function FilesPage() {
                 }
               }}
               disabled={actionLoading}
-              className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
+              className="px-3 py-1.5 rounded-lg bg-[#12B76A] hover:bg-[#0e9f5a] text-white text-[12px] font-semibold transition flex items-center gap-1.5"
             >
               <RotateCcw className="w-3.5 h-3.5" />
               <span>استرجاع المحدد</span>
@@ -3914,7 +4056,7 @@ export default function FilesPage() {
             type="button"
             onClick={handleBulkDeleteSelected}
             disabled={actionLoading}
-            className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
+            className="px-3 py-1.5 rounded-lg bg-[#F04438] hover:bg-rose-600 text-white text-[12px] font-semibold transition flex items-center gap-1.5"
           >
             <Trash2 className="w-3.5 h-3.5" />
             <span>{activeTab === 'TRASH' ? 'حذف نهائي للمحدد' : 'حذف المحدد للسلة'}</span>
@@ -3923,7 +4065,7 @@ export default function FilesPage() {
           <button
             type="button"
             onClick={clearSelection}
-            className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition"
+            className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white/80 text-[12px] font-semibold transition"
           >
             إلغاء التحديد
           </button>
@@ -3932,11 +4074,11 @@ export default function FilesPage() {
 
       {/* نافذة نقل الملفات والمجلدات بين الأقسام والمجلدات الفرعية (Move Modal) */}
       {showMoveModal && itemsToMove && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4" dir="rtl">
-          <div className="bg-white rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl border border-slate-200">
-            <div className="flex items-center justify-between border-b pb-3">
-              <h3 className="font-bold text-base text-[#14372e] flex items-center gap-2">
-                <Move className="w-5 h-5 text-sky-600" />
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" dir="rtl">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full space-y-4 shadow-xl border border-[#E4E7EC]">
+            <div className="flex items-center justify-between border-b border-[#E4E7EC] pb-3">
+              <h3 className="font-bold text-[16px] text-[#1B1F24] flex items-center gap-2">
+                <Move className="w-5 h-5 text-[#14372e]" />
                 <span>نقل إلى قسم أو مجلد آخر</span>
               </h3>
               <button
@@ -3944,19 +4086,19 @@ export default function FilesPage() {
                   setShowMoveModal(false);
                   setItemsToMove(null);
                 }}
-                className="text-slate-400 hover:text-slate-600"
+                className="text-[#667085] hover:text-[#1B1F24]"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="p-3 rounded-xl bg-sky-50 border border-sky-200 text-xs text-sky-900 font-bold">
-              📦 العناصر المراد نقلها: <span className="text-[#0f6cbd]">{itemsToMove.label}</span>
+            <div className="p-3 rounded-lg bg-[#F7F8FA] border border-[#E4E7EC] text-[13px] text-[#1B1F24] font-medium break-words whitespace-normal">
+              العناصر المراد نقلها: <strong className="text-[#14372e]">{itemsToMove.label}</strong>
             </div>
 
             <div className="space-y-3">
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
+                <label className="block text-[13px] font-semibold text-[#1B1F24] mb-1">
                   1. اختر القسم الهدف:
                 </label>
                 <select
@@ -3965,62 +4107,58 @@ export default function FilesPage() {
                     setMoveTargetDept(e.target.value);
                     setMoveTargetSubfolder('');
                   }}
-                  className="w-full px-3.5 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl font-bold focus:outline-none focus:ring-2 focus:ring-[#14372e]"
+                  className="w-full px-3.5 py-2.5 text-[13px] bg-[#F7F8FA] border border-[#E4E7EC] rounded-lg font-medium focus:outline-none focus:border-[#14372e]"
                 >
                   {departments.map((d) => (
                     <option key={d} value={d}>
-                      🏛️ {d}
+                      {d}
                     </option>
                   ))}
                 </select>
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
+                <label className="block text-[13px] font-semibold text-[#1B1F24] mb-1">
                   2. اختر مجلداً فرعياً داخل القسم (اختياري):
                 </label>
                 <select
                   value={moveTargetSubfolder}
                   onChange={(e) => setMoveTargetSubfolder(e.target.value)}
-                  className="w-full px-3.5 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl font-bold focus:outline-none focus:ring-2 focus:ring-[#14372e]"
+                  className="w-full px-3.5 py-2.5 text-[13px] bg-[#F7F8FA] border border-[#E4E7EC] rounded-lg font-medium focus:outline-none focus:border-[#14372e]"
                 >
-                  <option value="">📂 المجلد الرئيسي للقسم ({moveTargetDept})</option>
+                  <option value="">المجلد الرئيسي للقسم ({moveTargetDept})</option>
                   {allFolders
                     .filter((f) => f.department === moveTargetDept && f.parentPath)
                     .map((sub) => (
                       <option key={sub.id} value={sub.path}>
-                        📁 {sub.path}
+                        {sub.path}
                       </option>
                     ))}
                 </select>
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  أو اكتب اسم مجلد فرعي جديد ليتم إنشاؤه ونقل الملفات إليه:
+                <label className="block text-[13px] font-semibold text-[#1B1F24] mb-1">
+                  أو اكتب اسم مجلد فرعي جديد:
                 </label>
                 <input
                   type="text"
                   value={moveCustomSubfolder}
                   onChange={(e) => setMoveCustomSubfolder(e.target.value)}
                   placeholder="اتركه فارغاً للنقل للمجلد المختار أعلاه..."
-                  className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14372e]"
+                  className="w-full px-3.5 py-2 text-[13px] bg-[#F7F8FA] border border-[#E4E7EC] rounded-lg focus:outline-none focus:border-[#14372e]"
                 />
               </div>
             </div>
 
-            <p className="text-[11px] text-slate-500">
-              سيتم تنفيذ النقل في سحابة Google Drive فوراً ومزامنة الموقع الجديد مع تطبيق سطح المكتب وكافة المنصات.
-            </p>
-
-            <div className="flex items-center justify-end gap-2 pt-2 border-t">
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-[#E4E7EC]">
               <button
                 type="button"
                 onClick={() => {
                   setShowMoveModal(false);
                   setItemsToMove(null);
                 }}
-                className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition"
+                className="px-4 py-2 text-[13px] font-semibold text-[#667085] hover:bg-[#F7F8FA] rounded-lg transition"
               >
                 إلغاء
               </button>
@@ -4028,10 +4166,10 @@ export default function FilesPage() {
                 type="button"
                 onClick={handleExecuteMove}
                 disabled={actionLoading || !moveTargetDept}
-                className="px-5 py-2 text-xs font-bold bg-[#14372e] text-white rounded-xl hover:bg-[#1a473b] transition shadow-sm flex items-center gap-1.5"
+                className="px-5 py-2 text-[13px] font-semibold bg-[#14372e] text-white rounded-lg hover:bg-[#1b493d] transition flex items-center gap-1.5"
               >
                 <Move className="w-3.5 h-3.5" />
-                <span>تأكيد النقل ومزامنة السحابة</span>
+                <span>تأكيد النقل</span>
               </button>
             </div>
           </div>
@@ -4040,36 +4178,32 @@ export default function FilesPage() {
 
       {/* نافذة شريط تقدم تفريغ السلة والعمليات الجماعية السريعة (Trash & Batch Progress Modal) */}
       {trashProgress && trashProgress.show && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4" dir="rtl">
-          <div className="bg-white rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl border border-slate-200 text-right">
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" dir="rtl">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full space-y-4 shadow-xl border border-[#E4E7EC] text-right">
             <div className="flex items-center gap-3">
-              <div className="w-11 h-11 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
+              <div className="w-10 h-10 rounded-xl bg-[#EDF5F2] text-[#14372e] flex items-center justify-center shrink-0">
                 <RefreshCw className="w-5 h-5 animate-spin" />
               </div>
               <div className="min-w-0 flex-1">
-                <h3 className="font-black text-sm text-slate-900">{trashProgress.title}</h3>
-                <p className="text-xs text-slate-600 break-words whitespace-normal mt-0.5">{trashProgress.currentName}</p>
+                <h3 className="font-bold text-[14px] text-[#1B1F24]">{trashProgress.title}</h3>
+                <p className="text-[12px] text-[#667085] break-words whitespace-normal mt-0.5">{trashProgress.currentName}</p>
               </div>
             </div>
 
             <div className="space-y-2">
-              <div className="flex items-center justify-between text-xs font-bold">
-                <span className="text-2xl font-black text-[#14372e]">{trashProgress.percentage}%</span>
-                <span className="text-slate-600">
+              <div className="flex items-center justify-between text-[12px] font-semibold">
+                <span className="text-xl font-bold text-[#14372e] font-mono">{trashProgress.percentage}%</span>
+                <span className="text-[#667085]">
                   تم إنجاز {trashProgress.current} من {trashProgress.total}
                 </span>
               </div>
-              <div className="w-full bg-slate-100 rounded-full h-3.5 overflow-hidden p-0.5 border border-slate-200">
+              <div className="w-full bg-[#E4E7EC] rounded-full h-2.5 overflow-hidden">
                 <div
-                  className="bg-gradient-to-r from-[#14372e] via-emerald-600 to-amber-500 h-full rounded-full transition-all duration-200"
+                  className="bg-[#14372e] h-full rounded-full transition-all duration-200"
                   style={{ width: `${Math.max(4, trashProgress.percentage)}%` }}
                 />
               </div>
             </div>
-
-            <p className="text-[11px] text-slate-400 text-center">
-              تتم معالجة الدفعات بالتوازي مع سحابة Google Drive لضمان أقصى سرعة وعدم توقف المنصة...
-            </p>
           </div>
         </div>
       )}
@@ -4077,17 +4211,17 @@ export default function FilesPage() {
       {/* عارض الصور والوسائط وملفات PDF المدمج (Built-in Lightbox Preview Modal) */}
       {previewFile && (
         <div
-          className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex flex-col justify-between p-3 sm:p-6 animate-in fade-in duration-150"
+          className="fixed inset-0 bg-black/85 z-50 flex flex-col justify-between p-3 sm:p-6"
           dir="rtl"
         >
           {/* شريط علوي للعارض */}
-          <div className="flex items-center justify-between gap-3 bg-slate-900/90 text-white px-4 py-3 rounded-2xl border border-slate-700/80">
-            <div className="flex items-center gap-2.5 min-w-0 flex-1">
-              <div className="shrink-0">{getFileIcon(previewFile.type)}</div>
+          <div className="flex items-center justify-between gap-3 bg-[#1B1F24] text-white px-4 py-3 rounded-xl border border-white/10">
+            <div className="flex items-center gap-3 min-w-0 flex-1">
+              {getFileIcon(previewFile.type, 'sm')}
               <div className="min-w-0 flex-1">
-                <h3 className="font-bold text-xs sm:text-sm break-words whitespace-normal leading-snug">{previewFile.name}</h3>
-                <p className="text-[11px] text-slate-400 break-words whitespace-normal mt-0.5">
-                  📂 {previewFile.folder} • {previewFile.size}
+                <h3 className="font-medium text-[14px] break-words whitespace-normal leading-snug">{previewFile.name}</h3>
+                <p className="text-[11px] text-white/60 break-words whitespace-normal mt-0.5">
+                  {previewFile.folder} • {previewFile.size}
                 </p>
               </div>
             </div>
@@ -4096,7 +4230,7 @@ export default function FilesPage() {
               <button
                 type="button"
                 onClick={() => handleDownloadFile(previewFile)}
-                className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center gap-1.5"
+                className="px-3 py-1.5 rounded-lg bg-[#14372e] hover:bg-[#1b493d] text-white text-[12px] font-semibold transition flex items-center gap-1.5"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>تنزيل الملف</span>
@@ -4104,17 +4238,17 @@ export default function FilesPage() {
               <button
                 type="button"
                 onClick={() => setPreviewFile(null)}
-                className="p-2 rounded-xl bg-slate-800 hover:bg-rose-600 text-white transition"
+                className="p-2 rounded-lg bg-white/10 hover:bg-[#F04438] text-white transition"
                 title="إغلاق المعاينة"
               >
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4" />
               </button>
             </div>
           </div>
 
           {/* محتوى المعاينة الوسطي */}
           <div
-            className="flex-1 flex items-center justify-center overflow-auto my-3 rounded-2xl bg-slate-950/60 border border-slate-800 p-2 sm:p-4"
+            className="flex-1 flex items-center justify-center overflow-auto my-3 rounded-xl bg-black/40 border border-white/10 p-2 sm:p-4"
             onClick={(e) => {
               if (e.target === e.currentTarget) setPreviewFile(null);
             }}
@@ -4123,7 +4257,7 @@ export default function FilesPage() {
               <img
                 src={`/api/drive/stream?id=${encodeURIComponent(previewFile.id)}`}
                 alt={previewFile.name}
-                className="max-h-[78vh] max-w-full object-contain rounded-xl shadow-2xl"
+                className="max-h-[78vh] max-w-full object-contain rounded-lg"
               />
             )}
 
@@ -4131,7 +4265,7 @@ export default function FilesPage() {
               <iframe
                 src={`/api/drive/stream?id=${encodeURIComponent(previewFile.id)}`}
                 title={previewFile.name}
-                className="w-full h-[78vh] rounded-xl bg-white border-0"
+                className="w-full h-[78vh] rounded-lg bg-white border-0"
               />
             )}
 
@@ -4140,16 +4274,16 @@ export default function FilesPage() {
                 src={`/api/drive/stream?id=${encodeURIComponent(previewFile.id)}`}
                 controls
                 autoPlay
-                className="max-h-[78vh] max-w-full rounded-xl shadow-2xl bg-black"
+                className="max-h-[78vh] max-w-full rounded-lg bg-black"
               />
             )}
 
             {previewFile.type === 'audio' && (
-              <div className="bg-slate-900 p-8 rounded-3xl border border-slate-700 text-center space-y-4 max-w-md w-full">
-                <div className="w-16 h-16 rounded-2xl bg-pink-500/20 text-pink-400 flex items-center justify-center mx-auto">
-                  <Music className="w-8 h-8" />
+              <div className="bg-[#1B1F24] p-8 rounded-2xl border border-white/10 text-center space-y-4 max-w-md w-full">
+                <div className="flex justify-center">
+                  {getFileIcon('audio', 'lg')}
                 </div>
-                <h4 className="text-white font-bold text-sm">{previewFile.name}</h4>
+                <h4 className="text-white font-medium text-[15px] break-words whitespace-normal">{previewFile.name}</h4>
                 <audio
                   src={`/api/drive/stream?id=${encodeURIComponent(previewFile.id)}`}
                   controls
@@ -4162,15 +4296,15 @@ export default function FilesPage() {
         </div>
       )}
 
-      {/* 9. إشعار عائم بتشغيل برامج Microsoft Office الأصلية */}
+      {/* 9. إشعار عائم هادئ (Toast Notification) */}
       {toastMessage && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 animate-bounce shadow-2xl pointer-events-none">
-          <div className={`flex items-center gap-2.5 px-5 py-3 rounded-2xl text-xs font-bold border backdrop-blur-md ${
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 shadow-lg pointer-events-none">
+          <div className={`flex items-center gap-2.5 px-4 py-2.5 rounded-xl text-[13px] font-semibold border ${
             toastMessage.type === 'success' 
-              ? 'bg-[#14372e]/95 text-white border-emerald-400' 
+              ? 'bg-[#14372e] text-white border-[#1b493d]' 
               : toastMessage.type === 'error'
-              ? 'bg-rose-900/95 text-white border-rose-400'
-              : 'bg-slate-900/95 text-white border-slate-700'
+              ? 'bg-[#F04438] text-white border-rose-600'
+              : 'bg-[#1B1F24] text-white border-white/15'
           }`}>
             <span>{toastMessage.text}</span>
           </div>

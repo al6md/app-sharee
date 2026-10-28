@@ -21,6 +21,8 @@ import {
 } from '@/lib/googleDrive';
 
 export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+export const fetchCache = 'force-no-store';
 export const maxDuration = 60;
 
 // GET: جلب شجرة الملفات والأقسام الحية من Google Drive
@@ -31,7 +33,9 @@ export async function GET() {
       { success: true, ...data },
       {
         headers: {
-          'Cache-Control': 'no-store, no-cache, must-revalidate',
+          'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0',
+          'Pragma': 'no-cache',
+          'Expires': '0',
         },
       }
     );

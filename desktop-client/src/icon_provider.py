@@ -1,10 +1,10 @@
 """
 تبادل الملفات – File Exchange System
-مولد أيقونات Office بأسلوب Google Stitch (High-DPI Minimalist Fluent Icons)
-تصميم نقي، ألوان متناسقة، ودقة وضوح فائقة للأجهزة وشاشات Retina/4K
+مولد أيقونات الملفات والمجلدات الواضحة وعالية الدقة (High-DPI Crisp Vector File Icons)
+تصميم مسطح وواضح بدون تشويش، مع ألوان قياسية مميزة لكل نوع ملف
 """
 import os
-from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QPen, QBrush, QPainterPath, QLinearGradient
+from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QPen, QBrush, QPainterPath
 from PyQt6.QtCore import Qt, QRectF, QPointF
 
 _icon_cache = {}
@@ -41,11 +41,11 @@ def get_type_key(filename, is_folder=False):
 
 def create_stitch_office_pixmap(app_type, size=64):
     """
-    توليد صورة نقطية فائقة النقاء بأسلوب Google Stitch:
-    - بلاطة حديثة بحواف دائرية ناعمة (Modern Squircle)
-    - ألوان غنية ومريحة للعين مع إطار خفيف
+    توليد أيقونة واضحة وحادة بدقة عالية لكل نوع ملف أو مجلد:
+    - مربعات بحواف دائرية ناعمة وألوان قياسية مميزة فوراً بالعين
+    - رسم متجهي نظيف للمجلدات وشارات واضحة للصيغ (W, X, A, PDF, IMG, VID, AUD, ZIP, DOC)
     """
-    key = f"stitch_{app_type}_{size}_px"
+    key = f"clean_{app_type}_{size}_px"
     if key in _icon_cache:
         return _icon_cache[key]
 
@@ -57,82 +57,81 @@ def create_stitch_office_pixmap(app_type, size=64):
     painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
     painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
-    padding = max(2, int(size * 0.05))
+    padding = max(2, int(size * 0.06))
     r = QRectF(padding, padding, size - (padding * 2), size - (padding * 2))
     corner_radius = max(6, int(size * 0.22))
 
-    if app_type == 'word':
-        c_top = QColor("#2b579a")
-        c_bottom = QColor("#185abd")
-        letter = "W"
-    elif app_type == 'excel':
-        c_top = QColor("#107c41")
-        c_bottom = QColor("#0e6133")
-        letter = "X"
-    elif app_type == 'access':
-        c_top = QColor("#a4373a")
-        c_bottom = QColor("#842a2d")
-        letter = "A"
-    elif app_type == 'pdf':
-        c_top = QColor("#d9381e")
-        c_bottom = QColor("#b3260f")
-        letter = "P"
-    elif app_type == 'image':
-        c_top = QColor("#8b5cf6")
-        c_bottom = QColor("#6d28d9")
-        letter = "🖼️"
-    elif app_type == 'video':
-        c_top = QColor("#6366f1")
-        c_bottom = QColor("#4338ca")
-        letter = "🎬"
-    elif app_type == 'audio':
-        c_top = QColor("#ec4899")
-        c_bottom = QColor("#be185d")
-        letter = "🎵"
-    elif app_type == 'archive':
-        c_top = QColor("#f97316")
-        c_bottom = QColor("#c2410c")
-        letter = "📦"
-    elif app_type == 'folder':
-        c_top = QColor("#d4af37")
-        c_bottom = QColor("#b8860b")
-        letter = "📁"
-    else:
-        c_top = QColor("#475569")
-        c_bottom = QColor("#334155")
-        letter = "📄"
+    if app_type == 'folder':
+        # خلفية خضراء مؤسسية فاتحة مع رسم متجهي واضح للمجلد باللون الأخضر الرسمي والذهبي
+        bg_path = QPainterPath()
+        bg_path.addRoundedRect(r, corner_radius, corner_radius)
+        painter.fillPath(bg_path, QBrush(QColor("#EDF5F2")))
+        painter.setPen(QPen(QColor("#CBE3DA"), 1.0))
+        painter.drawRoundedRect(r, corner_radius, corner_radius)
 
-    # 1. ظل سفلي هادئ وخفيف
-    shadow_rect = QRectF(r.x(), r.y() + max(1.5, size * 0.04), r.width(), r.height())
-    shadow_path = QPainterPath()
-    shadow_path.addRoundedRect(shadow_rect, corner_radius, corner_radius)
-    painter.fillPath(shadow_path, QBrush(QColor(15, 23, 42, 35)))
+        # رسم شكل المجلد داخل المربع
+        fx = r.x() + r.width() * 0.20
+        fy = r.y() + r.height() * 0.26
+        fw = r.width() * 0.60
+        fh = r.height() * 0.48
 
-    # 2. جسم البلاطة مع تدرج لوني فخم وهادئ
-    grad = QLinearGradient(0, r.top(), 0, r.bottom())
-    grad.setColorAt(0.0, c_top)
-    grad.setColorAt(1.0, c_bottom)
+        folder_path = QPainterPath()
+        tab_w = fw * 0.42
+        tab_h = fh * 0.22
+        # اللسان العلوي للمجلد
+        folder_path.moveTo(fx, fy + tab_h)
+        folder_path.lineTo(fx, fy + 2)
+        folder_path.lineTo(fx + tab_w - 3, fy + 2)
+        folder_path.lineTo(fx + tab_w + 3, fy + tab_h)
+        folder_path.lineTo(fx + fw, fy + tab_h)
+        folder_path.lineTo(fx + fw, fy + fh)
+        folder_path.lineTo(fx, fy + fh)
+        folder_path.closeSubpath()
 
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(QColor("#14372e")))
+        painter.drawPath(folder_path)
+
+        # شريط ذهبي خفيف أسفل لسان المجلد لتمييزه بصرياً
+        accent_rect = QRectF(fx + 2, fy + tab_h + 2, fw - 4, max(2.0, fh * 0.12))
+        painter.setBrush(QBrush(QColor("#c59b27")))
+        painter.drawRoundedRect(accent_rect, 1.5, 1.5)
+
+        painter.end()
+        _icon_cache[key] = pixmap
+        return pixmap
+
+    # تحديد اللون والتسمية القياسية لكل صيغة ملف
+    palette = {
+        'word':    ("#2B579A", "W",   0.44),
+        'excel':   ("#217346", "X",   0.44),
+        'access':  ("#A4373A", "A",   0.44),
+        'pdf':     ("#E5252A", "PDF", 0.26),
+        'image':   ("#7C3AED", "IMG", 0.25),
+        'video':   ("#4F46E5", "VID", 0.25),
+        'audio':   ("#DB2777", "AUD", 0.24),
+        'archive': ("#D97706", "ZIP", 0.26),
+        'other':   ("#475467", "DOC", 0.25),
+    }
+    hex_color, label, font_ratio = palette.get(app_type, ("#475467", "DOC", 0.25))
+    bg_color = QColor(hex_color)
+
+    # جسم الأيقونة المسطح والواضح
     body_path = QPainterPath()
     body_path.addRoundedRect(r, corner_radius, corner_radius)
-    painter.fillPath(body_path, QBrush(grad))
+    painter.fillPath(body_path, QBrush(bg_color))
 
-    # 3. إطار خارجي دقيق فائق النعومة
-    painter.setPen(QPen(QColor(255, 255, 255, 45), 1.0))
+    # إطار داخلي خفيف جداً لإبراز الحواف
+    painter.setPen(QPen(QColor(255, 255, 255, 40), 1.0))
     painter.drawRoundedRect(r, corner_radius, corner_radius)
 
-    # 4. كتابة الحرف أو الرمز الرئيسي
-    if letter in ("📄", "🖼️", "🎬", "🎵", "📦", "📁"):
-        font = QFont("Segoe UI Emoji", int(size * 0.40))
-        painter.setFont(font)
-        painter.setPen(QColor("#ffffff"))
-        painter.drawText(r, Qt.AlignmentFlag.AlignCenter, letter)
-    else:
-        font = QFont("Segoe UI", int(size * 0.46), QFont.Weight.Bold)
-        font.setStyleHint(QFont.StyleHint.SansSerif)
-        painter.setFont(font)
-        painter.setPen(QColor("#ffffff"))
-        painter.drawText(r, Qt.AlignmentFlag.AlignCenter, letter)
+    # كتابة رمز الصيغة بوضوح عالٍ في المنتصف
+    font_px = max(8, int(size * font_ratio))
+    font = QFont("Segoe UI", font_px, QFont.Weight.Bold)
+    font.setStyleHint(QFont.StyleHint.SansSerif)
+    painter.setFont(font)
+    painter.setPen(QColor("#FFFFFF"))
+    painter.drawText(r, Qt.AlignmentFlag.AlignCenter, label)
 
     painter.end()
     _icon_cache[key] = pixmap
@@ -156,7 +155,7 @@ def create_image_thumbnail_pixmap(abs_path, size=64):
         if src.isNull():
             return None
 
-        padding = max(2, int(size * 0.05))
+        padding = max(2, int(size * 0.06))
         box = size - (padding * 2)
         scaled = src.scaled(
             box,
@@ -183,7 +182,7 @@ def create_image_thumbnail_pixmap(abs_path, size=64):
         painter.drawPixmap(int(padding), int(padding), cropped)
         painter.setClipping(False)
 
-        painter.setPen(QPen(QColor(139, 92, 246, 160), 1.5))
+        painter.setPen(QPen(QColor("#E4E7EC"), 1.2))
         painter.drawRoundedRect(r, corner_radius, corner_radius)
         painter.end()
 
@@ -196,7 +195,7 @@ def create_image_thumbnail_pixmap(abs_path, size=64):
 
 
 def create_office_icon(app_type, size=64):
-    key = f"stitch_{app_type}_{size}_ico"
+    key = f"clean_{app_type}_{size}_ico"
     if key in _icon_cache:
         return _icon_cache[key]
 
