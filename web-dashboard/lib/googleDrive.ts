@@ -172,6 +172,14 @@ let _adminStoreCache: { store: CloudAdminStore; ts: number; fileId?: string } | 
 const PERMISSIONS_CACHE_TTL_MS = 20000;
 let _saveQueuePromise: Promise<any> = Promise.resolve();
 
+// ذاكرة تخزين مؤقتة لشجرة الملفات والأقسام لتسريع التنقل وجعله فورياً (Sub-second navigation)
+let _cloudFilesCache: { data: any; ts: number } | null = null;
+const CLOUD_FILES_CACHE_TTL_MS = 12000; // 12 ثانية كاش خفيف يمنع ازدحام طلبات Google Drive
+
+export function invalidateCloudFilesCache() {
+  _cloudFilesCache = null;
+}
+
 async function runWithConcurrency<T, R>(
   items: T[],
   concurrency: number,
@@ -248,6 +256,7 @@ export async function createCloudFolder(name: string, parentId: string = ROOT_FO
     },
     fields: 'id, name, mimeType',
   });
+  invalidateCloudFilesCache();
   return res.data;
 }
 
@@ -613,8 +622,13 @@ export async function saveCloudDevices(
 
 /**
  * جلب الشجرة الكاملة لكافة الأقسام والمجلدات الفرعية والمستندات (بأي عمق وبترقيم صفحات كامل)
+ * مع دعم التخزين المؤقت في الذاكرة لتسريع التصفح والانتقال بين المجلدات فورياً
  */
-export async function getAllCloudFiles() {
+export async function getAllCloudFiles(forceRefresh: boolean = false) {
+  if (!forceRefresh && _cloudFilesCache && Date.now() - _cloudFilesCache.ts < CLOUD_FILES_CACHE_TTL_MS) {
+    return _cloudFilesCache.data;
+  }
+
   const idToPath = new Map<string, string>([[ROOT_FOLDER_ID, '']]);
   const allFolders: CloudFolderItem[] = [];
   const rawActiveFiles: { file: any; relFolder: string }[] = [];
@@ -733,7 +747,7 @@ export async function getAllCloudFiles() {
 
   const adminStore = await getCloudAdminStore();
 
-  return {
+  const result = {
     folders: departments,
     allFolders,
     files: [...activeFiles, ...trashFiles],
@@ -741,6 +755,9 @@ export async function getAllCloudFiles() {
     adminCredentials: adminStore.adminCredentials,
     devices: adminStore.devices,
   };
+
+  _cloudFilesCache = { data: result, ts: Date.now() };
+  return result;
 }
 
 /**
@@ -768,6 +785,7 @@ export async function uploadFileToDrive(
     pageSize: 5,
   });
 
+  invalidateCloudFilesCache();
   if (check.data.files && check.data.files.length > 0) {
     const existingId = check.data.files[0].id!;
     const res = await drive.files.update({
@@ -899,6 +917,7 @@ export async function uploadResumableChunk(params: {
   }
 
   if (res.status === 200 || res.status === 201) {
+    invalidateCloudFilesCache();
     let data: any = null;
     try {
       data = await res.json();
@@ -946,6 +965,7 @@ export async function getResumableUploadStatus(sessionUri: string, totalSize: nu
   }
 
   if (res.status === 200 || res.status === 201) {
+    invalidateCloudFilesCache();
     let data: any = null;
     try {
       data = await res.json();
@@ -968,6 +988,7 @@ export async function getResumableUploadStatus(sessionUri: string, totalSize: nu
  * نقل ملف أو مجلد إلى سلة المحذوفات
  */
 export async function deleteDriveItem(fileId: string) {
+  invalidateCloudFilesCache();
   return await drive.files.update({
     fileId,
     requestBody: {
@@ -980,6 +1001,7 @@ export async function deleteDriveItem(fileId: string) {
  * استرجاع ملف من سلة المحذوفات
  */
 export async function restoreDriveItem(fileId: string) {
+  invalidateCloudFilesCache();
   return await drive.files.update({
     fileId,
     requestBody: {
@@ -992,6 +1014,7 @@ export async function restoreDriveItem(fileId: string) {
  * حذف نهائي لملف
  */
 export async function permanentDeleteDriveItem(fileId: string) {
+  invalidateCloudFilesCache();
   return await drive.files.delete({
     fileId,
   });
@@ -1001,6 +1024,7 @@ export async function permanentDeleteDriveItem(fileId: string) {
  * إعادة تسمية ملف أو مجلد
  */
 export async function renameDriveItem(fileId: string, newName: string) {
+  invalidateCloudFilesCache();
   const res = await drive.files.update({
     fileId,
     requestBody: {

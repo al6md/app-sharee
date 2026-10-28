@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   Folder, 
   FileText, 
@@ -523,14 +523,15 @@ export default function FilesPage() {
     return 'file';
   };
 
-  const loadData = async (isSilent: boolean | any = false) => {
+  const loadData = async (isSilent: boolean | any = false, forceRefresh: boolean = false) => {
     const silent = typeof isSilent === 'boolean' ? isSilent : false;
     try {
       if (!silent) {
         setLoading(true);
       }
 
-      const res = await fetch(`/api/drive/files?t=${Date.now()}`, {
+      const refreshParam = forceRefresh ? '&refresh=1' : '';
+      const res = await fetch(`/api/drive/files?t=${Date.now()}${refreshParam}`, {
         cache: 'no-store',
         headers: {
           'Pragma': 'no-cache',
@@ -597,44 +598,60 @@ export default function FilesPage() {
   useEffect(() => {
     loadData(false);
 
-    // 1. مزامنة فورية فائقة السرعة مع جسر تطبيق الحاسوب المحلي (Sub-second companion sync)
+    // 1. مزامنة فائقة السرعة مع جسر تطبيق الحاسوب المحلي (فقط عند العمل على بروتوكول HTTP لتفادي Mixed Content)
+    const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
     let lastKnownBridgeSync = 0;
-    const bridgeInterval = setInterval(async () => {
-      try {
-        const bridgeRes = await fetch('http://127.0.0.1:18290/status', {
-          method: 'GET',
-          mode: 'cors',
-          cache: 'no-store',
-          signal: AbortSignal.timeout(1200),
-        });
-        if (bridgeRes.ok) {
-          const info = await bridgeRes.json();
-          const bridgeTs = Number(info.last_sync_time || 0);
-          if (bridgeTs > 0 && bridgeTs > lastKnownBridgeSync) {
-            if (lastKnownBridgeSync !== 0) {
-              // تم حفظ ورفع تعديلات من تطبيق الحاسوب فورياً! تحديث لوحة التحكم مباشرة
-              loadData(true);
-            }
-            lastKnownBridgeSync = bridgeTs;
-          }
-        }
-      } catch {
-        // الجسر المحلي غير متاح أو المستخدم يتصفح من هاتف/جهاز آخر
-      }
-    }, 1500);
+    let bridgeInterval: any = null;
 
-    // 2. فحص سحابي دوري هادئ لمزامنة تعديلات المستخدمين الآخرين
+    if (!isHttps) {
+      bridgeInterval = setInterval(async () => {
+        try {
+          const bridgeRes = await fetch('http://127.0.0.1:18290/status', {
+            method: 'GET',
+            mode: 'cors',
+            cache: 'no-store',
+            signal: AbortSignal.timeout(1000),
+          });
+          if (bridgeRes.ok) {
+            const info = await bridgeRes.json();
+            const bridgeTs = Number(info.last_sync_time || 0);
+            if (bridgeTs > 0 && bridgeTs > lastKnownBridgeSync) {
+              if (lastKnownBridgeSync !== 0) {
+                // تم حفظ ورفع تعديلات من تطبيق الحاسوب فورياً!
+                loadData(true);
+              }
+              lastKnownBridgeSync = bridgeTs;
+            }
+          }
+        } catch {
+          // الجسر المحلي غير متاح
+        }
+      }, 2500);
+    }
+
+    // 2. فحص سحابي دوري هادئ لمزامنة تعديلات المستخدمين الآخرين (كل 10 ثوانٍ لمنع أي ثقل في التصفح)
     const cloudInterval = setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
         loadData(true);
       }
-    }, 4000);
+    }, 10000);
 
-    // 3. تحديث فوري لحظة الرجوع إلى المتصفح (مثلاً بعد حفظ الملف في Word أو Excel)
-    const onFocus = () => loadData(true);
+    // 3. تحديث فوري لحظة الرجوع إلى المتصفح مع كبح التكرار
+    let lastFocusRefresh = 0;
+    const onFocus = () => {
+      const now = Date.now();
+      if (now - lastFocusRefresh > 5000) {
+        lastFocusRefresh = now;
+        loadData(true);
+      }
+    };
     const onVisibilityChange = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-        loadData(true);
+        const now = Date.now();
+        if (now - lastFocusRefresh > 5000) {
+          lastFocusRefresh = now;
+          loadData(true);
+        }
       }
     };
 
@@ -642,7 +659,7 @@ export default function FilesPage() {
     document.addEventListener('visibilitychange', onVisibilityChange);
 
     return () => {
-      clearInterval(bridgeInterval);
+      if (bridgeInterval) clearInterval(bridgeInterval);
       clearInterval(cloudInterval);
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisibilityChange);
@@ -652,7 +669,10 @@ export default function FilesPage() {
   // إشعار تطبيق سطح المكتب المحلي بالمزامنة الفورية بعد أي عملية رفع أو تعديل عبر الويب
   const notifyLocalDesktopSync = () => {
     try {
-      fetch('http://127.0.0.1:18290/sync', { method: 'GET', mode: 'cors' }).catch(() => {});
+      const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
+      if (!isHttps) {
+        fetch('http://127.0.0.1:18290/sync', { method: 'GET', mode: 'cors' }).catch(() => {});
+      }
     } catch {
       // تجاهل في حال كان المستخدم يتصفح من الهاتف أو جهاز آخر
     }
@@ -1693,17 +1713,41 @@ export default function FilesPage() {
     }
 
     // --- في حال العمل على جهاز حاسوب (Desktop Windows) ---
-    setToastMessage({
-      text: `⏳ جاري فتح "${file.name}" في برنامج ${officeName}...`,
-      type: 'info'
-    });
+    const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
+    const protocolUrl = `sharecoc://open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder)}&storage_path=${encodeURIComponent(file.storagePath || file.id)}`;
 
-    let openedViaBridge = false;
+    // دالة إطلاق البروتوكول الأصلي فوريّاً بدون تجميد الصفحة أو حجب المتصفح
+    const launchProtocolInstant = (url: string) => {
+      try {
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        iframe.src = url;
+        document.body.appendChild(iframe);
+        setTimeout(() => {
+          try {
+            document.body.removeChild(iframe);
+          } catch {}
+        }, 1500);
+      } catch {
+        window.location.href = url;
+      }
+    };
 
-    // أولاً: استدعاء خادم الجسر المحلي لتطبيق الويندوز share coc على المنفذ 18290
+    // 1. في حال التصفح عبر HTTPS (مثل استضافة Vercel)، يمنع المتصفح أمنياً طلبات HTTP إلى 127.0.0.1 (Mixed Content)
+    // لذلك نطلق بروتوكول sharecoc:// فوراً بلحظة النقر (0ms) ليفتح برنامج Word/Excel/Access الأصلي مباشرة وبأقصى سرعة!
+    if (isHttps) {
+      launchProtocolInstant(protocolUrl);
+      setToastMessage({
+        text: `🚀 جاري تشغيل برنامج ${officeName} الأصلي لفتح "${file.name}" فوراً...`,
+        type: 'success'
+      });
+      return;
+    }
+
+    // 2. إذا كان الموقع يعمل عبر HTTP المحلي (Localhost)، استدعاء خادم الجسر المحلي مع مهلة قصيرة جداً (350ms)
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2000);
+      const timeoutId = setTimeout(() => controller.abort(), 350);
       const bridgeUrl = `http://127.0.0.1:18290/open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder)}&storage_path=${encodeURIComponent(file.storagePath || file.id)}`;
       const res = await fetch(bridgeUrl, { signal: controller.signal });
       clearTimeout(timeoutId);
@@ -1711,10 +1755,9 @@ export default function FilesPage() {
       if (res.ok) {
         const result = await res.json();
         if (result.success) {
-          openedViaBridge = true;
           if (result.status === 'downloading') {
             setToastMessage({
-              text: `⏳ جاري تنزيل "${file.name}" وسيقوم تطبيق Share COC بتشغيل برنامج ${officeName} فوراً...`,
+              text: `⏳ جاري تحضير "${file.name}" وسيقوم تطبيق Share COC بتشغيل برنامج ${officeName} فوراً...`,
               type: 'info'
             });
           } else {
@@ -1727,25 +1770,15 @@ export default function FilesPage() {
         }
       }
     } catch {
-      // إذا لم يكن الجسر المحلي يعمل أو تأخر
+      // في حال تأخر الجسر، إطلاق البروتوكول فوراً
     }
 
-    // ثانياً: إذا لم يستجب الجسر المباشر، استدعاء بروتوكول sharecoc:// لفتح الملف في المجلد المشترك المتزامن
-    if (!openedViaBridge) {
-      try {
-        const protocolUrl = `sharecoc://open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder)}&storage_path=${encodeURIComponent(file.storagePath || file.id)}`;
-        window.location.assign(protocolUrl);
-        setToastMessage({
-          text: `🚀 جاري فتح "${file.name}" مباشرة في برنامج ${officeName} عبر تطبيق Share COC...`,
-          type: 'success'
-        });
-      } catch {
-        setToastMessage({
-          text: `⚠️ تعذر تشغيل برنامج ${officeName} تلقائياً. تأكد من تشغيل تطبيق Share COC على جهازك.`,
-          type: 'error'
-        });
-      }
-    }
+    // 3. في حال لم يجب الجسر فوراً، استدعاء البروتوكول السريع
+    launchProtocolInstant(protocolUrl);
+    setToastMessage({
+      text: `🚀 جاري تشغيل برنامج ${officeName} الأصلي عبر تطبيق Share COC...`,
+      type: 'success'
+    });
   };
 
   // تشغيل المستند في تطبيق الهاتف الأصلي (Word / Excel / WPS) عبر Web Share مع نوع MIME دقيق
@@ -2086,61 +2119,109 @@ export default function FilesPage() {
     }
   };
 
-  // تصفية الملفات والمجلدات حسب التبويب (نشط / محذوف)، القسم، المجلد المفتوح، البحث، النوع، وصلاحية العرض والرمز السري
-  const visibleDepartments = departments.filter((d) => canViewFolder(d));
-  const activeFiles = files.filter(
-    (f) => !f.isDeleted && canViewFolder(f.department) && isDeptUnlocked(f.department)
-  );
-  const trashFiles = files.filter(
-    (f) => f.isDeleted && canViewFolder(f.department) && isDeptUnlocked(f.department)
-  );
+  // تصفية وحسابات الذاكرة السريعة (Memoized) لتسريع التنقل وجعله فورياً دون أي بطء أو تجميد
+  const visibleDepartments = useMemo(() => {
+    return departments.filter((d) => canViewFolder(d));
+  }, [departments, permissionsMap]);
+
+  const activeFiles = useMemo(() => {
+    return files.filter(
+      (f) => !f.isDeleted && canViewFolder(f.department) && isDeptUnlocked(f.department)
+    );
+  }, [files, permissionsMap, unlockedDepts]);
+
+  const trashFiles = useMemo(() => {
+    return files.filter(
+      (f) => f.isDeleted && canViewFolder(f.department) && isDeptUnlocked(f.department)
+    );
+  }, [files, permissionsMap, unlockedDepts]);
+
+  const deptCountsMap = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const f of files) {
+      if (f.isDeleted) continue;
+      const dept = f.department || (f.folder ? String(f.folder).split('/')[0] : '');
+      if (dept) map.set(dept, (map.get(dept) || 0) + 1);
+    }
+    return map;
+  }, [files]);
 
   const activeBrowsePath = currentFolder || (selectedDept !== '__ALL__' ? selectedDept : '');
-  const visibleSubfolders =
-    activeTab === 'ACTIVE' && !searchTerm.trim()
-      ? allFolders.filter(
-          (folder) =>
-            folder.parentPath === activeBrowsePath &&
-            canViewFolder(folder.department) &&
-            isDeptUnlocked(folder.department)
-        )
-      : [];
 
-  const displayedList = (activeTab === 'ACTIVE' ? activeFiles : trashFiles).filter((f) => {
-    const matchSearch =
-      !searchTerm.trim() ||
-      f.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      f.folder.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchType =
-      filterType === 'ALL' ||
-      f.type.toUpperCase() === filterType ||
-      (filterType === 'OTHER' && ['file', 'video', 'audio', 'archive'].includes(f.type));
+  const visibleSubfolders = useMemo(() => {
+    if (activeTab !== 'ACTIVE' || searchTerm.trim()) return [];
+    return allFolders.filter(
+      (folder) =>
+        folder.parentPath === activeBrowsePath &&
+        canViewFolder(folder.department) &&
+        isDeptUnlocked(folder.department)
+    );
+  }, [activeTab, searchTerm, allFolders, activeBrowsePath, permissionsMap, unlockedDepts]);
 
-    if (searchTerm.trim()) {
-      const matchDeptSearch =
-        selectedDept === '__ALL__' ||
-        f.department === selectedDept ||
-        f.folder === selectedDept ||
-        f.folder.startsWith(selectedDept + '/');
-      return matchDeptSearch && matchSearch && matchType;
-    }
+  // خريطة سريعة لعدد الملفات والمجلدات الفرعية لكل مجلد بحساب O(N) مرة واحدة فقط بدلاً من إعادة التكرار في كل بطاقة
+  const { folderFilesCountMap, folderChildsCountMap } = useMemo(() => {
+    const fileCounts = new Map<string, number>();
+    const childCounts = new Map<string, number>();
 
-    if (currentFolder) {
-      return f.folder === currentFolder && matchType;
-    }
-
-    if (selectedDept !== '__ALL__') {
-      if (visibleSubfolders.length > 0) {
-        return f.folder === selectedDept && matchType;
+    for (const f of activeFiles) {
+      const parts = (f.folder || '').split('/');
+      let curr = '';
+      for (let i = 0; i < parts.length; i++) {
+        curr = curr ? `${curr}/${parts[i]}` : parts[i];
+        fileCounts.set(curr, (fileCounts.get(curr) || 0) + 1);
       }
-      return (
-        (f.department === selectedDept || f.folder === selectedDept || f.folder.startsWith(selectedDept + '/')) &&
-        matchType
-      );
     }
 
-    return matchSearch && matchType;
-  });
+    for (const cf of allFolders) {
+      if (cf.parentPath) {
+        childCounts.set(cf.parentPath, (childCounts.get(cf.parentPath) || 0) + 1);
+      }
+    }
+
+    return { folderFilesCountMap: fileCounts, folderChildsCountMap: childCounts };
+  }, [activeFiles, allFolders]);
+
+  const displayedList = useMemo(() => {
+    const targetFiles = activeTab === 'ACTIVE' ? activeFiles : trashFiles;
+    const cleanSearch = searchTerm.trim().toLowerCase();
+
+    return targetFiles.filter((f) => {
+      const matchSearch =
+        !cleanSearch ||
+        f.name.toLowerCase().includes(cleanSearch) ||
+        f.folder.toLowerCase().includes(cleanSearch);
+
+      const matchType =
+        filterType === 'ALL' ||
+        f.type.toUpperCase() === filterType ||
+        (filterType === 'OTHER' && ['file', 'video', 'audio', 'archive'].includes(f.type));
+
+      if (cleanSearch) {
+        const matchDeptSearch =
+          selectedDept === '__ALL__' ||
+          f.department === selectedDept ||
+          f.folder === selectedDept ||
+          f.folder.startsWith(selectedDept + '/');
+        return matchDeptSearch && matchSearch && matchType;
+      }
+
+      if (currentFolder) {
+        return f.folder === currentFolder && matchType;
+      }
+
+      if (selectedDept !== '__ALL__') {
+        if (visibleSubfolders.length > 0) {
+          return f.folder === selectedDept && matchType;
+        }
+        return (
+          (f.department === selectedDept || f.folder === selectedDept || f.folder.startsWith(selectedDept + '/')) &&
+          matchType
+        );
+      }
+
+      return matchSearch && matchType;
+    });
+  }, [activeTab, activeFiles, trashFiles, searchTerm, filterType, selectedDept, currentFolder, visibleSubfolders.length]);
 
   const isAllDisplayedSelected =
     (displayedList.length > 0 || visibleSubfolders.length > 0) &&
@@ -2156,52 +2237,55 @@ export default function FilesPage() {
     }
   };
 
-  // إحصائيات المستندات والمساحة التخزينية الإجمالية ولكل نوع
-  const scopeFiles =
-    activeTab === 'TRASH'
-      ? trashFiles
-      : currentFolder
-      ? activeFiles.filter((f) => f.folder === currentFolder || f.folder.startsWith(currentFolder + '/'))
-      : selectedDept === '__ALL__'
-      ? activeFiles
-      : activeFiles.filter(
-          (f) => f.department === selectedDept || f.folder === selectedDept || f.folder.startsWith(selectedDept + '/')
-        );
+  // إحصائيات المستندات والمساحة التخزينية الإجمالية ولكل نوع مع useMemo
+  const scopeFiles = useMemo(() => {
+    if (activeTab === 'TRASH') return trashFiles;
+    if (currentFolder) {
+      return activeFiles.filter((f) => f.folder === currentFolder || f.folder.startsWith(currentFolder + '/'));
+    }
+    if (selectedDept === '__ALL__') return activeFiles;
+    return activeFiles.filter(
+      (f) => f.department === selectedDept || f.folder === selectedDept || f.folder.startsWith(selectedDept + '/')
+    );
+  }, [activeTab, trashFiles, currentFolder, selectedDept, activeFiles]);
 
-  const stats = {
-    totalCount: scopeFiles.length,
-    totalRawSize: scopeFiles.reduce((acc, f) => acc + (f.rawSize || 0), 0),
-    word: {
-      count: scopeFiles.filter((f) => f.type === 'word').length,
-      size: scopeFiles.filter((f) => f.type === 'word').reduce((acc, f) => acc + (f.rawSize || 0), 0),
-    },
-    excel: {
-      count: scopeFiles.filter((f) => f.type === 'excel').length,
-      size: scopeFiles.filter((f) => f.type === 'excel').reduce((acc, f) => acc + (f.rawSize || 0), 0),
-    },
-    access: {
-      count: scopeFiles.filter((f) => f.type === 'access').length,
-      size: scopeFiles.filter((f) => f.type === 'access').reduce((acc, f) => acc + (f.rawSize || 0), 0),
-    },
-    pdf: {
-      count: scopeFiles.filter((f) => f.type === 'pdf').length,
-      size: scopeFiles.filter((f) => f.type === 'pdf').reduce((acc, f) => acc + (f.rawSize || 0), 0),
-    },
-    image: {
-      count: scopeFiles.filter((f) => f.type === 'image').length,
-      size: scopeFiles.filter((f) => f.type === 'image').reduce((acc, f) => acc + (f.rawSize || 0), 0),
-    },
-    other: {
-      count: scopeFiles.filter((f) => ['file', 'video', 'audio', 'archive'].includes(f.type)).length,
-      size: scopeFiles
-        .filter((f) => ['file', 'video', 'audio', 'archive'].includes(f.type))
-        .reduce((acc, f) => acc + (f.rawSize || 0), 0),
-    },
-    foldersCount:
+  const stats = useMemo(() => {
+    let totalRawSize = 0;
+    let wordCount = 0, wordSize = 0;
+    let excelCount = 0, excelSize = 0;
+    let accessCount = 0, accessSize = 0;
+    let pdfCount = 0, pdfSize = 0;
+    let imageCount = 0, imageSize = 0;
+    let otherCount = 0, otherSize = 0;
+
+    for (const f of scopeFiles) {
+      const sz = f.rawSize || 0;
+      totalRawSize += sz;
+      if (f.type === 'word') { wordCount++; wordSize += sz; }
+      else if (f.type === 'excel') { excelCount++; excelSize += sz; }
+      else if (f.type === 'access') { accessCount++; accessSize += sz; }
+      else if (f.type === 'pdf') { pdfCount++; pdfSize += sz; }
+      else if (f.type === 'image') { imageCount++; imageSize += sz; }
+      else { otherCount++; otherSize += sz; }
+    }
+
+    const foldersCount =
       selectedDept === '__ALL__'
         ? allFolders.length
-        : allFolders.filter((f) => f.department === selectedDept || f.path.startsWith(selectedDept + '/')).length,
-  };
+        : allFolders.filter((f) => f.department === selectedDept || f.path.startsWith(selectedDept + '/')).length;
+
+    return {
+      totalCount: scopeFiles.length,
+      totalRawSize,
+      word: { count: wordCount, size: wordSize },
+      excel: { count: excelCount, size: excelSize },
+      access: { count: accessCount, size: accessSize },
+      pdf: { count: pdfCount, size: pdfSize },
+      image: { count: imageCount, size: imageSize },
+      other: { count: otherCount, size: otherSize },
+      foldersCount,
+    };
+  }, [scopeFiles, selectedDept, allFolders]);
 
   const getFileBadge = (type: string) => {
     switch (type) {
@@ -2546,9 +2630,7 @@ export default function FilesPage() {
           </button>
 
           {visibleDepartments.map((dept) => {
-            const count = files.filter(
-              (f) => !f.isDeleted && (f.department === dept || f.folder === dept || f.folder.startsWith(dept + '/'))
-            ).length;
+            const count = deptCountsMap.get(dept) || 0;
             const isPinLocked = isDeptPinProtected(dept) && !isDeptUnlocked(dept);
             const isSelected = activeTab === 'ACTIVE' && selectedDept === dept;
             return (
@@ -2769,55 +2851,40 @@ export default function FilesPage() {
             )}
           </div>
 
-          {/* شبكة المجلدات الفرعية بأسماء كاملة وواضحة */}
+          {/* شبكة المجلدات الفرعية بتصميم متناسق وعريض يمنع تكسير الكلمات نهائياً */}
           {visibleSubfolders.length > 0 && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 pt-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3.5 pt-1">
               {visibleSubfolders.map((sub) => {
-                const subFilesCount = activeFiles.filter(
-                  (f) => f.folder === sub.path || f.folder.startsWith(sub.path + '/')
-                ).length;
-                const childFoldersCount = allFolders.filter(
-                  (cf) => cf.parentPath === sub.path
-                ).length;
+                const subFilesCount = folderFilesCountMap.get(sub.path) || 0;
+                const childFoldersCount = folderChildsCountMap.get(sub.path) || 0;
                 const isSubSelected = selectedFolderIds.includes(sub.id);
                 return (
                   <div
                     key={sub.id}
                     onClick={() => handleSelectDepartment(sub.department, sub.path)}
-                    className={`group cursor-pointer rounded-xl p-3.5 flex flex-col justify-between transition border ${
+                    className={`group cursor-pointer rounded-xl p-4 flex flex-col justify-between gap-3 transition-all duration-150 border shadow-2xs hover:shadow-sm ${
                       isSubSelected
-                        ? 'bg-[#14372e]/5 border-[#14372e]'
-                        : 'bg-[#F7F8FA]/60 hover:bg-white border-[#E4E7EC] hover:border-[#14372e]'
+                        ? 'bg-[#14372e]/5 border-[#14372e] ring-1 ring-[#14372e]'
+                        : 'bg-white hover:bg-[#FDFEFE] border-[#E4E7EC] hover:border-[#14372e]/60'
                     }`}
                   >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                    {/* الصف العلوي: التحديد وأيقونة المجلد على اليمين + أدوات الإجراءات السريعة على اليسار */}
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2.5">
                         <input
                           type="checkbox"
                           checked={isSubSelected}
                           onClick={(e) => e.stopPropagation()}
                           onChange={() => toggleSelectFolder(sub.id)}
-                          className="w-4 h-4 mt-2.5 rounded accent-[#14372e] cursor-pointer shrink-0"
+                          className="w-4 h-4 rounded accent-[#14372e] cursor-pointer shrink-0"
                           title="تحديد المجلد"
                         />
-                        <div className="w-9 h-9 bg-[#14372e]/10 text-[#14372e] rounded-lg flex items-center justify-center shrink-0 mt-0.5">
-                          <Folder className="w-5 h-5 fill-[#14372e]/20" />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <h4
-                            className="font-semibold text-[15px] text-[#1B1F24] break-words whitespace-normal leading-snug"
-                            title={sub.name}
-                          >
-                            {sub.name}
-                          </h4>
-                          <p className="text-xs text-[#667085] mt-1">
-                            {subFilesCount} ملف
-                            {childFoldersCount > 0 ? ` • ${childFoldersCount} مجلد فرعي` : ''}
-                          </p>
+                        <div className="w-9 h-9 bg-emerald-50 text-[#14372e] rounded-lg flex items-center justify-center shrink-0 border border-emerald-100 group-hover:bg-[#14372e] group-hover:text-white transition-colors duration-150">
+                          <Folder className="w-5 h-5 fill-current/20" />
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center gap-0.5 shrink-0 opacity-80 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
                         {canMoveFolder(sub.path) && (
                           <button
                             onClick={() =>
@@ -2827,7 +2894,7 @@ export default function FilesPage() {
                                 sourceDept: sub.department,
                               })
                             }
-                            className="p-1.5 text-[#667085] hover:text-[#1B1F24] hover:bg-white rounded-md transition"
+                            className="p-1.5 text-[#667085] hover:text-[#1B1F24] hover:bg-[#F2F4F7] rounded-md transition"
                             title="نقل المجلد"
                           >
                             <Move className="w-3.5 h-3.5" />
@@ -2840,7 +2907,7 @@ export default function FilesPage() {
                               setNewRenameValue(sub.name);
                               setShowRenameModal(true);
                             }}
-                            className="p-1.5 text-[#667085] hover:text-[#14372e] hover:bg-white rounded-md transition"
+                            className="p-1.5 text-[#667085] hover:text-[#14372e] hover:bg-emerald-50 rounded-md transition"
                             title="إعادة تسمية المجلد"
                           >
                             <Edit3 className="w-3.5 h-3.5" />
@@ -2856,6 +2923,29 @@ export default function FilesPage() {
                           </button>
                         )}
                       </div>
+                    </div>
+
+                    {/* عنوان المجلد بكامل عرض البطاقة وبخط واضح وأنيق دون أي تكسير رأسي للحروف */}
+                    <div className="min-w-0 my-0.5">
+                      <h4
+                        className="font-bold text-[15px] text-[#1B1F24] group-hover:text-[#14372e] leading-snug line-clamp-2 break-normal transition-colors"
+                        title={sub.name}
+                        dir="auto"
+                      >
+                        {sub.name}
+                      </h4>
+                    </div>
+
+                    {/* أسفل البطاقة: عدد الملفات والمجلدات الفرعية بتنسيق منفصل وأنيق */}
+                    <div className="flex items-center justify-between text-xs text-[#667085] pt-2 border-t border-[#F2F4F7]">
+                      <span className="font-medium text-[#344054]">
+                        {subFilesCount} ملف
+                      </span>
+                      {childFoldersCount > 0 && (
+                        <span className="bg-[#F2F4F7] text-[#475467] px-2 py-0.5 rounded-full font-medium text-[11px]">
+                          {childFoldersCount} مجلد فرعي
+                        </span>
+                      )}
                     </div>
                   </div>
                 );

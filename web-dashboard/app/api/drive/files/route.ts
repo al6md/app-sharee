@@ -26,9 +26,11 @@ export const fetchCache = 'force-no-store';
 export const maxDuration = 60;
 
 // GET: جلب شجرة الملفات والأقسام الحية من Google Drive
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
-    const data = await getAllCloudFiles();
+    const url = new URL(req.url);
+    const forceRefresh = url.searchParams.get('refresh') === '1' || url.searchParams.get('force') === '1';
+    const data = await getAllCloudFiles(forceRefresh);
     return NextResponse.json(
       { success: true, ...data },
       {
