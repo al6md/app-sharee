@@ -41,6 +41,47 @@ class StatusBridge(QObject):
     show_requested = pyqtSignal()
     scan_ready = pyqtSignal(dict)
     cloud_trash_ready = pyqtSignal(list)
+    cloud_snapshot_ready = pyqtSignal()
+    rescan_requested = pyqtSignal()
+    refresh_finished = pyqtSignal()
+    depts_changed = pyqtSignal()
+
+
+# أقصى عمر للقطة السحابية (ثوانٍ) قبل تجديدها في الخلفية
+CLOUD_SNAPSHOT_MAX_AGE = 8
+
+
+def _get_snapshot_index(snap):
+    """
+    بناء فهرس سريع للقطة السحابية مرة واحدة فقط (يُخزن على كائن اللقطة نفسه):
+    - child_dirs:  مسار المجلد الأب -> قائمة المجلدات الفرعية المباشرة
+    - child_files: مسار المجلد الأب -> قائمة (المسار, البيانات) للملفات المباشرة
+    - rec_files:   مسار المجلد -> عدد كل الملفات بداخله (تراكمياً)
+    """
+    idx = getattr(snap, '_ui_index', None)
+    if idx is not None:
+        return idx
+    child_dirs = {}
+    child_files = {}
+    rec_files = {}
+    for fld in snap.folders:
+        if not fld:
+            continue
+        parent = fld.rpartition("/")[0]
+        child_dirs.setdefault(parent, []).append(fld)
+    for f_rel, meta in snap.files.items():
+        parent = f_rel.rpartition("/")[0]
+        child_files.setdefault(parent, []).append((f_rel, meta))
+        p = parent
+        while p:
+            rec_files[p] = rec_files.get(p, 0) + 1
+            p = p.rpartition("/")[0]
+    idx = {'child_dirs': child_dirs, 'child_files': child_files, 'rec_files': rec_files}
+    try:
+        snap._ui_index = idx
+    except Exception:
+        pass
+    return idx
 
 
 class TrashBatchWorker(QThread):
@@ -488,12 +529,12 @@ class GovFileCard(QFrame):
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(6)
 
         # 1. الصف العلوي: مربع التحديد + الأيقونة الواضحة + شارة النوع والحالة
         top_row = QHBoxLayout()
-        top_row.setSpacing(10)
+        top_row.setSpacing(8)
 
         self.chk_select = QCheckBox()
         self.chk_select.setChecked(self.rel_path in getattr(self.main_window, 'selected_rel_paths', set()))
@@ -502,12 +543,12 @@ class GovFileCard(QFrame):
         top_row.addWidget(self.chk_select)
 
         icon_lbl = QLabel()
-        pix = get_file_office_pixmap(self.file_name, size=48, is_folder=self.is_folder, abs_path=self.abs_path)
+        pix = get_file_office_pixmap(self.file_name, size=38, is_folder=self.is_folder, abs_path=self.abs_path)
         icon_lbl.setPixmap(pix)
         top_row.addWidget(icon_lbl)
 
         badge_col = QVBoxLayout()
-        badge_col.setSpacing(4)
+        badge_col.setSpacing(3)
 
         if self.is_folder:
             app_text = "مجلد"
@@ -560,11 +601,11 @@ class GovFileCard(QFrame):
 
         # 2. اسم المجلد أو المستند الكامل بوضوح تام وبدون أي اقتطاع
         name_lbl = QLabel(self.file_name)
-        name_lbl.setFont(QFont("IBM Plex Sans Arabic", 11, QFont.Weight.DemiBold))
-        name_lbl.setStyleSheet("color: #1B1F24; line-height: 1.45;")
+        name_lbl.setFont(QFont("IBM Plex Sans Arabic", 10, QFont.Weight.DemiBold))
+        name_lbl.setStyleSheet("color: #1B1F24; line-height: 1.35;")
         name_lbl.setWordWrap(True)
         name_lbl.setToolTip(self.file_name)
-        name_lbl.setMinimumHeight(44)
+        name_lbl.setMinimumHeight(32)
         layout.addWidget(name_lbl)
 
         # 3. الصف السفلي: الحجم والتاريخ + أزرار الإجراءات النظيفة
@@ -884,6 +925,12 @@ class FileExchangeMainWindow(QMainWindow):
         self.bridge.show_requested.connect(self.bring_to_front)
         self.bridge.scan_ready.connect(self._apply_scan_results)
         self.bridge.cloud_trash_ready.connect(self._on_cloud_trash_ready)
+        self.bridge.cloud_snapshot_ready.connect(self._refresh_file_list)
+        self.bridge.rescan_requested.connect(self._refresh_file_list)
+        self.bridge.refresh_finished.connect(self._on_refresh_finished)
+        self.bridge.depts_changed.connect(
+            lambda: self._refresh_departments_sidebar(force_rebuild=True) if hasattr(self, 'dept_list') else None
+        )
         if self.sync_engine:
             self.sync_engine.register_status_listener(lambda data: self.bridge.sync_updated.emit(data))
 
@@ -935,80 +982,69 @@ class FileExchangeMainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
-        main_layout.setContentsMargins(18, 14, 18, 12)
-        main_layout.setSpacing(12)
+        main_layout.setContentsMargins(10, 6, 10, 6)
+        main_layout.setSpacing(6)
 
         # ========================================================
-        # 1. شريط الترويسة الرسمي الهادئ والواضح مع الشعار الرسمي
+        # 1. شريط الترويسة الرسمي المدمج والواضح مع الشعار الرسمي
         # ========================================================
         gov_header = QFrame()
+        gov_header.setObjectName("govHeader")
+        gov_header.setFixedHeight(48)
         gov_header.setStyleSheet("""
-            QFrame {
+            QFrame#govHeader {
                 background-color: #FFFFFF;
                 border: 1px solid #E4E7EC;
                 border-right: 4px solid #14372e;
-                border-radius: 12px;
-                padding: 8px 16px;
+                border-radius: 10px;
+            }
+            QFrame#govHeader QLabel {
+                background: transparent;
+                border: none;
             }
         """)
 
         header_layout = QHBoxLayout(gov_header)
-        header_layout.setContentsMargins(6, 4, 6, 4)
-        header_layout.setSpacing(12)
+        header_layout.setContentsMargins(10, 4, 10, 4)
+        header_layout.setSpacing(8)
 
-        # شعار الغرفة الرسمي
+        # شعار الغرفة الرسمي بحجم مدمج
         logo_lbl = QLabel()
         if self.logo_path.exists():
             pix = QPixmap(str(self.logo_path))
-            scaled_pix = pix.scaled(46, 46, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            scaled_pix = pix.scaled(32, 32, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             logo_lbl.setPixmap(scaled_pix)
-            logo_lbl.setStyleSheet("background: transparent; border: none;")
         else:
             logo_lbl.setText("Share COC")
-            logo_lbl.setStyleSheet("font-size: 16px; font-weight: bold; color: #14372e; background: transparent; border: none;")
+            logo_lbl.setStyleSheet("font-size: 14px; font-weight: bold; color: #14372e;")
         header_layout.addWidget(logo_lbl)
 
-        # نصوص الهوية الرسمية
-        brand_box = QVBoxLayout()
-        brand_box.setSpacing(2)
-
-        title_row = QHBoxLayout()
-        title_row.setSpacing(8)
-
+        # نصوص الهوية الرسمية في صف واحد أنيق ومختصر
         gov_title = QLabel("غرفة تجارة كربلاء المقدسة – Share COC")
-        gov_title.setFont(QFont("IBM Plex Sans Arabic", 13, QFont.Weight.Bold))
-        gov_title.setStyleSheet("color: #1B1F24; font-weight: 700; background: transparent; border: none;")
-        title_row.addWidget(gov_title)
+        gov_title.setFont(QFont("IBM Plex Sans Arabic", 11, QFont.Weight.Bold))
+        gov_title.setStyleSheet("color: #1B1F24; font-weight: 700;")
+        header_layout.addWidget(gov_title)
 
         gold_badge = QLabel("v4.0")
-        gold_badge.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-        gold_badge.setStyleSheet("color: #14372e; background: #EDF5F2; padding: 1px 7px; border-radius: 4px; border: none;")
-        title_row.addWidget(gold_badge)
-        title_row.addStretch()
-
-        gov_sub = QLabel("منظومة التبادل السحابي وأرشفة المستندات الرسمية • Google Drive")
-        gov_sub.setFont(QFont("IBM Plex Sans Arabic", 9))
-        gov_sub.setStyleSheet("color: #667085; background: transparent; border: none;")
-
-        brand_box.addLayout(title_row)
-        brand_box.addWidget(gov_sub)
-        header_layout.addLayout(brand_box)
+        gold_badge.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+        gold_badge.setStyleSheet("color: #14372e; background: #EDF5F2; padding: 1px 6px; border-radius: 4px;")
+        header_layout.addWidget(gold_badge)
 
         header_layout.addStretch()
 
         # شريط التنقل بين شاشات المنظومة الرئيسية
         nav_bar = QFrame()
+        nav_bar.setObjectName("workspaceNavBar")
         nav_bar.setStyleSheet("""
-            QFrame {
+            QFrame#workspaceNavBar {
                 background: #F7F8FA;
                 border: 1px solid #E4E7EC;
-                border-radius: 8px;
-                padding: 2px;
+                border-radius: 7px;
             }
         """)
         nav_layout = QHBoxLayout(nav_bar)
         nav_layout.setContentsMargins(3, 2, 3, 2)
-        nav_layout.setSpacing(3)
+        nav_layout.setSpacing(2)
 
         self.workspace_nav_group = QButtonGroup(self)
         self.workspace_nav_group.setExclusive(True)
@@ -1018,10 +1054,10 @@ class FileExchangeMainWindow(QMainWindow):
                 background: transparent;
                 color: #667085;
                 border: none;
-                border-radius: 6px;
-                padding: 6px 12px;
+                border-radius: 5px;
+                padding: 4px 10px;
                 font-family: 'IBM Plex Sans Arabic', 'Cairo', 'Segoe UI';
-                font-size: 12px;
+                font-size: 11.5px;
                 font-weight: 600;
             }
             QPushButton:hover {
@@ -1069,11 +1105,11 @@ class FileExchangeMainWindow(QMainWindow):
             QPushButton {
                 background: #FFFFFF;
                 color: #14372e;
-                padding: 7px 14px;
-                border-radius: 8px;
+                padding: 4px 10px;
+                border-radius: 6px;
                 border: 1px solid #E4E7EC;
                 font-family: 'IBM Plex Sans Arabic', 'Cairo', 'Segoe UI';
-                font-size: 12px;
+                font-size: 11.5px;
                 font-weight: 600;
             }
             QPushButton:hover {
@@ -1090,8 +1126,8 @@ class FileExchangeMainWindow(QMainWindow):
         self.cloud_badge.setStyleSheet("""
             background: #EDF5F2;
             color: #14372e;
-            padding: 6px 12px;
-            border-radius: 8px;
+            padding: 4px 9px;
+            border-radius: 6px;
             border: 1px solid #CBE3DA;
         """)
         header_layout.addWidget(self.cloud_badge)
@@ -1174,7 +1210,7 @@ class FileExchangeMainWindow(QMainWindow):
         # 1.5 منطقة العمل الرئيسية المقسمة: قائمة الأقسام الجانبية + مساحة المستندات
         # ========================================================
         body_layout = QHBoxLayout()
-        body_layout.setSpacing(12)
+        body_layout.setSpacing(8)
         body_layout.setContentsMargins(0, 0, 0, 0)
 
         # --------------------------------------------------------
@@ -1182,20 +1218,20 @@ class FileExchangeMainWindow(QMainWindow):
         # --------------------------------------------------------
         self.sidebar_frame = QFrame()
         self.sidebar_frame.setObjectName("sidebarFrame")
-        self.sidebar_frame.setFixedWidth(265)
+        self.sidebar_frame.setFixedWidth(205)
         sb_layout = QVBoxLayout(self.sidebar_frame)
-        sb_layout.setContentsMargins(8, 8, 8, 8)
-        sb_layout.setSpacing(8)
+        sb_layout.setContentsMargins(6, 6, 6, 6)
+        sb_layout.setSpacing(6)
 
         # ترويسة القائمة الجانبية
         sb_header = QFrame()
         sb_header.setObjectName("sidebarHeaderFrame")
         sbh_layout = QHBoxLayout(sb_header)
-        sbh_layout.setContentsMargins(8, 4, 8, 4)
-        sbh_layout.setSpacing(6)
+        sbh_layout.setContentsMargins(6, 3, 6, 3)
+        sbh_layout.setSpacing(4)
 
         sb_title = QLabel("الأقسام الإدارية")
-        sb_title.setFont(QFont("IBM Plex Sans Arabic", 11, QFont.Weight.Bold))
+        sb_title.setFont(QFont("IBM Plex Sans Arabic", 10, QFont.Weight.Bold))
         sb_title.setStyleSheet("color: #1B1F24; background: transparent; border: none;")
         sbh_layout.addWidget(sb_title)
         sbh_layout.addStretch()
@@ -1228,22 +1264,10 @@ class FileExchangeMainWindow(QMainWindow):
         self.dept_list.customContextMenuRequested.connect(self._show_department_context_menu)
         sb_layout.addWidget(self.dept_list, stretch=1)
 
-        # بطاقة السحب والإفلات السريع أسفل القائمة الجانبية
-        drop_hint = QLabel("اسحب الملفات أو المجلدات وأفلتها هنا لرفعها مباشرة")
-        drop_hint.setWordWrap(True)
-        drop_hint.setFont(QFont("IBM Plex Sans Arabic", 9))
-        drop_hint.setStyleSheet("""
-            color: #667085;
-            background: #F7F8FA;
-            border: 1px dashed #CBD5E1;
-            border-radius: 8px;
-            padding: 8px 6px;
-        """)
-        drop_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        sb_layout.addWidget(drop_hint)
-
-        # القائمة الجانبية ظاهرة افتراضياً لسهولة الوصول للأقسام
-        self.sidebar_frame.setVisible(True)
+        # استعادة حالة إظهار/إخفاء القائمة الجانبية للمستخدم
+        sidebar_vis = self.state_mgr.get_setting("sidebar_visible", "1") != "0"
+        self.sidebar_frame.setVisible(sidebar_vis)
+        self.btn_toggle_sidebar.setChecked(sidebar_vis)
         body_layout.addWidget(self.sidebar_frame)
 
         # --------------------------------------------------------
@@ -1252,7 +1276,7 @@ class FileExchangeMainWindow(QMainWindow):
         content_container = QWidget()
         content_layout = QVBoxLayout(content_container)
         content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(8)
+        content_layout.setSpacing(5)
 
         content_layout.addLayout(toolbar)
 
@@ -1262,26 +1286,27 @@ class FileExchangeMainWindow(QMainWindow):
         self.breadcrumb_frame = QFrame()
         self.breadcrumb_frame.setObjectName("breadcrumbFrame")
         bc_layout = QHBoxLayout(self.breadcrumb_frame)
-        bc_layout.setContentsMargins(10, 4, 10, 4)
-        bc_layout.setSpacing(10)
+        bc_layout.setContentsMargins(8, 2, 8, 2)
+        bc_layout.setSpacing(8)
 
-        self.btn_nav_up = QPushButton("↑ رجوع للمجلد السابق")
+        self.btn_nav_up = QPushButton("↑ رجوع")
         self.btn_nav_up.setObjectName("btnBreadcrumbUp")
         self.btn_nav_up.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_nav_up.setToolTip("الرجوع للمجلد السابق")
         self.btn_nav_up.setEnabled(False)
         self.btn_nav_up.clicked.connect(self._navigate_up)
         bc_layout.addWidget(self.btn_nav_up)
 
         self.lbl_current_path = QLabel("كافة الملفات والمجلدات")
         self.lbl_current_path.setFont(QFont("IBM Plex Sans Arabic", 10, QFont.Weight.Bold))
-        self.lbl_current_path.setStyleSheet("color: #1B1F24;")
+        self.lbl_current_path.setStyleSheet("color: #1B1F24; border: none; background: transparent;")
         bc_layout.addWidget(self.lbl_current_path)
 
         bc_layout.addStretch()
 
         self.lbl_folder_info = QLabel("متزامن")
         self.lbl_folder_info.setFont(QFont("IBM Plex Sans Arabic", 9))
-        self.lbl_folder_info.setStyleSheet("color: #667085;")
+        self.lbl_folder_info.setStyleSheet("color: #667085; border: none; background: transparent;")
         bc_layout.addWidget(self.lbl_folder_info)
 
         content_layout.addWidget(self.breadcrumb_frame)
@@ -1454,31 +1479,31 @@ class FileExchangeMainWindow(QMainWindow):
             "اسم المستند الكامل", "النوع / المسار", "تاريخ التعديل", "الحجم", "الحالة", "الإجراءات"
         ])
         self.table.setShowGrid(False)
-        self.table.setIconSize(QSize(36, 36))
+        self.table.setIconSize(QSize(30, 30))
         self.table.setWordWrap(True)
         self.table.setTextElideMode(Qt.TextElideMode.ElideNone)
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(56)
+        self.table.verticalHeader().setDefaultSectionSize(46)
 
         # ضبط عرض الأعمدة بدقة مع إعطاء الأولوية القصوى لاسم المستند الكامل لمنع أي اقتطاع
         tbl_hdr = self.table.horizontalHeader()
         tbl_hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        tbl_hdr.setMinimumSectionSize(300)
+        tbl_hdr.setMinimumSectionSize(200)
 
         tbl_hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
-        self.table.setColumnWidth(1, 145)
+        self.table.setColumnWidth(1, 130)
 
         tbl_hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
-        self.table.setColumnWidth(2, 135)
+        self.table.setColumnWidth(2, 125)
 
         tbl_hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
-        self.table.setColumnWidth(3, 90)
+        self.table.setColumnWidth(3, 80)
 
         tbl_hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)
-        self.table.setColumnWidth(4, 115)
+        self.table.setColumnWidth(4, 100)
 
         tbl_hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(5, 195)
+        self.table.setColumnWidth(5, 175)
 
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -1692,16 +1717,23 @@ class FileExchangeMainWindow(QMainWindow):
         # 5. شريط الحالة السفلي النظيف والمختصر
         # ========================================================
         statusbar = QFrame()
+        statusbar.setObjectName("govStatusBar")
+        statusbar.setFixedHeight(28)
         statusbar.setStyleSheet("""
-            QFrame {
+            QFrame#govStatusBar {
                 background: #FFFFFF;
                 border: 1px solid #E4E7EC;
-                padding: 5px 14px;
-                border-radius: 8px;
+                border-radius: 7px;
+            }
+            QFrame#govStatusBar QLabel {
+                background: transparent;
+                border: none;
+                padding: 0px;
             }
         """)
         status_layout = QHBoxLayout(statusbar)
-        status_layout.setContentsMargins(4, 2, 4, 2)
+        status_layout.setContentsMargins(10, 2, 10, 2)
+        status_layout.setSpacing(6)
 
         self.lbl_total = QLabel("المستندات: 0")
         self.lbl_total.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
@@ -1769,26 +1801,32 @@ class FileExchangeMainWindow(QMainWindow):
 
         def _make_stat_card(title_txt, val_txt, sub_txt, accent_color="#14372e"):
             card = QFrame()
+            card.setObjectName("syncStatCard")
             card.setStyleSheet(f"""
-                QFrame {{
+                QFrame#syncStatCard {{
                     background: #ffffff;
                     border: 1.5px solid #d5dfdb;
                     border-right: 5px solid {accent_color};
                     border-radius: 12px;
-                    padding: 12px;
+                }}
+                QFrame#syncStatCard QLabel {{
+                    background: transparent;
+                    border: none;
+                    padding: 0px;
                 }}
             """)
             cl = QVBoxLayout(card)
+            cl.setContentsMargins(14, 12, 14, 12)
             cl.setSpacing(4)
             t_lbl = QLabel(title_txt)
             t_lbl.setFont(QFont("Cairo", 10, QFont.Weight.Bold))
-            t_lbl.setStyleSheet("color: #566c65; border: none;")
+            t_lbl.setStyleSheet("color: #566c65;")
             v_lbl = QLabel(val_txt)
-            v_lbl.setFont(QFont("Cairo", 13, QFont.Weight.Bold))
-            v_lbl.setStyleSheet(f"color: {accent_color}; border: none;")
+            v_lbl.setFont(QFont("Cairo", 12, QFont.Weight.Bold))
+            v_lbl.setStyleSheet(f"color: {accent_color};")
             s_lbl = QLabel(sub_txt)
             s_lbl.setFont(QFont("Segoe UI", 9))
-            s_lbl.setStyleSheet("color: #64748b; border: none;")
+            s_lbl.setStyleSheet("color: #64748b;")
             cl.addWidget(t_lbl)
             cl.addWidget(v_lbl)
             cl.addWidget(s_lbl)
@@ -1819,16 +1857,22 @@ class FileExchangeMainWindow(QMainWindow):
 
         # 2. شريط تقدم العملية النشطة وأزرار التحكم السريع
         active_frame = QFrame()
+        active_frame.setObjectName("syncActiveFrame")
         active_frame.setStyleSheet("""
-            QFrame {
+            QFrame#syncActiveFrame {
                 background: #ffffff;
                 border: 1.5px solid #d5dfdb;
                 border-radius: 12px;
-                padding: 12px 16px;
+            }
+            QFrame#syncActiveFrame QLabel {
+                background: transparent;
+                border: none;
+                padding: 0px;
             }
         """)
         af_layout = QHBoxLayout(active_frame)
-        af_layout.setSpacing(14)
+        af_layout.setContentsMargins(16, 10, 16, 10)
+        af_layout.setSpacing(12)
 
         self.lbl_sync_center_live = QLabel("✅ جميع المستندات متزامنة ومحدثة مع السحابة")
         self.lbl_sync_center_live.setFont(QFont("Cairo", 11, QFont.Weight.Bold))
@@ -1902,27 +1946,33 @@ class FileExchangeMainWindow(QMainWindow):
 
         # بطاقة التكامل مع نظام التشغيل Windows
         win_card = QFrame()
+        win_card.setObjectName("sysWinCard")
         win_card.setStyleSheet("""
-            QFrame {
+            QFrame#sysWinCard {
                 background: #ffffff;
                 border: 1.5px solid #d5dfdb;
-                border-radius: 14px;
-                padding: 16px;
+                border-radius: 12px;
+            }
+            QFrame#sysWinCard QLabel {
+                background: transparent;
+                border: none;
+                padding: 0px;
             }
         """)
         wc_layout = QVBoxLayout(win_card)
-        wc_layout.setSpacing(12)
+        wc_layout.setContentsMargins(18, 14, 18, 14)
+        wc_layout.setSpacing(10)
 
         wc_title = QLabel("🖥️ التكامل الرسمي مع نظام التشغيل Windows")
-        wc_title.setFont(QFont("Cairo", 13, QFont.Weight.Bold))
-        wc_title.setStyleSheet("color: #14372e; border: none;")
+        wc_title.setFont(QFont("Cairo", 12, QFont.Weight.Bold))
+        wc_title.setStyleSheet("color: #14372e;")
         wc_layout.addWidget(wc_title)
 
         wc_desc = QLabel(
             "تحكم في خصائص تثبيت البرنامج، التشغيل التلقائي مع إقلاع الحاسوب، العمل في شريط المهام (System Tray)، واختصارات النظام."
         )
         wc_desc.setFont(QFont("Segoe UI", 10))
-        wc_desc.setStyleSheet("color: #566c65; border: none;")
+        wc_desc.setStyleSheet("color: #566c65;")
         wc_layout.addWidget(wc_desc)
 
         from PyQt6.QtWidgets import QCheckBox
@@ -1977,20 +2027,26 @@ class FileExchangeMainWindow(QMainWindow):
 
         # بطاقة مسارات النظام ومعلومات التثبيت
         paths_card = QFrame()
+        paths_card.setObjectName("sysPathsCard")
         paths_card.setStyleSheet("""
-            QFrame {
+            QFrame#sysPathsCard {
                 background: #ffffff;
                 border: 1.5px solid #d5dfdb;
-                border-radius: 14px;
-                padding: 16px;
+                border-radius: 12px;
+            }
+            QFrame#sysPathsCard QLabel {
+                background: transparent;
+                border: none;
+                padding: 0px;
             }
         """)
         pc_layout = QVBoxLayout(paths_card)
+        pc_layout.setContentsMargins(18, 14, 18, 14)
         pc_layout.setSpacing(10)
 
         pc_title = QLabel("📂 مسارات النظام والتخزين المعتمدة على هذا الحاسوب")
-        pc_title.setFont(QFont("Cairo", 12, QFont.Weight.Bold))
-        pc_title.setStyleSheet("color: #14372e; border: none;")
+        pc_title.setFont(QFont("Cairo", 11, QFont.Weight.Bold))
+        pc_title.setStyleSheet("color: #14372e;")
         pc_layout.addWidget(pc_title)
 
         exe_loc = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(sys.argv[0])
@@ -2179,11 +2235,15 @@ class FileExchangeMainWindow(QMainWindow):
             )
 
     def _toggle_sidebar(self):
-        """إظهار أو إخفاء القائمة الجانبية للأقسام بنقرة واحدة على زر ☰"""
+        """إظهار أو إخفاء القائمة الجانبية للأقسام بنقرة واحدة على زر ☰ مع حفظ التفضيل"""
         if not hasattr(self, 'sidebar_frame'):
             return
         is_vis = not self.sidebar_frame.isVisible()
         self.sidebar_frame.setVisible(is_vis)
+        try:
+            self.state_mgr.set_setting("sidebar_visible", "1" if is_vis else "0")
+        except Exception:
+            pass
         if hasattr(self, 'btn_toggle_sidebar'):
             self.btn_toggle_sidebar.setChecked(is_vis)
             self.btn_toggle_sidebar.setText("☰ الأقسام")
@@ -2250,7 +2310,7 @@ class FileExchangeMainWindow(QMainWindow):
                 if set(cloud_names) != set(current_names) or len(cloud_names) != len(current_names):
                     self.departments_list = [{"name": name, "icon": "📁"} for name in cloud_names]
                     self.state_mgr.set_departments(self.departments_list)
-                    QTimer.singleShot(0, lambda: self._refresh_departments_sidebar(force_rebuild=True) if hasattr(self, 'dept_list') else None)
+                    self.bridge.depts_changed.emit()
         except Exception as e:
             print(f"[Async dept sync error]: {e}")
 
@@ -2287,8 +2347,14 @@ class FileExchangeMainWindow(QMainWindow):
             return True
 
         try:
-            if hasattr(self.client, 'get_folder_permissions'):
+            if hasattr(self.client, 'get_cached_folder_permissions'):
+                # قراءة فورية من الذاكرة حتى لا يتجمد خيط الواجهة بانتظار الشبكة عند كل نقرة
+                perms_map = self.client.get_cached_folder_permissions()
+            elif hasattr(self.client, 'get_folder_permissions'):
                 perms_map = self.client.get_folder_permissions()
+            else:
+                perms_map = {}
+            if perms_map:
                 rule = perms_map.get(target_dept)
                 if rule:
                     # 1. فحص الرمز السري للقسم (PIN) إن وجد
@@ -2491,6 +2557,7 @@ class FileExchangeMainWindow(QMainWindow):
         self._clear_all_selections(refresh_ui=False)
         self._reset_scroll_on_render = True
         self._force_full_render = True
+        self._nav_cache_ok = True
         self._update_breadcrumb()
         if self.active_filter == "TRASH":
             self._render_trash_table()
@@ -2554,7 +2621,7 @@ class FileExchangeMainWindow(QMainWindow):
             except Exception as e:
                 print(f"[Manual refresh error]: {e}")
             finally:
-                QTimer.singleShot(0, self._on_refresh_finished)
+                self.bridge.refresh_finished.emit()
 
         import threading
         threading.Thread(target=do_sync, daemon=True).start()
@@ -2873,6 +2940,7 @@ class FileExchangeMainWindow(QMainWindow):
             self.current_subpath = new_path
             self._reset_scroll_on_render = True
             self._force_full_render = True
+            self._nav_cache_ok = True
             self._update_breadcrumb()
             self._refresh_file_list()
 
@@ -2883,6 +2951,7 @@ class FileExchangeMainWindow(QMainWindow):
                 self.current_subpath = self.current_subpath.parent
                 self._reset_scroll_on_render = True
                 self._force_full_render = True
+                self._nav_cache_ok = True
                 self._update_breadcrumb()
                 self._refresh_file_list()
         else:
@@ -2890,6 +2959,7 @@ class FileExchangeMainWindow(QMainWindow):
                 self.current_subpath = self.current_subpath.parent
                 self._reset_scroll_on_render = True
                 self._force_full_render = True
+                self._nav_cache_ok = True
                 self._update_breadcrumb()
                 self._refresh_file_list()
 
@@ -4213,17 +4283,22 @@ class FileExchangeMainWindow(QMainWindow):
         ]
         for title, val, col in cards:
             c_frame = QFrame()
+            c_frame.setObjectName("statSummaryCard")
             c_frame.setStyleSheet(f"""
-                QFrame {{
+                QFrame#statSummaryCard {{
                     background: #ffffff;
                     border: 1.5px solid #e2e8f0;
                     border-right: 4px solid {col};
                     border-radius: 8px;
-                    padding: 8px;
+                }}
+                QFrame#statSummaryCard QLabel {{
+                    background: transparent;
+                    border: none;
+                    padding: 0px;
                 }}
             """)
             c_lay = QVBoxLayout(c_frame)
-            c_lay.setContentsMargins(6, 4, 6, 4)
+            c_lay.setContentsMargins(12, 8, 12, 8)
             c_lay.setSpacing(2)
             lbl_t = QLabel(title)
             lbl_t.setFont(QFont("Cairo", 9))
@@ -4390,6 +4465,7 @@ class FileExchangeMainWindow(QMainWindow):
         self.active_filter = tag
         self._reset_scroll_on_render = True
         self._force_full_render = True
+        self._nav_cache_ok = True
         self._update_bulk_bar()
         if tag == "TRASH":
             self.stack.setCurrentIndex(3)
@@ -4415,6 +4491,7 @@ class FileExchangeMainWindow(QMainWindow):
         self.current_view_mode = mode
         self._reset_scroll_on_render = True
         self._force_full_render = True
+        self._nav_cache_ok = True
         if persist:
             try:
                 self.state_mgr.set_setting("file_view_mode", mode)
@@ -4488,6 +4565,9 @@ class FileExchangeMainWindow(QMainWindow):
         try:
             force_now = getattr(self, '_force_full_render', False)
             if not force_now:
+                # لا داعي للفحص الدوري والنافذة مخفية في شريط المهام (System Tray)
+                if not self.isVisible() or self.isMinimized():
+                    return
                 if hasattr(self, '_last_wheel_time') and (time.time() - self._last_wheel_time < 1.2):
                     return
                 if hasattr(self, 'table') and self.table.verticalScrollBar().isSliderDown():
@@ -4505,32 +4585,67 @@ class FileExchangeMainWindow(QMainWindow):
             scan_dept = self.active_dept_name
             scan_subpath = self.current_subpath
             self._force_full_render = False
+            # التنقل بين المجلدات/التبويبات يكتفي باللقطة السحابية المحفوظة (فوري)،
+            # أما العمليات (رفع/حذف/تسمية...) فتطلب جلباً سحابياً جديداً كما في السابق
+            force_cloud = force_now and not getattr(self, '_nav_cache_ok', False)
+            self._nav_cache_ok = False
+            self._scan_t0 = time.perf_counter()
 
             import threading
             threading.Thread(
                 target=self._background_scan_worker,
-                args=(scan_dept, scan_subpath, force_now),
+                args=(scan_dept, scan_subpath, force_now, force_cloud),
                 daemon=True
             ).start()
         except Exception as e:
             self._scan_in_progress = False
             print(f"[Refresh Schedule Error]: {e}")
 
-    def _background_scan_worker(self, scan_dept, scan_subpath, force_now):
+    def _schedule_cloud_refresh(self):
+        """تجديد اللقطة السحابية في خيط خلفي مستقل ثم إعادة العرض فقط إن تغيّرت البيانات"""
+        if getattr(self, '_cloud_refreshing', False):
+            return
+        if not (self.client and self.client.is_configured()):
+            return
+        self._cloud_refreshing = True
+        import threading
+
+        def _worker():
+            try:
+                before = getattr(self.client.peek_snapshot(), 'taken_at', None)
+                snap = self.client.snapshot(max_age=CLOUD_SNAPSHOT_MAX_AGE)
+                if snap is not None and snap.taken_at != before:
+                    self.bridge.cloud_snapshot_ready.emit()
+            except Exception as e:
+                print(f"[Cloud refresh error]: {e}")
+            finally:
+                self._cloud_refreshing = False
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _background_scan_worker(self, scan_dept, scan_subpath, force_now, force_cloud=True):
         """فحص شجرة السحابة الرسمية مباشرة من Google Drive لتوحيد العرض بين الويب وسطح المكتب"""
         try:
             from gdrive_client import is_ignored_name
 
             cloud_snap = None
+            need_cloud_refresh = False
             if hasattr(self, 'client') and self.client and self.client.is_configured():
-                try:
-                    cloud_snap = self.client.snapshot(force=force_now, max_age=8)
-                except Exception as e:
-                    print(f"[Snapshot error]: {e}")
-                    cloud_snap = getattr(self.client, '_snapshot', None)
+                cached = self.client.peek_snapshot() if hasattr(self.client, 'peek_snapshot') else None
+                if cached is not None and not force_cloud:
+                    # عرض فوري من الذاكرة، والتجديد يتم في الخلفية دون حجز الواجهة
+                    cloud_snap = cached
+                    need_cloud_refresh = (time.time() - cached.taken_at) >= CLOUD_SNAPSHOT_MAX_AGE
+                else:
+                    try:
+                        cloud_snap = self.client.snapshot(force=force_cloud, max_age=CLOUD_SNAPSHOT_MAX_AGE)
+                    except Exception as e:
+                        print(f"[Snapshot error]: {e}")
+                        cloud_snap = None
+                    if cloud_snap is None:
+                        cloud_snap = cached
 
             sync_root_str = str(self.sync_folder.resolve())
-            current_abs = (self.sync_folder / scan_subpath).resolve()
+            current_abs = Path(os.path.normpath(os.path.join(sync_root_str, str(scan_subpath))))
             if not current_abs.exists():
                 try:
                     current_abs.mkdir(parents=True, exist_ok=True)
@@ -4540,7 +4655,9 @@ class FileExchangeMainWindow(QMainWindow):
             states_map = self.state_mgr.get_all_states_map() if hasattr(self.state_mgr, 'get_all_states_map') else {}
             perms_map = {}
             try:
-                if self.client and hasattr(self.client, 'get_folder_permissions'):
+                if self.client and hasattr(self.client, 'get_cached_folder_permissions'):
+                    perms_map = self.client.get_cached_folder_permissions() or {}
+                elif self.client and hasattr(self.client, 'get_folder_permissions'):
                     perms_map = self.client.get_folder_permissions() or {}
             except Exception:
                 perms_map = {}
@@ -4573,47 +4690,36 @@ class FileExchangeMainWindow(QMainWindow):
                 # الوضع السحابي الموحد: أخذ الملفات والمجلدات من السحابة حصراً
                 # ---------------------------------------------------------- #
                 # 1. قائمة الأقسام الرئيسية
-                cloud_root_dirs = sorted([fld for fld in cloud_snap.folders if fld and "/" not in fld])
+                # فهرس مبني مرة واحدة لكل لقطة: يجعل كل تنقل O(عناصر المجلد) بدل O(كل الأرشيف)
+                snap_idx = _get_snapshot_index(cloud_snap)
+                cloud_root_dirs = sorted(snap_idx['child_dirs'].get("", []))
                 for crd in cloud_root_dirs:
                     if not is_ignored_name(crd) and _can_show_dept(crd):
                         local_dept_names.append(crd)
-                        cnt = sum(1 for f_rel in cloud_snap.files if f_rel.startswith(crd + "/") or f_rel == crd)
-                        dept_counts[crd] = cnt
+                        dept_counts[crd] = snap_idx['rec_files'].get(crd, 0)
 
                 total_root_items = len(cloud_snap.files)
 
                 # 2. المجلدات الفرعية في المسار الحالي
                 child_dirs = set()
-                for fld in cloud_snap.folders:
-                    if not fld or is_ignored_name(fld.split("/")[-1]):
+                for fld in snap_idx['child_dirs'].get(norm_sub, []):
+                    if is_ignored_name(fld.split("/")[-1]):
                         continue
-                    if norm_sub == "":
-                        if "/" not in fld and _can_show_dept(fld):
-                            child_dirs.add(fld)
-                    else:
-                        if fld.startswith(norm_sub + "/") and fld != norm_sub:
-                            rem = fld[len(norm_sub) + 1:]
-                            if "/" not in rem:
-                                child_dirs.add(fld)
+                    if norm_sub == "" and not _can_show_dept(fld):
+                        continue
+                    child_dirs.add(fld)
 
                 for d_rel in sorted(child_dirs):
                     d_name = d_rel.split("/")[-1]
-                    sub_files_cnt = sum(1 for f_rel in cloud_snap.files if f_rel.startswith(d_rel + "/"))
-                    sub_child_flds = sum(1 for cf in cloud_snap.folders if cf.startswith(d_rel + "/") and cf != d_rel and "/" not in cf[len(d_rel) + 1:])
-                    total_sub_items = sub_files_cnt + sub_child_flds
-
-                    local_dir_path = (self.sync_folder / d_rel).resolve()
-                    try:
-                        local_dir_path.mkdir(parents=True, exist_ok=True)
-                    except Exception:
-                        pass
+                    total_sub_items = snap_idx['rec_files'].get(d_rel, 0) + len(snap_idx['child_dirs'].get(d_rel, []))
+                    local_dir_path = os.path.normpath(os.path.join(sync_root_str, d_rel))
 
                     folders_list.append({
                         'file_name': d_name,
                         'is_folder': True,
                         'item_count': total_sub_items,
                         'relative_path': d_rel,
-                        'abs_path': str(local_dir_path),
+                        'abs_path': local_dir_path,
                         'file_size': 0,
                         'sync_status': 'synced',
                         'last_modified_local': ''
@@ -4629,15 +4735,25 @@ class FileExchangeMainWindow(QMainWindow):
                         if not dept_prefix or _can_show_dept(dept_prefix):
                             cloud_target_files.append((f_rel, meta))
                 else:
-                    for f_rel, meta in cloud_snap.files.items():
-                        if norm_sub == "":
-                            if "/" not in f_rel:
-                                cloud_target_files.append((f_rel, meta))
-                        else:
-                            if f_rel.startswith(norm_sub + "/"):
-                                rem = f_rel[len(norm_sub) + 1:]
-                                if "/" not in rem:
-                                    cloud_target_files.append((f_rel, meta))
+                    cloud_target_files = list(snap_idx['child_files'].get(norm_sub, []))
+
+                # قراءة محتوى كل مجلد محلي مرة واحدة (scandir) بدل فحص وجود كل ملف على حدة
+                local_names_cache = {}
+
+                def _exists_locally(rel_p):
+                    parent, _, nm = rel_p.rpartition("/")
+                    names = local_names_cache.get(parent)
+                    if names is None:
+                        names = set()
+                        try:
+                            with os.scandir(os.path.join(sync_root_str, parent)) as it:
+                                for e in it:
+                                    if e.is_file(follow_symlinks=False):
+                                        names.add(e.name.lower())
+                        except OSError:
+                            pass
+                        local_names_cache[parent] = names
+                    return nm.lower() in names
 
                 for f_rel, meta in cloud_target_files:
                     fname = meta.get('name', f_rel.split("/")[-1])
@@ -4647,11 +4763,11 @@ class FileExchangeMainWindow(QMainWindow):
                         continue
                     seen_rel_paths.add(f_rel)
 
-                    abs_f = (self.sync_folder / f_rel).resolve()
+                    abs_f = os.path.normpath(os.path.join(sync_root_str, f_rel))
                     f_size = int(meta.get('size', 0) or 0)
                     mtime_iso = meta.get('modifiedTime', '')
 
-                    is_local = abs_f.exists() and abs_f.is_file()
+                    is_local = _exists_locally(f_rel)
                     st = states_map.get(f_rel)
                     if is_local:
                         sync_stat = 'synced'
@@ -4664,7 +4780,7 @@ class FileExchangeMainWindow(QMainWindow):
                         'file_name': fname,
                         'is_folder': False,
                         'relative_path': f_rel,
-                        'abs_path': str(abs_f),
+                        'abs_path': abs_f,
                         'file_size': f_size,
                         'storage_path': meta.get('id'),
                         'sync_status': sync_stat,
@@ -4813,19 +4929,23 @@ class FileExchangeMainWindow(QMainWindow):
                 'total_root_items': total_root_items,
             }
             self.bridge.scan_ready.emit(payload)
+            if need_cloud_refresh:
+                self._schedule_cloud_refresh()
         except Exception as e:
             print(f"[Background Scan Error]: {e}")
         finally:
             self._scan_in_progress = False
             if getattr(self, '_scan_pending', False):
                 self._scan_pending = False
-                QTimer.singleShot(40, self._refresh_file_list)
+                # إشارة Qt (وليس QTimer) لأن هذا الخيط لا يملك حلقة أحداث، فلا يضيع طلب التنقل المؤجل
+                self.bridge.rescan_requested.emit()
 
     def _apply_scan_results(self, payload):
         """تطبيق نتائج الفحص الخلفي على عناصر الواجهة الرسومية بسلاسة تامة على خيط Qt الرئيسي"""
         try:
             if payload.get('scan_dept') != self.active_dept_name or payload.get('scan_subpath') != self.current_subpath:
                 self._force_full_render = True
+                self._nav_cache_ok = True
                 self._refresh_file_list()
                 return
 
@@ -4901,7 +5021,12 @@ class FileExchangeMainWindow(QMainWindow):
 
             if needs_render:
                 self._last_rendered_signature = current_sig
+                _r0 = time.perf_counter()
                 self._filter_content()
+                _t0 = getattr(self, '_scan_t0', None)
+                if force_now and _t0 is not None:
+                    print(f"[PERF] scan+render: {(time.perf_counter() - _t0) * 1000:.0f} ms "
+                          f"(render {(time.perf_counter() - _r0) * 1000:.0f} ms, {len(all_items)} items)")
 
             self._refresh_departments_sidebar()
         except Exception as e:
@@ -4929,10 +5054,10 @@ class FileExchangeMainWindow(QMainWindow):
                 self.grid_layout.addWidget(empty_lbl, 0, 0, 1, 2)
                 return
 
-            cols = 2
-            self.grid_layout.setColumnStretch(0, 1)
-            self.grid_layout.setColumnStretch(1, 1)
-            self.grid_layout.setColumnStretch(2, 0)
+            viewport_w = self.grid_scroll.viewport().width() if hasattr(self, 'grid_scroll') else 800
+            cols = 3 if viewport_w > 820 else 2
+            for c in range(cols):
+                self.grid_layout.setColumnStretch(c, 1)
             for idx, f in enumerate(files):
                 card = GovFileCard(f, self)
                 row = idx // cols
@@ -5110,8 +5235,11 @@ class FileExchangeMainWindow(QMainWindow):
                     Qt.CheckState.Checked if rel_path in self.selected_rel_paths else Qt.CheckState.Unchecked
                 )
                 item0.setIcon(office_icon)
-                item0.setFont(QFont("IBM Plex Sans Arabic", 11, QFont.Weight.DemiBold))
-                item0.setForeground(QColor("#1B1F24"))
+                if not hasattr(self, '_font_tbl_name'):
+                    self._font_tbl_name = QFont("IBM Plex Sans Arabic", 11, QFont.Weight.DemiBold)
+                    self._color_tbl_name = QColor("#1B1F24")
+                item0.setFont(self._font_tbl_name)
+                item0.setForeground(self._color_tbl_name)
                 item0.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
                 item0.setData(Qt.ItemDataRole.UserRole, rel_path)
                 item0.setData(Qt.ItemDataRole.UserRole + 1, is_folder)
@@ -5253,7 +5381,7 @@ class FileExchangeMainWindow(QMainWindow):
 
                 # ضبط ارتفاع الصف ديناميكياً ليتسع للاسم الكامل في حال التفافه لعدة أسطر دون أي اقتطاع
                 self.table.resizeRowToContents(row)
-                self.table.setRowHeight(row, max(56, self.table.rowHeight(row) + 10))
+                self.table.setRowHeight(row, max(46, self.table.rowHeight(row) + 6))
         finally:
             self.table.setUpdatesEnabled(True)
             self.table.blockSignals(False)

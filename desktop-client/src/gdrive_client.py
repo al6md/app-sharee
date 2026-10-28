@@ -141,6 +141,10 @@ def load_gdrive_config():
     return {}
 
 
+# مدة صلاحية ذاكرة صلاحيات الأقسام (بالثواني) قبل تجديدها في الخلفية
+PERMS_CACHE_TTL = 60.0
+
+
 class DriveSnapshot:
     """صورة كاملة لشجرة السحابة في لحظة معينة"""
 
@@ -698,7 +702,7 @@ class GoogleDriveClient:
             return getattr(self, "_perms_cache_data", {}) or {}
         now = time.time()
         cache_ts = getattr(self, "_perms_cache_ts", 0)
-        if not force_refresh and (now - cache_ts < 8.0) and hasattr(self, "_perms_cache_data"):
+        if not force_refresh and (now - cache_ts < PERMS_CACHE_TTL) and hasattr(self, "_perms_cache_data"):
             return self._perms_cache_data
         try:
             res = self._execute(lambda s: s.files().list(
@@ -746,6 +750,30 @@ class GoogleDriveClient:
         except Exception as e:
             _safe_log(f"[GDRIVE] Error reading folder permissions: {e}")
             return getattr(self, "_perms_cache_data", {}) or {}
+
+    def get_cached_folder_permissions(self):
+        """
+        قراءة فورية للصلاحيات من الذاكرة دون انتظار الشبكة (آمنة لخيط الواجهة).
+        - أول مرة فقط (لا توجد ذاكرة بعد): جلب متزامن حتى لا تظهر أقسام محمية بالخطأ.
+        - إن كانت الذاكرة قديمة: تُعاد فوراً ويُجدَّد في خيط خلفي.
+        """
+        if not hasattr(self, "_perms_cache_data"):
+            return self.get_folder_permissions()
+        if (time.time() - getattr(self, "_perms_cache_ts", 0)) >= PERMS_CACHE_TTL:
+            if not getattr(self, "_perms_refreshing", False):
+                self._perms_refreshing = True
+
+                def _bg():
+                    try:
+                        self.get_folder_permissions(force_refresh=True)
+                    finally:
+                        self._perms_refreshing = False
+                threading.Thread(target=_bg, daemon=True).start()
+        return self._perms_cache_data or {}
+
+    def peek_snapshot(self):
+        """إرجاع آخر لقطة سحابية محفوظة فوراً دون أي طلب شبكة أو انتظار قفل"""
+        return self._snapshot
 
     def check_file_lock(self, file_name):
         return False, None

@@ -64,9 +64,9 @@ def get_gov_stylesheet():
         background-color: {BG_CANVAS};
         color: {TEXT_TITLE};
         border: 1px solid {BORDER_SUBTLE};
-        border-radius: 8px;
-        padding: 8px 14px;
-        font-size: 13px;
+        border-radius: 7px;
+        padding: 5px 12px;
+        font-size: 12.5px;
         selection-background-color: {GOV_GREEN};
     }}
     QLineEdit#govSearch:focus {{
@@ -79,11 +79,11 @@ def get_gov_stylesheet():
         background-color: {GOV_GREEN};
         color: #FFFFFF;
         border: 1px solid {GOV_GREEN};
-        border-radius: 8px;
-        padding: 7px 14px;
-        font-size: 12.5px;
+        border-radius: 7px;
+        padding: 5px 12px;
+        font-size: 12px;
         font-weight: 600;
-        min-width: 75px;
+        min-width: 65px;
     }}
     QPushButton#btnGovPrimary:hover {{
         background-color: {GOV_GREEN_HOVER};
@@ -98,11 +98,11 @@ def get_gov_stylesheet():
         background-color: {BG_SURFACE};
         color: {TEXT_TITLE};
         border: 1px solid {BORDER_SUBTLE};
-        border-radius: 8px;
-        padding: 7px 12px;
-        font-size: 12.5px;
+        border-radius: 7px;
+        padding: 5px 10px;
+        font-size: 12px;
         font-weight: 600;
-        min-width: 60px;
+        min-width: 50px;
     }}
     QPushButton#btnGovSecondary:hover {{
         background-color: {BG_CANVAS};
@@ -117,7 +117,7 @@ def get_gov_stylesheet():
         background: transparent;
         color: {TEXT_MUTED};
         border: none;
-        padding: 4px;
+        padding: 2px 4px;
         font-size: 13px;
     }}
     QPushButton#btnGovSettings:hover {{
@@ -130,8 +130,8 @@ def get_gov_stylesheet():
         color: {TEXT_MUTED};
         border: none;
         border-bottom: 2px solid transparent;
-        padding: 8px 12px;
-        font-size: 12.5px;
+        padding: 4px 6px;
+        font-size: 11px;
         font-weight: 600;
     }}
     QPushButton#govTab:hover {{
@@ -148,22 +148,22 @@ def get_gov_stylesheet():
     QTableWidget {{
         background-color: {BG_SURFACE};
         border: 1px solid {BORDER_SUBTLE};
-        border-radius: 10px;
+        border-radius: 8px;
         gridline-color: {BORDER_SUBTLE};
-        font-size: 13.5px;
+        font-size: 13px;
         outline: none;
     }}
     QHeaderView::section {{
         background-color: {BG_CANVAS};
         color: {TEXT_MUTED};
         font-weight: 700;
-        padding: 10px 12px;
+        padding: 6px 10px;
         border: none;
         border-bottom: 1px solid {BORDER_SUBTLE};
-        font-size: 12px;
+        font-size: 11.5px;
     }}
     QTableWidget::item {{
-        padding: 8px 10px;
+        padding: 5px 8px;
         border-bottom: 1px solid {BORDER_SUBTLE};
     }}
     QTableWidget::item:selected {{
@@ -259,16 +259,16 @@ def get_gov_stylesheet():
     QFrame#breadcrumbFrame {{
         background-color: #FFFFFF;
         border: 1px solid {BORDER_SUBTLE};
-        border-radius: 8px;
-        padding: 4px 12px;
+        border-radius: 7px;
+        padding: 2px 8px;
     }}
     QPushButton#btnBreadcrumbUp {{
         background-color: {BG_CANVAS};
         color: {TEXT_TITLE};
         border: 1px solid {BORDER_SUBTLE};
-        border-radius: 6px;
-        padding: 5px 12px;
-        font-size: 12px;
+        border-radius: 5px;
+        padding: 3px 10px;
+        font-size: 11.5px;
         font-weight: 600;
     }}
     QPushButton#btnBreadcrumbUp:hover {{
@@ -351,9 +351,9 @@ def get_gov_stylesheet():
         background-color: {BG_SURFACE};
         color: {TEXT_TITLE};
         border: 1px solid {BORDER_SUBTLE};
-        border-radius: 8px;
-        padding: 7px 14px;
-        font-size: 12.5px;
+        border-radius: 7px;
+        padding: 5px 10px;
+        font-size: 12px;
         font-weight: 600;
     }}
     QPushButton#btnToggleSidebar:hover {{
@@ -371,22 +371,22 @@ def get_gov_stylesheet():
     QFrame#sidebarFrame {{
         background-color: #FFFFFF;
         border: 1px solid {BORDER_SUBTLE};
-        border-radius: 10px;
-        padding: 8px;
+        border-radius: 8px;
+        padding: 4px;
     }}
     QFrame#sidebarHeaderFrame {{
         background-color: {BG_CANVAS};
         border: 1px solid {BORDER_SUBTLE};
-        border-radius: 8px;
-        padding: 8px 10px;
+        border-radius: 6px;
+        padding: 4px 6px;
     }}
     QPushButton#btnAddDept {{
         background-color: {GOV_GREEN};
         color: #FFFFFF;
         border: none;
-        border-radius: 6px;
-        padding: 5px 10px;
-        font-size: 11.5px;
+        border-radius: 5px;
+        padding: 3px 8px;
+        font-size: 11px;
         font-weight: 600;
     }}
     QPushButton#btnAddDept:hover {{
@@ -397,8 +397,8 @@ def get_gov_stylesheet():
         color: {TEXT_MUTED};
         border: 1px solid {BORDER_SUBTLE};
         border-radius: 4px;
-        padding: 2px 7px;
-        font-size: 11px;
+        padding: 1px 6px;
+        font-size: 10.5px;
         font-weight: 600;
     }}
     QPushButton#btnCloseSidebar:hover {{
@@ -415,10 +415,10 @@ def get_gov_stylesheet():
         background-color: #FFFFFF;
         color: {TEXT_TITLE};
         border: 1px solid transparent;
-        border-radius: 8px;
-        padding: 8px 12px;
-        margin-bottom: 3px;
-        font-size: 13px;
+        border-radius: 6px;
+        padding: 6px 8px;
+        margin-bottom: 2px;
+        font-size: 12px;
         font-weight: 600;
     }}
     QListWidget#deptList::item:hover {{
