@@ -174,10 +174,44 @@ let _saveQueuePromise: Promise<any> = Promise.resolve();
 
 // ذاكرة تخزين مؤقتة لشجرة الملفات والأقسام لتسريع التنقل وجعله فورياً (Sub-second navigation)
 let _cloudFilesCache: { data: any; ts: number } | null = null;
-const CLOUD_FILES_CACHE_TTL_MS = 12000; // 12 ثانية كاش خفيف يمنع ازدحام طلبات Google Drive
+const CLOUD_FILES_CACHE_TTL_MS = 8000; // 8 ثوانٍ كاش خفيف يمنع ازدحام طلبات Google Drive
 
 export function invalidateCloudFilesCache() {
   _cloudFilesCache = null;
+}
+
+let _changesPageToken: string | null = null;
+
+/**
+ * فحص سريع وخفيف للتغييرات عبر Changes API لإبطال الكاش السحابي فوراً
+ */
+export async function checkCloudChanges(): Promise<boolean> {
+  try {
+    if (!_changesPageToken) {
+      const res: any = await drive.changes.getStartPageToken();
+      _changesPageToken = res.data.startPageToken;
+      return false;
+    }
+    const res: any = await drive.changes.list({
+      pageToken: _changesPageToken,
+      spaces: 'drive',
+      fields: 'newStartPageToken, nextPageToken, changes(fileId, removed, file(id, name, trashed))',
+      pageSize: 50,
+    });
+    const changes = res.data.changes || [];
+    const newToken = res.data.newStartPageToken || res.data.nextPageToken;
+    if (newToken) {
+      _changesPageToken = newToken;
+    }
+    if (changes.length > 0) {
+      invalidateCloudFilesCache();
+      return true;
+    }
+    return false;
+  } catch {
+    _changesPageToken = null;
+    return false;
+  }
 }
 
 async function runWithConcurrency<T, R>(

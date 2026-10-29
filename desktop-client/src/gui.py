@@ -376,8 +376,8 @@ class CloudUploadWorker(QThread):
             try:
                 if self.sync_engine and hasattr(self.sync_engine, 'clear_tombstone'):
                     self.sync_engine.clear_tombstone(rel_path)
-                if self.sync_engine and hasattr(self.sync_engine, '_mark_self_op'):
-                    self.sync_engine._mark_self_op(rel_path, seconds=600)
+                if self.sync_engine and hasattr(self.sync_engine, 'clear_self_op'):
+                    self.sync_engine.clear_self_op(rel_path)
                 dest_path.parent.mkdir(parents=True, exist_ok=True)
                 pct = int((idx / max(1, total)) * 8)
                 self.progress_signal.emit(pct, f"📥 جاري تجهيز ونسخ ({idx + 1} من {total}):\n{dest_path.name}")
@@ -2442,7 +2442,9 @@ class FileExchangeMainWindow(QMainWindow):
         dept_counts = getattr(self, '_dept_counts_cache', {})
         perms = {}
         try:
-            if self.client and hasattr(self.client, 'get_folder_permissions'):
+            if self.client and hasattr(self.client, 'get_cached_folder_permissions'):
+                perms = self.client.get_cached_folder_permissions() or {}
+            elif self.client and hasattr(self.client, 'get_folder_permissions'):
                 perms = self.client.get_folder_permissions() or {}
         except Exception:
             perms = {}
@@ -5551,9 +5553,11 @@ class FileExchangeMainWindow(QMainWindow):
 
                     self.table.setCellWidget(row, 5, act_widget)
 
-                # ضبط ارتفاع الصف ديناميكياً ليتسع للاسم الكامل في حال التفافه لعدة أسطر دون أي اقتطاع
-                self.table.resizeRowToContents(row)
-                self.table.setRowHeight(row, max(46, self.table.rowHeight(row) + 6))
+                # ضبط ارتفاع الصف بكفاءة عالية دون إعادة حساب التخطيط لكل صف
+                if len(name) > 45 or "\n" in name:
+                    self.table.setRowHeight(row, 58)
+                else:
+                    self.table.setRowHeight(row, 48)
         finally:
             self.table.setUpdatesEnabled(True)
             self.table.blockSignals(False)
@@ -5603,8 +5607,12 @@ class FileExchangeMainWindow(QMainWindow):
             if cand.exists():
                 file_path = cand
         if not file_path:
-            file_path = (self._get_current_abs_folder() / file_name).resolve()
-        if not file_path.exists():
+            cur_cand = (self._get_current_abs_folder() / file_name).resolve()
+            if cur_cand.exists():
+                file_path = cur_cand
+        if not file_path and rel_path:
+            file_path = (self.sync_folder / rel_path).resolve()
+        if not file_path:
             file_path = (self.sync_folder / file_name).resolve()
         if not file_path.exists():
             import re
@@ -5615,38 +5623,117 @@ class FileExchangeMainWindow(QMainWindow):
                     if sub_clean == clean:
                         file_path = sub
                         break
-        if not file_path.exists() or file_path.stat().st_size == 0:
-            if self.client and self.client.is_configured():
-                try:
-                    file_path.parent.mkdir(parents=True, exist_ok=True)
-                except Exception:
-                    pass
+
+        if file_path.exists() and file_path.is_dir():
+            self._navigate_into_folder(file_name, rel_path)
+            return
+
+        # التحقق من حداثة الملف مقارنة بالسحابة لضمان فتح أحدث نسخة معدلة دائماً
+        need_fresh_download = False
+        fid = None
+        cloud_md5 = None
+        if self.client and self.client.is_configured():
+            snap = self.client.peek_snapshot() if hasattr(self.client, "peek_snapshot") else None
+            remote_info = None
+            if snap and hasattr(snap, "files"):
+                cand_rel = rel_path or file_name
+                remote_info = snap.files.get(cand_rel)
+                if not remote_info and rel_path:
+                    for r, f in snap.files.items():
+                        if f.get("name") == file_name:
+                            remote_info = f
+                            break
+            if remote_info:
+                fid = remote_info.get("id")
+                cloud_md5 = remote_info.get("md5Checksum")
+                if not file_path.exists() or file_path.stat().st_size == 0:
+                    need_fresh_download = True
+                elif cloud_md5:
+                    is_local_newer = False
+                    if self.sync_engine and file_path.exists() and file_path.is_file():
+                        try:
+                            calc_rel = norm_rel(file_path.relative_to(self.sync_folder))
+                            st = self.sync_engine.state_mgr.get_file_state(calc_rel)
+                            if st:
+                                if st.get("sync_status") in ("syncing", "pending_upload"):
+                                    is_local_newer = True
+                                elif st.get("remote_md5") == cloud_md5 and st.get("sha256_hash"):
+                                    loc_h = self.sync_engine.calculate_hash(str(file_path))
+                                    if loc_h != st.get("sha256_hash"):
+                                        is_local_newer = True
+                        except Exception:
+                            pass
+                    if not is_local_newer:
+                        try:
+                            loc_hash = self.sync_engine.calculate_hash(str(file_path)) if self.sync_engine else None
+                            if loc_hash and loc_hash != cloud_md5:
+                                need_fresh_download = True
+                        except Exception:
+                            pass
+        elif not file_path.exists() or file_path.stat().st_size == 0:
+            QMessageBox.warning(
+                self, "تنبيه", 
+                f"الملف التالي غير متوفر محلياً دون اتصال بالسحابة:\n{file_name}"
+            )
+            return
+
+        if (need_fresh_download or not file_path.exists() or file_path.stat().st_size == 0) and self.client and self.client.is_configured():
+            try:
+                file_path.parent.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
+            if not fid:
                 fid = self.client.resolve_file_id(rel_path or file_name)
-                progress_dlg = QProgressDialog(f"جارٍ تنزيل المستند من السحابة للفتح الفوري:\n{file_name}", "إلغاء", 0, 100, self)
-                progress_dlg.setWindowTitle("Share COC – تنزيل سحابي فوري")
+            if fid:
+                progress_dlg = QProgressDialog(f"جارٍ تنزيل أحدث نسخة للمستند من السحابة:\n{file_name}", "إلغاء", 0, 100, self)
+                progress_dlg.setWindowTitle("Share COC – تحديث سحابي فوري")
                 progress_dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
-                progress_dlg.setMinimumDuration(150)
-                progress_dlg.setValue(5)
+                progress_dlg.setMinimumDuration(100)
+                progress_dlg.setValue(10)
 
                 def _on_prog(done_b, total_b):
                     pct = int(min(100, (done_b / max(total_b, 1)) * 100))
                     progress_dlg.setValue(pct)
                     QApplication.processEvents()
 
-                ok, msg = self.client.download_file(file_name, str(file_path), storage_path=fid, progress_callback=_on_prog)
-                progress_dlg.close()
-                if not ok or not file_path.exists():
+                temp_dir = self.sync_folder / ".sync_temp"
+                temp_dir.mkdir(parents=True, exist_ok=True)
+                temp_dl = temp_dir / f"open_{int(time.time()*1000)}_{file_path.name}.tmp"
+
+                ok = False
+                msg = ""
+                try:
+                    ok, msg = self.client.download_file(file_name, str(temp_dl), storage_path=fid, progress_callback=_on_prog)
+                finally:
+                    progress_dlg.close()
+
+                if ok and temp_dl.exists():
+                    p_rel = None
+                    try:
+                        p_rel = norm_rel(file_path.relative_to(self.sync_folder))
+                    except Exception:
+                        p_rel = rel_path or file_name
+                    if self.sync_engine:
+                        self.sync_engine._mark_self_op(p_rel, seconds=5)
+                    applied = OfficeHandler.safe_apply_file(str(file_path), str(temp_dl))
+                    if applied and self.sync_engine and file_path.exists():
+                        try:
+                            st_after = file_path.stat()
+                            self.sync_engine._save_state(p_rel, cloud_md5 or "", st_after.st_size, st_after.st_mtime, fid, cloud_md5, status="synced")
+                        except Exception:
+                            pass
+                        self.sync_engine.clear_self_op(p_rel)
+                elif not file_path.exists():
                     QMessageBox.warning(
                         self, "تنبيه", 
                         f"تعذر تنزيل الملف من السحابة:\n{file_name}\n({msg})"
                     )
                     return
-            else:
-                QMessageBox.warning(
-                    self, "تنبيه", 
-                    f"الملف التالي غير متوفر محلياً دون اتصال بالسحابة:\n{file_name}"
-                )
-                return
+                if temp_dl.exists():
+                    try:
+                        temp_dl.unlink(missing_ok=True)
+                    except Exception:
+                        pass
 
         if file_path.is_dir():
             self._navigate_into_folder(file_name, rel_path)

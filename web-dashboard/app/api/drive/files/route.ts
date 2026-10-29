@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { 
   getAllCloudFiles, 
+  checkCloudChanges,
   createCloudFolder, 
   ensureCloudFolderPath,
   ensureCloudFolderPathsBatch,
@@ -29,6 +30,15 @@ export const maxDuration = 60;
 export async function GET(req: NextRequest) {
   try {
     const url = new URL(req.url);
+    const checkChanges = url.searchParams.get('changes') === '1';
+    if (checkChanges) {
+      const changed = await checkCloudChanges();
+      return NextResponse.json({ success: true, changed }, {
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+        }
+      });
+    }
     const forceRefresh = url.searchParams.get('refresh') === '1' || url.searchParams.get('force') === '1';
     const data = await getAllCloudFiles(forceRefresh);
     return NextResponse.json(

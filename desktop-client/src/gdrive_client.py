@@ -746,19 +746,47 @@ class GoogleDriveClient:
                     }
             self._perms_cache_data = normalized
             self._perms_cache_ts = now
+            try:
+                lf = self._get_local_perms_file()
+                lf.parent.mkdir(parents=True, exist_ok=True)
+                lf.write_text(json.dumps(normalized, ensure_ascii=False), encoding="utf-8")
+            except Exception:
+                pass
             return normalized
         except Exception as e:
             _safe_log(f"[GDRIVE] Error reading folder permissions: {e}")
             return getattr(self, "_perms_cache_data", {}) or {}
 
+    def _get_local_perms_file(self):
+        folder = getattr(self, "sync_folder", None)
+        if not folder:
+            folder = Path(os.environ.get('USERPROFILE', 'C:')) / "FileExchangeShared"
+        return Path(folder) / ".sharecoc_perms_cache.json"
+
     def get_cached_folder_permissions(self):
         """
-        قراءة فورية للصلاحيات من الذاكرة دون انتظار الشبكة (آمنة لخيط الواجهة).
-        - أول مرة فقط (لا توجد ذاكرة بعد): جلب متزامن حتى لا تظهر أقسام محمية بالخطأ.
-        - إن كانت الذاكرة قديمة: تُعاد فوراً ويُجدَّد في خيط خلفي.
+        قراءة فورية للصلاحيات من الذاكرة أو الملف المحلي دون انتظار الشبكة (آمنة تماماً لخيط الواجهة).
+        يتم تحديثها بالخلفية دورياً لتجنب أي تجميد للبرنامج.
         """
-        if not hasattr(self, "_perms_cache_data"):
-            return self.get_folder_permissions()
+        if not hasattr(self, "_perms_cache_data") or self._perms_cache_data is None:
+            self._perms_cache_data = {}
+            try:
+                lf = self._get_local_perms_file()
+                if lf.exists():
+                    self._perms_cache_data = json.loads(lf.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+
+            if not getattr(self, "_perms_refreshing", False):
+                self._perms_refreshing = True
+                def _bg_init():
+                    try:
+                        self.get_folder_permissions(force_refresh=True)
+                    finally:
+                        self._perms_refreshing = False
+                threading.Thread(target=_bg_init, daemon=True).start()
+            return self._perms_cache_data
+
         if (time.time() - getattr(self, "_perms_cache_ts", 0)) >= PERMS_CACHE_TTL:
             if not getattr(self, "_perms_refreshing", False):
                 self._perms_refreshing = True
@@ -1205,22 +1233,101 @@ class GoogleDriveClient:
             _safe_log(f"[GDRIVE MOVE ERROR] {old_rel_path} -> {new_rel_path}: {e}")
             return False, str(e)
 
+    def _apply_delta_to_snapshot(self, changes):
+        """تحديث لقطة الذاكرة السحابية فورياً من التغييرات القادمة دون الحاجة لإعادة طلب جميع الملفات"""
+        snap = getattr(self, "_snapshot", None)
+        if not snap or not hasattr(snap, "files"):
+            return
+        try:
+            invalidated = False
+            for ch in changes:
+                fid = ch.get("fileId")
+                if not fid:
+                    continue
+                is_removed = ch.get("removed", False)
+                f = ch.get("file") or {}
+                if f.get("trashed"):
+                    is_removed = True
+
+                if is_removed:
+                    if hasattr(snap, "id_to_path") and fid in snap.id_to_path:
+                        invalidated = True
+                    old_rel = snap.file_ids.pop(fid, None)
+                    if old_rel:
+                        ch["_resolved_rel"] = old_rel
+                        snap.files.pop(old_rel, None)
+                    continue
+
+                name = f.get("name", "")
+                parents = f.get("parents") or []
+                parent_path = None
+                if hasattr(snap, "id_to_path"):
+                    for pid in parents:
+                        if pid in snap.id_to_path:
+                            parent_path = snap.id_to_path[pid]
+                            break
+
+                mime = str(f.get("mimeType", ""))
+                if mime == FOLDER_MIME:
+                    if parent_path is not None and name:
+                        new_rel = f"{parent_path}/{name}" if parent_path else name
+                        if fid in snap.id_to_path and snap.id_to_path[fid] != new_rel:
+                            invalidated = True
+                        else:
+                            snap.id_to_path[fid] = new_rel
+                            snap.folders[new_rel] = fid
+                            snap.folder_meta[new_rel] = f
+                            with self._folder_lock:
+                                self._folder_ids[new_rel] = fid
+                    else:
+                        invalidated = True
+                    continue
+
+                if is_ignored_name(name) or mime.startswith(GOOGLE_NATIVE_PREFIX):
+                    continue
+
+                old_rel = snap.file_ids.get(fid)
+                if parent_path is not None and name:
+                    new_rel = f"{parent_path}/{name}" if parent_path else name
+                else:
+                    new_rel = old_rel
+
+                if old_rel and new_rel and old_rel != new_rel:
+                    snap.files.pop(old_rel, None)
+                    ch["_old_rel"] = old_rel
+
+                if new_rel:
+                    merged = dict(snap.files.get(new_rel) or {})
+                    merged.update(f)
+                    snap.files[new_rel] = merged
+                    snap.file_ids[fid] = new_rel
+                    ch["_resolved_rel"] = new_rel
+                elif parents:
+                    invalidated = True
+
+            if invalidated:
+                self.invalidate()
+            elif snap.taken_at > 0:
+                snap.taken_at = time.time()
+        except Exception as e:
+            _safe_log(f"[Snapshot delta apply error]: {e}")
+
     def poll_changes_since_last(self):
         """فحص خفيف وسريع عبر Google Drive Changes API لمعرفة ما إذا حدث أي تعديل أو حذف أو نقل من الويب أو الأجهزة الأخرى"""
         if not self.is_configured():
-            return False
+            return False, []
         try:
             token = getattr(self, "_changes_page_token", None)
             if not token:
                 res = self._execute(lambda s: s.changes().getStartPageToken())
                 self._changes_page_token = res.get("startPageToken")
-                return False
+                return False, []
             res = self._execute(lambda s: s.changes().list(
                 pageToken=token,
                 spaces="drive",
                 includeItemsFromAllDrives=False,
                 supportsAllDrives=False,
-                fields="newStartPageToken, nextPageToken, changes(fileId, removed, file(id, name, trashed, parents, modifiedTime))",
+                fields="newStartPageToken, nextPageToken, changes(fileId, removed, file(id, name, trashed, parents, modifiedTime, md5Checksum, size, mimeType))",
                 pageSize=100
             ))
             changes = res.get("changes", [])
@@ -1228,13 +1335,13 @@ class GoogleDriveClient:
             if new_token:
                 self._changes_page_token = new_token
             if changes:
-                self.invalidate()
-                return True
-            return False
+                self._apply_delta_to_snapshot(changes)
+                return True, changes
+            return False, []
         except Exception as e:
             _safe_log(f"[GDRIVE CHANGES POLL ERROR]: {e}")
             self._changes_page_token = None
-            return False
+            return False, []
 
     def rename_file(self, old_file_path, new_name):
         if not self.is_configured() or not old_file_path or not new_name:

@@ -23,6 +23,7 @@ from watchdog.events import FileSystemEventHandler
 
 from office_handler import OfficeHandler
 from gdrive_client import is_ignored_name, norm_rel, _safe_log
+from lan_sync import LanSyncService
 
 CYCLE_SECONDS = 8
 LEGACY_GENERAL_DEPT = "القسم العام"
@@ -42,11 +43,13 @@ def _is_under(path, prefix):
 
 
 class LocalFolderWatcher(FileSystemEventHandler):
-    """مراقب المجلد المحلي: يرصد الحفظ الفوري (Ctrl+S) وإغلاق برامج Office لتشغيل الرفع المباشر فورياً"""
+    """مراقب المجلد المحلي: يرصد الحفظ الفوري (Ctrl+S) وإغلاق برامج Office لتشغيل الرفع المباشر فورياً مع منع الشواهد الزائفة أثناء الحفظ الذري"""
 
     def __init__(self, sync_engine):
         super().__init__()
         self.engine = sync_engine
+        self._pending_deletes = {}
+        self._pending_deletes_lock = threading.Lock()
 
     def _rel(self, p):
         try:
@@ -61,6 +64,33 @@ class LocalFolderWatcher(FileSystemEventHandler):
         if any(x.startswith(".") for x in parts):
             return False
         return not is_ignored_name(parts[-1])
+
+    def _schedule_verify_delete(self, rel, is_directory):
+        """تأخير تأكيد الحذف لمدة ثانية واحدة للتحقق من عدم كونه حفظاً ذرياً لبرامج Office (تسمية ملف مؤقت)"""
+        def _verify():
+            with self._pending_deletes_lock:
+                self._pending_deletes.pop(rel, None)
+            target = self.engine.sync_folder / rel
+            if target.exists():
+                # الملف ما زال موجوداً على القرص (استبدال ذري لـ Office أو تعديل سريع)
+                self.engine.clear_tombstone(rel)
+                if not is_directory:
+                    self.engine.queue_fast_upload(rel, delay=0.1)
+            else:
+                # الملف محذوف فعلياً بعد انقضاء المهلة -> حذف صريح من المستخدم
+                self.engine.note_local_delete(rel, is_folder=is_directory, from_watcher=True)
+
+        with self._pending_deletes_lock:
+            old_timer = self._pending_deletes.pop(rel, None)
+            if old_timer:
+                try:
+                    old_timer.cancel()
+                except Exception:
+                    pass
+            t = threading.Timer(1.0, _verify)
+            t.daemon = True
+            self._pending_deletes[rel] = t
+            t.start()
 
     def on_any_event(self, event):
         try:
@@ -88,23 +118,38 @@ class LocalFolderWatcher(FileSystemEventHandler):
                         main_rel = cand
 
                 if main_rel:
+                    with self._pending_deletes_lock:
+                        pt = self._pending_deletes.pop(main_rel, None)
+                        if pt:
+                            try:
+                                pt.cancel()
+                            except Exception:
+                                pass
                     self.engine.clear_tombstone(main_rel)
-                    self.engine.queue_fast_upload(main_rel, delay=0.5)
+                    self.engine.queue_fast_upload(main_rel, delay=0.15)
                     return
 
             if etype in ("deleted", "moved") and self._relevant(src_rel):
-                self.engine.note_local_delete(src_rel, is_folder=event.is_directory, from_watcher=True)
+                self._schedule_verify_delete(src_rel, event.is_directory)
 
             if etype in ("created", "modified", "moved"):
                 dest = getattr(event, "dest_path", None) or event.src_path
                 dest_rel = self._rel(dest)
                 if self._relevant(dest_rel):
+                    # إلغاء أي حذف مؤقت معلق لنفس المسار فوراً
+                    with self._pending_deletes_lock:
+                        pt = self._pending_deletes.pop(dest_rel, None)
+                        if pt:
+                            try:
+                                pt.cancel()
+                            except Exception:
+                                pass
                     self.engine.clear_tombstone(dest_rel)
                     if not event.is_directory:
-                        # تشغيل الرفع الفوري فائق السرعة لرصد وحفظ التعديلات فورياً
-                        self.engine.queue_fast_upload(dest_rel, delay=0.7)
+                        # تشغيل الرفع الفوري فائق السرعة لرصد وحفظ التعديلات فورياً في أقل من 150ms
+                        self.engine.queue_fast_upload(dest_rel, delay=0.15)
                     else:
-                        self.engine.wake(delay=1.0)
+                        self.engine.wake(delay=0.3)
         except Exception as e:
             _safe_log(f"[Watcher error]: {e}")
 
@@ -137,6 +182,13 @@ class SyncEngine:
         self.last_sync_time = None
         self.last_error = None
         self._init_schema()
+        self.lan_sync = LanSyncService(
+            sync_folder=self.sync_folder,
+            device_id=self.device_id,
+            device_name=self.device_name,
+            sync_engine=self,
+            local_state_mgr=self.state_mgr
+        )
 
     # ------------------------------------------------------------------ #
     # الحالة المحلية
@@ -254,6 +306,16 @@ class SyncEngine:
         with self._self_ops_lock:
             self._self_ops[rel] = time.time() + seconds
 
+    def clear_self_op(self, rel):
+        rel = norm_rel(rel)
+        if not rel:
+            return
+        with self._self_ops_lock:
+            self._self_ops.pop(rel, None)
+            for k in list(self._self_ops.keys()):
+                if _is_under(rel, k) or _is_under(k, rel):
+                    self._self_ops.pop(k, None)
+
     def _is_self_op(self, rel):
         rel = norm_rel(rel)
         now = time.time()
@@ -270,7 +332,7 @@ class SyncEngine:
         if from_watcher and self._is_self_op(rel):
             return
         if not from_watcher:
-            self._mark_self_op(rel)
+            self._mark_self_op(rel, seconds=5)
         with self.state_mgr._get_connection() as conn:
             conn.execute("""
                 INSERT INTO tombstones (rel_path, is_folder, created_at) VALUES (?, ?, ?)
@@ -281,7 +343,7 @@ class SyncEngine:
     def note_local_move(self, old_rel, new_rel):
         """إعادة تسمية/نقل من داخل التطبيق: ننقل الملف في السحابة بدلاً من حذفه وإعادة رفعه"""
         old_rel, new_rel = norm_rel(old_rel), norm_rel(new_rel)
-        self._mark_self_op(old_rel)
+        self._mark_self_op(old_rel, seconds=5)
         self.clear_tombstone(new_rel)
         states = self._load_states()
         st = states.get(new_rel) or states.get(old_rel)
@@ -289,7 +351,7 @@ class SyncEngine:
             self.note_local_delete(old_rel)
         self.wake(delay=0.5)
 
-    def queue_fast_upload(self, rel_path, delay=0.7):
+    def queue_fast_upload(self, rel_path, delay=0.15):
         """
         إدراج الملف في طابور الرفع الفوري المباشر لسحابة Google Drive فور حفظ التعديلات (Ctrl+S)
         دون الحاجة لانتظار دورة الفحص الشامل لجميع المجلدات.
@@ -330,20 +392,31 @@ class SyncEngine:
             return
 
         # فحص استقرار الكتابة وتحرير مقبض النظام من Office
-        for attempt in range(4):
+        # محاولات ذكية تصل إلى 15 محاولة (1.5 ثانية) لانتظار انتهاء Word/Excel من إغلاق مقبض الملف
+        last_size = -1
+        stable_count = 0
+        for attempt in range(15):
             if OfficeHandler.is_access_db(str(full_path)):
                 lock = OfficeHandler.get_access_lock_file(str(full_path))
                 if lock and lock.exists():
                     # أكسس ما زال مفتوحاً محلياً، سيتم رفعه تلقائياً فور إغلاقه
                     return
             try:
+                cur_size = full_path.stat().st_size
                 with open(full_path, "rb") as f:
                     f.read(1024)
-                break
+                if cur_size == last_size and cur_size > 0:
+                    stable_count += 1
+                    if stable_count >= 2:
+                        break
+                else:
+                    last_size = cur_size
+                    stable_count = 1
             except (OSError, PermissionError):
-                time.sleep(0.35)
+                stable_count = 0
+            time.sleep(0.1)
         else:
-            self.wake(delay=1.5)
+            self.wake(delay=0.5)
             return
 
         try:
@@ -352,7 +425,7 @@ class SyncEngine:
             curr_mtime = curr_stat.st_mtime
             curr_hash = self.calculate_hash(str(full_path))
         except Exception:
-            self.wake(delay=1.0)
+            self.wake(delay=0.5)
             return
 
         st = self.state_mgr.get_file_state(rel)
@@ -363,6 +436,16 @@ class SyncEngine:
             _safe_log(f"[FastAutoSync] Skipped upload for {rel}: No permission")
             return
 
+        # ⚡ 1. إطلاق البث اللحظي الفائق عبر الشبكة المحلية (LAN Turbo-Sync) فوراً في أقل من 50ms!
+        if hasattr(self, 'lan_sync') and self.lan_sync:
+            try:
+                existing_st = self.state_mgr.get_file_state(rel)
+                existing_fid = existing_st.get("server_file_id") if existing_st else ""
+                self.lan_sync.broadcast_file_change(rel, curr_hash, curr_size, server_file_id=existing_fid)
+            except Exception as lan_err:
+                _safe_log(f"[LAN Turbo-Sync broadcast error]: {lan_err}")
+
+        # ☁️ 2. رفع مباشر وفوري إلى السحابة بالتوازي
         _safe_log(f"[FastAutoSync] Local edit detected (Ctrl+S) -> Direct Immediate Upload: {rel}")
         ok, res = self.sync_file_now(str(full_path), rel_path=rel)
         if ok:
@@ -435,7 +518,7 @@ class SyncEngine:
             return True, {"ignored": True}
 
         self.clear_tombstone(rel_path)
-        self._mark_self_op(rel_path, seconds=600)
+        self.clear_self_op(rel_path)
 
         try:
             st_stat = p.stat()
@@ -540,13 +623,23 @@ class SyncEngine:
             self.observer.start()
         except Exception as e:
             _safe_log(f"[Watcher start error]: {e}")
+        if hasattr(self, 'lan_sync') and self.lan_sync:
+            try:
+                self.lan_sync.start()
+            except Exception as e:
+                _safe_log(f"[LAN Turbo-Sync start error]: {e}")
         self._worker = threading.Thread(target=self._background_sync_loop, name="SyncWorker", daemon=True)
         self._worker.start()
-        self.wake(delay=1.5)
+        self.wake(delay=0.5)
 
     def stop(self):
         self.is_running = False
         self._wake_event.set()
+        if hasattr(self, 'lan_sync') and self.lan_sync:
+            try:
+                self.lan_sync.stop()
+            except Exception:
+                pass
         try:
             if self.observer.is_alive():
                 self.observer.stop()
@@ -554,8 +647,108 @@ class SyncEngine:
         except Exception:
             pass
 
+    def _apply_delta_pull(self, changes):
+        """تنزيل وتطبيق فوري للملفات المعدلة أو المحذوفة القادمة من السحابة في أقل من ثانيتين"""
+        if not changes:
+            return
+        snap = self.client.peek_snapshot() if hasattr(self.client, "peek_snapshot") else None
+        states = self._load_states()
+        tombs = self._load_tombstones()
+        for ch in changes:
+            temp_path = None
+            try:
+                fid = ch.get("fileId")
+                is_removed = ch.get("removed", False)
+                finfo = ch.get("file") or {}
+                if finfo.get("trashed"):
+                    is_removed = True
+                fname = finfo.get("name") or ""
+                if fname and is_ignored_name(fname):
+                    continue
+
+                rel = ch.get("_resolved_rel")
+                if not rel and snap and hasattr(snap, "file_ids") and fid in snap.file_ids:
+                    rel = snap.file_ids[fid]
+                if not rel and fname:
+                    for r, s in states.items():
+                        if s.get("server_file_id") == fid:
+                            rel = r
+                            break
+
+                if not rel:
+                    continue
+
+                full_p = self.sync_folder / rel
+
+                # تجنب الكتابة فوق تعديل محلي جارٍ رفعه
+                with self._fast_upload_lock:
+                    if rel in self._fast_upload_timers:
+                        continue
+                st = states.get(rel)
+                if st and st.get("sync_status") in ("syncing", "pending_upload"):
+                    continue
+
+                if is_removed:
+                    if rel in tombs:
+                        continue
+                    if full_p.exists():
+                        self._mark_self_op(rel, seconds=4)
+                        try:
+                            if full_p.is_file():
+                                full_p.unlink(missing_ok=True)
+                            elif full_p.is_dir():
+                                shutil.rmtree(str(full_p), ignore_errors=True)
+                        except Exception:
+                            pass
+                        self._delete_state(rel)
+                        self.notify_status({"event": "remote_delete", "file": rel, "status": "تم حذف الملف سحابياً"})
+                    continue
+
+                remote_md5 = finfo.get("md5Checksum")
+                if not remote_md5:
+                    continue
+
+                need_download = True
+                if full_p.exists() and full_p.is_file():
+                    local_md5 = self.calculate_hash(str(full_p))
+                    if local_md5 == remote_md5:
+                        need_download = False
+                    elif st and st.get("remote_md5") == remote_md5 and st.get("sha256_hash") and local_md5 != st.get("sha256_hash"):
+                        need_download = False
+
+                if need_download:
+                    _safe_log(f"[DeltaPull] Downloading modified file from cloud: {rel}")
+                    self._mark_self_op(rel, seconds=5)
+                    full_p.parent.mkdir(parents=True, exist_ok=True)
+                    temp_dir = self.sync_folder / ".sync_temp"
+                    temp_dir.mkdir(parents=True, exist_ok=True)
+                    temp_path = temp_dir / f"dl_{int(time.time()*1000)}_{full_p.name}.tmp"
+                    
+                    dl_ok, _ = self.client.download_file(fname or full_p.name, str(temp_path), storage_path=fid)
+                    if dl_ok and temp_path.exists():
+                        applied = OfficeHandler.safe_apply_file(str(full_p), str(temp_path))
+                        if applied:
+                            st_after = full_p.stat()
+                            self._save_state(rel, remote_md5, st_after.st_size, st_after.st_mtime, fid, remote_md5, status="synced")
+                            self.clear_self_op(rel)
+                            self.notify_status({"event": "synced", "file": rel, "status": "تم استلام أحدث نسخة معدلة"})
+                            try:
+                                from local_bridge import LocalBridgeHandler
+                                LocalBridgeHandler.last_sync_time = time.time()
+                                LocalBridgeHandler.last_synced_file = rel
+                            except Exception:
+                                pass
+            except Exception as e:
+                _safe_log(f"[DeltaPull Error]: {e}")
+            finally:
+                if temp_path and temp_path.exists():
+                    try:
+                        temp_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+
     def _background_sync_loop(self):
-        delta_interval = 2.0
+        delta_interval = 1.5
         while self.is_running:
             waited = 0.0
             while self.is_running and waited < CYCLE_SECONDS:
@@ -563,10 +756,16 @@ class SyncEngine:
                     break
                 waited += delta_interval
                 try:
-                    if hasattr(self.client, "poll_changes_since_last") and self.client.poll_changes_since_last():
-                        break
-                except Exception:
-                    pass
+                    if hasattr(self.client, "poll_changes_since_last"):
+                        res = self.client.poll_changes_since_last()
+                        has_ch = res[0] if isinstance(res, tuple) else bool(res)
+                        ch_list = res[1] if isinstance(res, tuple) and len(res) > 1 else []
+                        if has_ch:
+                            if ch_list:
+                                self._apply_delta_pull(ch_list)
+                            break
+                except Exception as poll_e:
+                    _safe_log(f"[Poll loop error]: {poll_e}")
             self._wake_event.clear()
             while self.is_running:
                 with self._wake_lock:
@@ -672,20 +871,35 @@ class SyncEngine:
             pct = int(min(100, round((done_b / max(total_b, 1)) * 100)))
             self.notify_status({"event": "syncing", "file": rel, "status": f"جارٍ التنزيل من السحابة ({pct}%)..."})
 
-        ok, msg = self.client.download_file(rmeta["name"], str(dest), storage_path=rmeta["id"], progress_callback=_on_dl_chunk)
-        if ok and dest.exists():
-            st = dest.stat()
-            md5 = rmeta.get("md5Checksum") or self.calculate_hash(str(dest))
-            self._save_state(rel, md5, st.st_size, st.st_mtime, rmeta["id"], rmeta.get("md5Checksum"))
-            self.notify_status({"event": "synced", "file": rel, "status": "محدث من السحابة"})
+        temp_dir = self.sync_folder / ".sync_temp"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        temp_dest = temp_dir / f"dl_{int(time.time()*1000)}_{dest.name}.tmp"
+
+        ok, msg = self.client.download_file(rmeta["name"], str(temp_dest), storage_path=rmeta["id"], progress_callback=_on_dl_chunk)
+        if ok and temp_dest.exists():
+            OfficeHandler.safe_apply_file(str(dest), str(temp_dest))
             try:
-                from local_bridge import LocalBridgeHandler
-                LocalBridgeHandler.last_sync_time = time.time()
-                LocalBridgeHandler.last_synced_file = rel
+                temp_dest.unlink(missing_ok=True)
             except Exception:
                 pass
-            return True
+            if dest.exists():
+                st = dest.stat()
+                md5 = rmeta.get("md5Checksum") or self.calculate_hash(str(dest))
+                self._save_state(rel, md5, st.st_size, st.st_mtime, rmeta["id"], rmeta.get("md5Checksum"))
+                self.notify_status({"event": "synced", "file": rel, "status": "محدث من السحابة"})
+                try:
+                    from local_bridge import LocalBridgeHandler
+                    LocalBridgeHandler.last_sync_time = time.time()
+                    LocalBridgeHandler.last_synced_file = rel
+                except Exception:
+                    pass
+                return True
         _safe_log(f"[Download failed] {rel}: {msg}")
+        try:
+            if temp_dest.exists():
+                temp_dest.unlink(missing_ok=True)
+        except Exception:
+            pass
         return False
 
     def _upload(self, rel, info, md5, existing_id=None):
@@ -737,9 +951,14 @@ class SyncEngine:
     def _has_dept_perm(self, rel_path, action_key):
         """التحقق من صلاحية القسم السحابية قبل رفع أو تعديل أو حذف ملف من المزامنة الخلفية"""
         try:
-            if not rel_path or not self.client or not hasattr(self.client, "get_folder_permissions"):
+            if not rel_path or not self.client:
                 return True
-            perms = self.client.get_folder_permissions() or {}
+            if hasattr(self.client, "get_cached_folder_permissions"):
+                perms = self.client.get_cached_folder_permissions() or {}
+            elif hasattr(self.client, "get_folder_permissions"):
+                perms = self.client.get_folder_permissions() or {}
+            else:
+                return True
             if not isinstance(perms, dict):
                 return True
             dept = norm_rel(rel_path).split("/")[0].strip()
@@ -764,7 +983,7 @@ class SyncEngine:
     def run_cycle(self):
         if not self.client or not self.client.is_configured():
             return
-        snap = self.client.snapshot(force=True)
+        snap = self.client.snapshot(force=False, max_age=15)
         if snap is None:
             self.last_sync_ok = False
             self.last_error = getattr(self.client, "last_error", "offline")
@@ -932,8 +1151,6 @@ class SyncEngine:
                 if self._readable_and_stable(linfo):
                     pending_modified_uploads.append((rel, linfo, lmd5, rmeta["id"]))
             elif remote_changed and not local_changed:
-                if self._is_open_in_office(linfo["abs"]):
-                    continue
                 if self._download(rel, rmeta):
                     changes += 1
             else:

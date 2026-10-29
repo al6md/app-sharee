@@ -630,11 +630,25 @@ export default function FilesPage() {
     }
 
     // 2. فحص سحابي دوري هادئ لمزامنة تعديلات المستخدمين الآخرين (كل 10 ثوانٍ لمنع أي ثقل في التصفح)
-    const cloudInterval = setInterval(() => {
+    const cloudInterval = setInterval(async () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-        loadData(true);
+        try {
+          const res = await fetch('/api/drive/files?changes=1', {
+            method: 'GET',
+            cache: 'no-store',
+            signal: AbortSignal.timeout(3000),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.changed) {
+              loadData(true);
+            }
+          }
+        } catch {
+          // هادئ
+        }
       }
-    }, 10000);
+    }, 3500);
 
     // 3. تحديث فوري لحظة الرجوع إلى المتصفح مع كبح التكرار
     let lastFocusRefresh = 0;
@@ -1749,6 +1763,32 @@ export default function FilesPage() {
         window.open(fileUrl, '_blank');
       }
       return;
+    }
+
+    // 1. محاولة فتح الملف عبر تطبيق سطح المكتب المرافق وجسره المحلي لضمان المزامنة الفورية عند الحفظ Ctrl+S
+    const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
+    if (!isHttps) {
+      try {
+        const bridgeUrl = `http://127.0.0.1:18290/open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}&storage_path=${encodeURIComponent(file.storagePath || file.id || '')}`;
+        const bridgeRes = await fetch(bridgeUrl, {
+          method: 'GET',
+          mode: 'cors',
+          cache: 'no-store',
+          signal: AbortSignal.timeout(1200),
+        });
+        if (bridgeRes.ok) {
+          const bData = await bridgeRes.json();
+          if (bData.success) {
+            setToastMessage({
+              text: `🚀 تم فتح "${file.name}" في البرنامج الأصلي. أي تعديل بـ Ctrl+S سيُزامن فورياً!`,
+              type: 'info'
+            });
+            return;
+          }
+        }
+      } catch {
+        // الجسر المحلي غير متاح أو المستخدم على جهاز آخر
+      }
     }
 
     // بروتوكولات Microsoft Office الرسمية المثبتة مع Office في ويندوز

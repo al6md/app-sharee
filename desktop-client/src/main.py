@@ -194,29 +194,62 @@ def ensure_desktop_shortcut():
         print(f"[Shortcut creation]: {e}")
 
 
-def _activate_running_instance(retries=4, delay=0.5):
-    """محاولة إيقاظ وإظهار النسخة العاملة حالياً عبر الجسر المحلي أو Win32 بأمان على خيط Qt الرئيسي"""
+def _activate_running_instance(retries=2, delay=0.15):
+    """محاولة إيقاظ وإظهار النسخة العاملة حالياً عبر Win32 Named Event أو الجسر المحلي المباشر بسرعة فائقة"""
+    # 1. إيقاظ فوري عبر حدث ويندوز المسمى (< 1ms)
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        EVENT_MODIFY_STATE = 0x0002
+        h_ev = kernel32.OpenEventW(EVENT_MODIFY_STATE, False, "Global\\KarbalaChamberShareCOCShowEvent")
+        if h_ev:
+            kernel32.SetEvent(h_ev)
+            kernel32.CloseHandle(h_ev)
+            return True
+    except Exception:
+        pass
+
+    # 2. إيقاظ عبر مقبس الجسر المحلي مع تجاوز بروكسي النظام تماماً
     import urllib.request
-    for _ in range(retries):
-        try:
-            with urllib.request.urlopen("http://127.0.0.1:18290/show", timeout=1.5) as resp:
-                if resp.status == 200:
-                    return True
-        except Exception:
-            pass
-        try:
-            import ctypes
-            user32 = ctypes.windll.user32
-            hwnd = user32.FindWindowW(None, "Share COC")
-            if not hwnd:
-                hwnd = user32.FindWindowW(None, "Share COC – غرفة تجارة كربلاء المقدسة")
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open("http://127.0.0.1:18290/show", timeout=0.8) as resp:
+            if resp.status == 200:
+                return True
+    except Exception:
+        pass
+
+    # 3. إيقاظ عبر مقبض نافذة Win32
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        for title in ("Share COC", "Share COC – غرفة تجارة كربلاء المقدسة"):
+            hwnd = user32.FindWindowW(None, title)
             if hwnd:
+                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
                 user32.SetForegroundWindow(hwnd)
                 return True
-        except Exception:
-            pass
-        time.sleep(delay)
+    except Exception:
+        pass
+
     return False
+
+
+def _kill_unresponsive_zombies():
+    """تحرير منافذ الجسر المعلقة فقط في حال عدم استجابة العملية العاملة دون إنهاء عشوائي"""
+    import psutil
+    curr_pid = os.getpid()
+
+    try:
+        for conn in psutil.net_connections(kind='inet'):
+            if conn.laddr and conn.laddr.port in (18290, 18292) and conn.pid and conn.pid != curr_pid:
+                try:
+                    p = psutil.Process(conn.pid)
+                    p.kill()
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
 
 def main():
@@ -263,7 +296,7 @@ def main():
             sync_folder = Path(os.environ.get('USERPROFILE', 'C:')) / "FileExchangeShared"
             from office_handler import OfficeHandler
 
-            norm_sub = target_folder.replace("\\", "/").strip("/") if target_folder and target_folder not in ('__ALL__', 'المجلد العام') else ""
+            norm_sub = target_folder.replace("\\", "/").strip("/") if target_folder and target_folder not in ('__ALL__', 'المجلد العام', 'القسم العام') else ""
             clean_sub = "/".join(clean_bidi(p) for p in norm_sub.split("/")) if norm_sub else ""
             candidates = []
             if norm_sub:
@@ -362,9 +395,19 @@ def main():
                 urllib.request.urlopen("http://127.0.0.1:18290/sync", timeout=1.5)
             except Exception:
                 pass
-        # هناك نسخة تعمل بالفعل أو قيد التشغيل؛ تنشيطها وإغلاق النسخة الإضافية فوراً وهدوء
-        _activate_running_instance(retries=3, delay=0.4)
-        sys.exit(0)
+        # هناك نسخة مسجلة؛ محاولة تنشيطها بهدوء أولاً
+        activated = _activate_running_instance(retries=2, delay=0.25)
+        if activated:
+            sys.exit(0)
+
+        # إذا تعذر التنشيط، فالعملية السابقة متجمدة أو معلقة؛ إنهاؤها وتحرير المنفذ والقفل فوراً
+        _kill_unresponsive_zombies()
+        try:
+            kernel32.CloseHandle(_single_instance_mutex)
+        except Exception:
+            pass
+        time.sleep(0.15)
+        _single_instance_mutex = kernel32.CreateMutexW(None, False, "Global\\KarbalaChamberShareCOCSingleInstanceMutex")
 
     app = QApplication(sys.argv)
     app._single_instance_mutex = _single_instance_mutex
@@ -414,6 +457,21 @@ def main():
     window.raise_()
     window.activateWindow()
     app.processEvents()
+
+    # إعداد حدث ويندوز المسمى للإيقاظ فائق السرعة اللحظي (< 1ms)
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        h_show_event = kernel32.CreateEventW(None, False, False, "Global\\KarbalaChamberShareCOCShowEvent")
+        if h_show_event:
+            def _event_listener():
+                while True:
+                    res = kernel32.WaitForSingleObject(h_show_event, 0xFFFFFFFF)
+                    if res == 0:
+                        window.bridge.show_requested.emit()
+            threading.Thread(target=_event_listener, daemon=True, name="WinShowEventListener").start()
+    except Exception:
+        pass
 
     # تشغيل خادم الجسر المحلي ومحرك المزامنة في الخلفية
     start_local_bridge(

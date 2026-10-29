@@ -4,8 +4,8 @@
 تصميم مسطح وواضح بدون تشويش، مع ألوان قياسية مميزة لكل نوع ملف
 """
 import os
-from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QPen, QBrush, QPainterPath
-from PyQt6.QtCore import Qt, QRectF, QPointF
+from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QPen, QBrush, QPainterPath, QImageReader
+from PyQt6.QtCore import Qt, QRectF, QPointF, QSize
 
 _icon_cache = {}
 _thumb_cache = {}
@@ -139,7 +139,7 @@ def create_stitch_office_pixmap(app_type, size=64):
 
 
 def create_image_thumbnail_pixmap(abs_path, size=64):
-    """توليد مصغّرة حقيقية (Thumbnail) بحواف دائرية للصور الموجودة على القرص."""
+    """توليد مصغّرة حقيقية (Thumbnail) فائقة الخفة والسرعة بحواف دائرية للصور الموجودة على القرص دون استهلاك الذاكرة."""
     try:
         path_str = str(abs_path)
         if not os.path.isfile(path_str):
@@ -151,7 +151,17 @@ def create_image_thumbnail_pixmap(abs_path, size=64):
         if cache_key in _thumb_cache:
             return _thumb_cache[cache_key]
 
-        src = QPixmap(path_str)
+        reader = QImageReader(path_str)
+        reader.setAutoTransform(True)
+        orig_sz = reader.size()
+        if orig_sz.isValid() and orig_sz.width() > 0 and orig_sz.height() > 0:
+            target_dim = max(size * 2, 128)
+            reader.setScaledSize(orig_sz.scaled(target_dim, target_dim, Qt.AspectRatioMode.KeepAspectRatio))
+        img = reader.read()
+        if img.isNull():
+            return None
+
+        src = QPixmap.fromImage(img)
         if src.isNull():
             return None
 

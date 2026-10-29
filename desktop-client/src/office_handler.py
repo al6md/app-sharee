@@ -216,17 +216,6 @@ class OfficeHandler:
                 user32.SetForegroundWindow(found_hwnd)
                 user32.BringWindowToTop(found_hwnd)
 
-            # 4. تشغيل WScript.Shell AppActivate في الخلفية كضمانة إضافية للبرامج الشهيرة
-            try:
-                for app in app_names:
-                    subprocess.Popen(
-                        ['powershell', '-WindowStyle', 'Hidden', '-Command',
-                         f'$ws = New-Object -ComObject WScript.Shell; $ws.AppActivate("{app}")'],
-                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)
-                    )
-            except Exception:
-                pass
-
         if synchronous:
             _activate_loop()
         else:
@@ -284,3 +273,102 @@ class OfficeHandler:
         else:
             subprocess.run(['xdg-open', path_str])
             return True
+
+    @staticmethod
+    def safe_apply_file(dest_path_str, source_new_path_str):
+        """
+        تطبيق التحديث على الملف الهدف بأقصى سرعة وأمان:
+        1. إذا لم يكن مقفولاً بنظام التشغيل: استبدال فوري خلال أقل من 10ms.
+        2. إذا كان مفتوحاً في Excel أو Word:
+           - محاولة الإنعاش التلقائي المباشر (Auto Hot-Reload) إذا لم يكن فيه تعديلات محلية غير محفوظة.
+           - إذا تعذر، حفظه كنسخة ظل مؤقتة مع تبديله فور إغلاق البرنامج تلقائياً.
+        """
+        import shutil
+        import threading
+        import time
+
+        dest_p = Path(dest_path_str)
+        src_p = Path(source_new_path_str)
+        if not src_p.exists():
+            return False
+
+        # الحالة 1: الملف غير مقفول (مغلق حالياً)
+        if not OfficeHandler.is_file_locked_by_os(str(dest_p)):
+            try:
+                dest_p.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(src_p), str(dest_p))
+                return True
+            except Exception:
+                pass
+
+        # الحالة 2: الملف مقفول محلياً بواسطة Office (Word أو Excel أو Access)
+        # أ) حفظ نسخة في مسار الظل فوراً
+        shadow_dir = dest_p.parent / ".sync_shadow"
+        shadow_dir.mkdir(parents=True, exist_ok=True)
+        shadow_file = shadow_dir / dest_p.name
+        try:
+            shutil.copy2(str(src_p), str(shadow_file))
+        except Exception:
+            pass
+
+        # ب) محاولة الإنعاش التلقائي عبر PowerShell COM لـ Excel أو Word دون إزعاج الموظف
+        suffix = dest_p.suffix.lower()
+        if suffix in ('.xlsx', '.xls', '.docx', '.doc') and sys.platform == 'win32':
+            app_progid = 'Excel.Application' if suffix in ('.xlsx', '.xls') else 'Word.Application'
+            is_excel = suffix in ('.xlsx', '.xls')
+            ps_cmd = f"""
+            try {{
+                $app = [System.Runtime.InteropServices.Marshal]::GetActiveObject('{app_progid}')
+                $found = $false
+                $docs = if ('{is_excel}' -eq 'True') {{ $app.Workbooks }} else {{ $app.Documents }}
+                foreach ($doc in $docs) {{
+                    if ($doc.FullName.ToLower() -eq '{str(dest_p).replace('\\', '\\\\').lower()}') {{
+                        $found = $true
+                        if ($doc.Saved) {{
+                            $doc.Close($false)
+                            Copy-Item -LiteralPath '{str(shadow_file).replace('\\', '\\\\')}' -Destination '{str(dest_p).replace('\\', '\\\\')}' -Force
+                            if ('{is_excel}' -eq 'True') {{ $app.Workbooks.Open('{str(dest_p).replace('\\', '\\\\')}') }} else {{ $app.Documents.Open('{str(dest_p).replace('\\', '\\\\')}') }}
+                            exit 0
+                        }} else {{
+                            exit 2
+                        }}
+                    }}
+                }}
+                if (-not $found) {{ exit 1 }}
+            }} catch {{
+                exit 1
+            }}
+            """
+            try:
+                res = subprocess.run(
+                    ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps_cmd],
+                    capture_output=True, timeout=2.0,
+                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+                )
+                if res.returncode == 0:
+                    # تم الإنعاش التلقائي بنجاح في نافذة Office أمام الموظف!
+                    return True
+            except Exception:
+                pass
+
+        # ج) مراقبة تحرير القفل في خيط خلفي لتطبيق التحديث فور إغلاقه أو حفظه
+        def _wait_and_swap():
+            for _ in range(600):  # محاولة كل 0.5 ثانية لمدة 5 دقائق
+                time.sleep(0.5)
+                if not OfficeHandler.is_file_locked_by_os(str(dest_p)):
+                    try:
+                        if shadow_file.exists():
+                            shutil.copy2(str(shadow_file), str(dest_p))
+                            shadow_file.unlink(missing_ok=True)
+                            return
+                    except Exception:
+                        pass
+            try:
+                if shadow_file.exists():
+                    shadow_file.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+        threading.Thread(target=_wait_and_swap, daemon=True).start()
+        return True
+

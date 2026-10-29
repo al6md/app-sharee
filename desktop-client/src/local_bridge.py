@@ -49,13 +49,42 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
             data = {
                 "status": "ok",
                 "app": "share coc",
-                "version": "4.0",
+                "version": "5.0",
                 "pid": os.getpid(),
                 "last_sync_time": getattr(LocalBridgeHandler, "last_sync_time", 0.0),
                 "last_synced_file": getattr(LocalBridgeHandler, "last_synced_file", ""),
                 "sync_folder": str(self.sync_folder) if self.sync_folder else None
             }
             self.wfile.write(json.dumps(data, ensure_ascii=False).encode('utf-8'))
+            return
+
+        if path == '/lan/file':
+            req_path = params.get('path', [''])[0].strip()
+            if not req_path:
+                self._set_headers(400)
+                self.wfile.write(b"path required")
+                return
+            safe_rel = req_path.replace("\\", "/").strip("/")
+            while "../" in safe_rel or "..\\" in safe_rel:
+                safe_rel = safe_rel.replace("../", "").replace("..\\", "")
+            base_folder = Path(self.sync_folder) if self.sync_folder else Path(".")
+            target_file = (base_folder / safe_rel).resolve()
+            if not str(target_file).startswith(str(base_folder.resolve())) or not target_file.exists() or not target_file.is_file():
+                self._set_headers(404)
+                self.wfile.write(b"file not found")
+                return
+            try:
+                f_size = target_file.stat().st_size
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/octet-stream')
+                self.send_header('Content-Length', str(f_size))
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                with open(target_file, 'rb') as f:
+                    while chunk := f.read(128 * 1024):
+                        self.wfile.write(chunk)
+            except Exception:
+                pass
             return
 
         if path == '/show':
@@ -94,9 +123,42 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
                 return
 
             try:
-                # 1. إذا كان الملف موجوداً محلياً، فتحه فوراً بالبرنامج الأصلي
+                # 1. إذا كان الملف موجوداً محلياً ومحدثاً، فتحه فوراً بالبرنامج الأصلي
                 target_path = self._find_local_file(file_name, folder_name)
-                if target_path and target_path.exists():
+                need_refresh = False
+                cloud_fid = storage_path
+                if target_path and target_path.exists() and self.cloud_client and self.cloud_client.is_configured():
+                    snap = self.cloud_client.peek_snapshot() if hasattr(self.cloud_client, "peek_snapshot") else None
+                    if snap and hasattr(snap, "files"):
+                        rel = None
+                        try:
+                            rel = norm_rel(target_path.relative_to(Path(self.sync_folder)))
+                        except Exception:
+                            rel = file_name
+                        remote_info = snap.files.get(rel)
+                        if not remote_info:
+                            for r, f in snap.files.items():
+                                if f.get("name") == file_name:
+                                    remote_info = f
+                                    break
+                        if remote_info:
+                            cloud_fid = remote_info.get("id") or cloud_fid
+                            cloud_md5 = remote_info.get("md5Checksum")
+                            if cloud_md5 and self.sync_engine:
+                                is_local_newer = False
+                                st = self.sync_engine.state_mgr.get_file_state(rel)
+                                if st:
+                                    if st.get("sync_status") in ("syncing", "pending_upload"):
+                                        is_local_newer = True
+                                    elif st.get("remote_md5") == cloud_md5 and st.get("sha256_hash"):
+                                        if self.sync_engine.calculate_hash(str(target_path)) != st.get("sha256_hash"):
+                                            is_local_newer = True
+                                if not is_local_newer:
+                                    local_hash = self.sync_engine.calculate_hash(str(target_path))
+                                    if local_hash != cloud_md5:
+                                        need_refresh = True
+
+                if target_path and target_path.exists() and not need_refresh:
                     OfficeHandler.open_native_file(str(target_path))
                     if self.sync_engine and hasattr(self.sync_engine, 'watch_active_file'):
                         self.sync_engine.watch_active_file(str(target_path))
@@ -109,18 +171,18 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
                     }, ensure_ascii=False).encode('utf-8'))
                     return
 
-                # 2. إذا لم يكن موجوداً محلياً، بدء التنزيل في خيط خلفي والرد فوراً للمتصفح لتفادي انقطاع الاتصال
+                # 2. إذا لم يكن موجوداً محلياً أو يتطلب تحديثاً من السحابة، بدء التنزيل في خيط خلفي
                 if self.cloud_client:
                     threading.Thread(
                         target=self._download_and_open_worker,
-                        args=(file_name, folder_name, storage_path),
+                        args=(file_name, folder_name, cloud_fid or storage_path),
                         daemon=True
                     ).start()
                     self._set_headers(200)
                     self.wfile.write(json.dumps({
                         "success": True,
                         "status": "downloading",
-                        "message": f"جاري تنزيل '{file_name}' من السحابة وسيتم تشغيله تلقائياً في البرنامج الأصلي فور اكتماله...",
+                        "message": f"جاري تنزيل أحدث نسخة من '{file_name}' وسيتم تشغيلها تلقائياً...",
                         "path": None
                     }, ensure_ascii=False).encode('utf-8'))
                     return
@@ -176,7 +238,7 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
 
         clean_file = clean_bidi(file_name)
         base = Path(self.sync_folder)
-        norm_folder = folder_name.replace("\\", "/").strip("/") if folder_name and folder_name not in ('__ALL__', 'المجلد العام') else ""
+        norm_folder = folder_name.replace("\\", "/").strip("/") if folder_name and folder_name not in ('__ALL__', 'المجلد العام', 'القسم العام') else ""
 
         # 1. فحص المسار المباشر داخل المجلد المحدد (يدعم المجلدات الفرعية المتداخلة)
         if norm_folder:
@@ -221,7 +283,7 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
 
         clean_file = clean_bidi(file_name)
         base = Path(self.sync_folder)
-        norm_folder = folder_name.replace("\\", "/").strip("/") if folder_name and folder_name not in ('__ALL__', 'المجلد العام') else ""
+        norm_folder = folder_name.replace("\\", "/").strip("/") if folder_name and folder_name not in ('__ALL__', 'المجلد العام', 'القسم العام') else ""
 
         # 1. فحص المسار المباشر داخل المجلد المحدد (يدعم المجلدات الفرعية المتداخلة)
         if norm_folder:
@@ -242,8 +304,9 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
                 if sub.name == file_name or clean_bidi(sub.name).lower() == target_lower:
                     return sub
 
-        # 4. إذا لم يكن موجوداً محلياً، جلبه من السحابة فوراً إلى نفس المجلد الفرعي
+        # 4. إذا لم يكن موجوداً محلياً، جلبه من السحابة فوراً عبر مجلد مؤقت وتطبيقه بأمان
         if self.cloud_client:
+            temp_dl = None
             try:
                 dest_dir = base / norm_folder if norm_folder else base
                 dest_dir.mkdir(parents=True, exist_ok=True)
@@ -256,14 +319,35 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
                         safe_sp = f_info['storage_path']
 
                 if hasattr(self.cloud_client, 'download_file'):
-                    res = self.cloud_client.download_file(file_name, str(local_file), storage_path=safe_sp)
+                    temp_dir = base / ".sync_temp"
+                    temp_dir.mkdir(parents=True, exist_ok=True)
+                    temp_dl = temp_dir / f"bridge_{int(time.time()*1000)}_{file_name}.tmp"
+                    res = self.cloud_client.download_file(file_name, str(temp_dl), storage_path=safe_sp)
                     success = res[0] if isinstance(res, tuple) else bool(res)
-                    if success and local_file.exists():
+                    if success and temp_dl.exists():
+                        rel_calc = norm_rel(local_file.relative_to(base))
                         if self.sync_engine:
-                            self.sync_engine.wake(delay=1.0)
-                        return local_file
+                            self.sync_engine._mark_self_op(rel_calc, seconds=5)
+                        applied = OfficeHandler.safe_apply_file(str(local_file), str(temp_dl))
+                        if applied and local_file.exists():
+                            try:
+                                if self.sync_engine:
+                                    st_after = local_file.stat()
+                                    md5 = self.sync_engine.calculate_hash(str(local_file))
+                                    self.sync_engine._save_state(rel_calc, md5, st_after.st_size, st_after.st_mtime, safe_sp, md5, status="synced")
+                            except Exception:
+                                pass
+                            if self.sync_engine:
+                                self.sync_engine.clear_self_op(rel_calc)
+                            return local_file
             except Exception as dl_err:
                 print(f"[LocalBridge] Cloud download on-demand failed: {dl_err}")
+            finally:
+                if temp_dl and temp_dl.exists():
+                    try:
+                        temp_dl.unlink(missing_ok=True)
+                    except Exception:
+                        pass
 
         return None
 
@@ -308,11 +392,16 @@ def start_local_bridge(sync_folder, cloud_client=None, sync_engine=None, show_wi
 
     def run_server():
         try:
-            server = ThreadingHTTPServer(('127.0.0.1', BRIDGE_PORT), LocalBridgeHandler)
-            print(f"[LocalBridge] Running on http://127.0.0.1:{BRIDGE_PORT}")
+            server = ThreadingHTTPServer(('0.0.0.0', BRIDGE_PORT), LocalBridgeHandler)
+            print(f"[LocalBridge] Running on http://0.0.0.0:{BRIDGE_PORT}")
             server.serve_forever()
         except OSError as e:
-            print(f"[LocalBridge] Port {BRIDGE_PORT} is already in use: {e}")
+            try:
+                server = ThreadingHTTPServer(('127.0.0.1', BRIDGE_PORT), LocalBridgeHandler)
+                print(f"[LocalBridge] Running on http://127.0.0.1:{BRIDGE_PORT}")
+                server.serve_forever()
+            except OSError as e2:
+                print(f"[LocalBridge] Port {BRIDGE_PORT} is already in use: {e2}")
 
     thread = threading.Thread(target=run_server, daemon=True)
     thread.start()

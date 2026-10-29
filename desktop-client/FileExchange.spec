@@ -30,6 +30,7 @@ a = Analysis(
         'sync_engine',
         'offline_queue',
         'office_handler',
+        'lan_sync',
         'gui',
         'conflict_manager',
         'autostart',

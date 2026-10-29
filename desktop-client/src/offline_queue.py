@@ -22,11 +22,12 @@ class LocalStateManager:
     def _get_connection(self):
         conn = getattr(self._local, 'conn', None)
         if conn is None:
-            conn = sqlite3.connect(str(self.db_path), timeout=30)
+            conn = sqlite3.connect(str(self.db_path), timeout=60.0)
             conn.row_factory = sqlite3.Row
             try:
                 conn.execute("PRAGMA journal_mode=WAL")
                 conn.execute("PRAGMA synchronous=NORMAL")
+                conn.execute("PRAGMA busy_timeout = 60000")
             except Exception:
                 pass
             self._local.conn = conn
