@@ -32,10 +32,13 @@ export async function GET(req: NextRequest) {
     const url = new URL(req.url);
     const checkChanges = url.searchParams.get('changes') === '1';
     if (checkChanges) {
-      const changed = await checkCloudChanges();
-      return NextResponse.json({ success: true, changed }, {
+      const clientSig = url.searchParams.get('sig') || undefined;
+      const { changed, sig } = await checkCloudChanges(clientSig);
+      return NextResponse.json({ success: true, changed, sig }, {
         headers: {
           'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+          'Pragma': 'no-cache',
+          'Expires': '0',
         }
       });
     }

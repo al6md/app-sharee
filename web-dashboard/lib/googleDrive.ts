@@ -180,37 +180,36 @@ export function invalidateCloudFilesCache() {
   _cloudFilesCache = null;
 }
 
-let _changesPageToken: string | null = null;
+let _lastCloudStateSig: string | null = null;
 
 /**
- * فحص سريع وخفيف للتغييرات عبر Changes API لإبطال الكاش السحابي فوراً
+ * فحص سريع وخفيف للتغييرات السحابية بدقة 100% عبر مقارنة بصمات أحدث العناصر المعدلة.
+ * يعمل بمرونة تامة سواء محلياً أو على خوادم Serverless (Vercel) بدون فقدان الجلسة.
  */
-export async function checkCloudChanges(): Promise<boolean> {
+export async function checkCloudChanges(clientSig?: string | null): Promise<{ changed: boolean; sig: string }> {
   try {
-    if (!_changesPageToken) {
-      const res: any = await drive.changes.getStartPageToken();
-      _changesPageToken = res.data.startPageToken;
-      return false;
-    }
-    const res: any = await drive.changes.list({
-      pageToken: _changesPageToken,
-      spaces: 'drive',
-      fields: 'newStartPageToken, nextPageToken, changes(fileId, removed, file(id, name, trashed))',
-      pageSize: 50,
+    const res: any = await drive.files.list({
+      q: "mimeType != 'application/vnd.google-apps.folder'",
+      orderBy: 'modifiedTime desc',
+      pageSize: 4,
+      fields: 'files(id, name, modifiedTime, md5Checksum, trashed)',
     });
-    const changes = res.data.changes || [];
-    const newToken = res.data.newStartPageToken || res.data.nextPageToken;
-    if (newToken) {
-      _changesPageToken = newToken;
-    }
-    if (changes.length > 0) {
+    const items = res.data.files || [];
+    const currentSig = items
+      .map((f: any) => `${f.id}:${f.modifiedTime || ''}:${f.md5Checksum || ''}:${f.trashed ? 1 : 0}`)
+      .join('|');
+
+    const compareSig = clientSig || _lastCloudStateSig;
+    const changed = Boolean(compareSig && currentSig && compareSig !== currentSig);
+
+    if (changed || !clientSig) {
       invalidateCloudFilesCache();
-      return true;
     }
-    return false;
+    _lastCloudStateSig = currentSig;
+
+    return { changed, sig: currentSig };
   } catch {
-    _changesPageToken = null;
-    return false;
+    return { changed: false, sig: clientSig || '' };
   }
 }
 

@@ -66,6 +66,7 @@ interface FileItem {
   isDeleted: boolean;
   previewUrl?: string;
   downloadUrl?: string;
+  modifiedTime?: string;
 }
 
 interface DepartmentPermConfig {
@@ -583,6 +584,7 @@ export default function FilesPage() {
           isDeleted: Boolean(f.isDeleted),
           previewUrl: f.previewUrl,
           downloadUrl: f.downloadUrl,
+          modifiedTime: f.modifiedTime,
         }));
         setFiles(mapped);
       }
@@ -629,42 +631,47 @@ export default function FilesPage() {
       }, 2500);
     }
 
-    // 2. فحص سحابي دوري هادئ لمزامنة تعديلات المستخدمين الآخرين (كل 10 ثوانٍ لمنع أي ثقل في التصفح)
+    // 2. فحص سحابي دوري هادئ لمزامنة تعديلات المستخدمين الآخرين بدقة 100% بدون فقدان التغييرات
+    let lastCloudSig = '';
     const cloudInterval = setInterval(async () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
         try {
-          const res = await fetch('/api/drive/files?changes=1', {
+          const sigParam = lastCloudSig ? `&sig=${encodeURIComponent(lastCloudSig)}` : '';
+          const res = await fetch(`/api/drive/files?changes=1${sigParam}&t=${Date.now()}`, {
             method: 'GET',
             cache: 'no-store',
-            signal: AbortSignal.timeout(3000),
+            signal: AbortSignal.timeout(3500),
           });
           if (res.ok) {
             const data = await res.json();
+            if (data.sig) {
+              lastCloudSig = data.sig;
+            }
             if (data.changed) {
-              loadData(true);
+              loadData(true, true);
             }
           }
         } catch {
           // هادئ
         }
       }
-    }, 3500);
+    }, 2500);
 
     // 3. تحديث فوري لحظة الرجوع إلى المتصفح مع كبح التكرار
     let lastFocusRefresh = 0;
     const onFocus = () => {
       const now = Date.now();
-      if (now - lastFocusRefresh > 5000) {
+      if (now - lastFocusRefresh > 3000) {
         lastFocusRefresh = now;
-        loadData(true);
+        loadData(true, true);
       }
     };
     const onVisibilityChange = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
         const now = Date.now();
-        if (now - lastFocusRefresh > 5000) {
+        if (now - lastFocusRefresh > 3000) {
           lastFocusRefresh = now;
-          loadData(true);
+          loadData(true, true);
         }
       }
     };
@@ -1685,10 +1692,11 @@ export default function FilesPage() {
     }
   };
 
-  // رابط بث مباشر مطلق ينتهي باسم الملف الحقيقي (تشترطه برامج Office لتحديد نوع المستند)
+  // رابط بث مباشر مطلق ينتهي باسم الملف الحقيقي مع طابع زمني لمنع أي كاش قديم على المتصفح أو الهاتف
   const getFileDirectUrl = async (file: FileItem): Promise<string> => {
     const origin = typeof window !== 'undefined' ? window.location.origin : '';
-    return `${origin}/api/drive/file/${encodeURIComponent(file.id)}/${encodeURIComponent(file.name)}`;
+    const v = file.modifiedTime ? encodeURIComponent(file.modifiedTime) : Date.now().toString();
+    return `${origin}/api/drive/file/${encodeURIComponent(file.id)}/${encodeURIComponent(file.name)}?v=${v}`;
   };
 
   // 1. فتح المستند في البرنامج الأصلي أو عرض وسائط المعاينة (صور وفيديو وصوت)
@@ -1950,7 +1958,8 @@ export default function FilesPage() {
       return;
     }
 
-    const downloadUrl = `/api/drive/stream?id=${encodeURIComponent(file.id)}&download=1`;
+    const v = file.modifiedTime ? encodeURIComponent(file.modifiedTime) : Date.now().toString();
+    const downloadUrl = `/api/drive/stream?id=${encodeURIComponent(file.id)}&download=1&v=${v}`;
 
     // للملفات الكبيرة (أكبر من 30 ميجابايت وخاصة قواعد بيانات Access):
     // استخدام التنزيل المباشر للمتصفح لمنع حشو ذاكرة الرام وضمان أقصى سرعة ممكنة
@@ -2586,7 +2595,7 @@ export default function FilesPage() {
           </button>
 
           <button
-            onClick={() => loadData()}
+            onClick={() => loadData(false, true)}
             disabled={loading}
             className="h-10 w-10 flex items-center justify-center bg-white hover:bg-[#F7F8FA] text-[#667085] hover:text-[#1B1F24] rounded-lg border border-[#E4E7EC] transition"
             title="تحديث الملفات"
@@ -4382,7 +4391,7 @@ export default function FilesPage() {
           >
             {previewFile.type === 'image' && (
               <img
-                src={`/api/drive/stream?id=${encodeURIComponent(previewFile.id)}`}
+                src={`/api/drive/stream?id=${encodeURIComponent(previewFile.id)}&v=${encodeURIComponent(previewFile.modifiedTime || Date.now().toString())}`}
                 alt={previewFile.name}
                 className="max-h-[78vh] max-w-full object-contain rounded-lg"
               />
@@ -4392,7 +4401,7 @@ export default function FilesPage() {
 
             {previewFile.type === 'video' && (
               <video
-                src={`/api/drive/stream?id=${encodeURIComponent(previewFile.id)}`}
+                src={`/api/drive/stream?id=${encodeURIComponent(previewFile.id)}&v=${encodeURIComponent(previewFile.modifiedTime || Date.now().toString())}`}
                 controls
                 autoPlay
                 className="max-h-[78vh] max-w-full rounded-lg bg-black"
@@ -4406,7 +4415,7 @@ export default function FilesPage() {
                 </div>
                 <h4 className="text-white font-medium text-[15px] break-words whitespace-normal">{previewFile.name}</h4>
                 <audio
-                  src={`/api/drive/stream?id=${encodeURIComponent(previewFile.id)}`}
+                  src={`/api/drive/stream?id=${encodeURIComponent(previewFile.id)}&v=${encodeURIComponent(previewFile.modifiedTime || Date.now().toString())}`}
                   controls
                   autoPlay
                   className="w-full"

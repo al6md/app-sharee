@@ -83,7 +83,9 @@ export async function HEAD(req: NextRequest) {
     resHeaders.set('Access-Control-Allow-Origin', '*');
     resHeaders.set('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
     resHeaders.set('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Content-Disposition, Accept-Ranges, X-File-Size, X-File-Name');
-    resHeaders.set('Cache-Control', 'private, max-age=300');
+    resHeaders.set('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
+    resHeaders.set('Pragma', 'no-cache');
+    resHeaders.set('Expires', '0');
 
     if (meta.size) {
       resHeaders.set('Content-Length', String(meta.size));
@@ -133,7 +135,9 @@ export async function GET(req: NextRequest) {
     resHeaders.set('Access-Control-Allow-Origin', '*');
     resHeaders.set('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
     resHeaders.set('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Content-Disposition, Accept-Ranges, X-File-Size, X-File-Name');
-    resHeaders.set('Cache-Control', 'private, max-age=300');
+    resHeaders.set('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
+    resHeaders.set('Pragma', 'no-cache');
+    resHeaders.set('Expires', '0');
 
     const contentLength = upstreamRes.headers.get('content-length');
     if (contentLength) {
