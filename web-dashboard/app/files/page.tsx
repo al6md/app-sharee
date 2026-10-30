@@ -600,36 +600,33 @@ export default function FilesPage() {
   useEffect(() => {
     loadData(false);
 
-    // 1. مزامنة فائقة السرعة مع جسر تطبيق الحاسوب المحلي (فقط عند العمل على بروتوكول HTTP لتفادي Mixed Content)
-    const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
+    // 1. مزامنة فائقة السرعة مع جسر تطبيق الحاسوب المحلي
     let lastKnownBridgeSync = 0;
     let bridgeInterval: any = null;
 
-    if (!isHttps) {
-      bridgeInterval = setInterval(async () => {
-        try {
-          const bridgeRes = await fetch('http://127.0.0.1:18290/status', {
-            method: 'GET',
-            mode: 'cors',
-            cache: 'no-store',
-            signal: AbortSignal.timeout(1000),
-          });
-          if (bridgeRes.ok) {
-            const info = await bridgeRes.json();
-            const bridgeTs = Number(info.last_sync_time || 0);
-            if (bridgeTs > 0 && bridgeTs > lastKnownBridgeSync) {
-              if (lastKnownBridgeSync !== 0) {
-                // تم حفظ ورفع تعديلات من تطبيق الحاسوب فورياً!
-                loadData(true);
-              }
-              lastKnownBridgeSync = bridgeTs;
+    bridgeInterval = setInterval(async () => {
+      try {
+        const bridgeRes = await fetch('http://127.0.0.1:18290/status', {
+          method: 'GET',
+          mode: 'cors',
+          cache: 'no-store',
+          signal: AbortSignal.timeout(1000),
+        });
+        if (bridgeRes.ok) {
+          const info = await bridgeRes.json();
+          const bridgeTs = Number(info.last_sync_time || 0);
+          if (bridgeTs > 0 && bridgeTs > lastKnownBridgeSync) {
+            if (lastKnownBridgeSync !== 0) {
+              // تم حفظ ورفع تعديلات من تطبيق الحاسوب فورياً!
+              loadData(true);
             }
+            lastKnownBridgeSync = bridgeTs;
           }
-        } catch {
-          // الجسر المحلي غير متاح
         }
-      }, 2500);
-    }
+      } catch {
+        // الجسر المحلي غير متاح
+      }
+    }, 2500);
 
     // 2. فحص سحابي دوري هادئ لمزامنة تعديلات المستخدمين الآخرين بدقة 100% بدون فقدان التغييرات
     let lastCloudSig = '';
@@ -690,10 +687,7 @@ export default function FilesPage() {
   // إشعار تطبيق سطح المكتب المحلي بالمزامنة الفورية بعد أي عملية رفع أو تعديل عبر الويب
   const notifyLocalDesktopSync = () => {
     try {
-      const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
-      if (!isHttps) {
-        fetch('http://127.0.0.1:18290/sync', { method: 'GET', mode: 'cors' }).catch(() => {});
-      }
+      fetch('http://127.0.0.1:18290/sync', { method: 'GET', mode: 'cors' }).catch(() => {});
     } catch {
       // تجاهل في حال كان المستخدم يتصفح من الهاتف أو جهاز آخر
     }
@@ -1758,7 +1752,7 @@ export default function FilesPage() {
   // فتح الملف في برنامجه الأصلي على جهاز المستخدم (بدون أي تطبيق مساعد)
   const openNativeFile = async (file: FileItem) => {
     const fileUrl = await getFileDirectUrl(file);
-    const downloadUrl = `${fileUrl}?download=1`;
+    const downloadUrl = fileUrl.includes('?') ? `${fileUrl}&download=1` : `${fileUrl}?download=1`;
     const ext = file.name.split('.').pop()?.toLowerCase() || '';
 
     // الهواتف المحمولة
@@ -1774,29 +1768,36 @@ export default function FilesPage() {
     }
 
     // 1. محاولة فتح الملف عبر تطبيق سطح المكتب المرافق وجسره المحلي لضمان المزامنة الفورية عند الحفظ Ctrl+S
-    const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
-    if (!isHttps) {
-      try {
-        const bridgeUrl = `http://127.0.0.1:18290/open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}&storage_path=${encodeURIComponent(file.storagePath || file.id || '')}`;
-        const bridgeRes = await fetch(bridgeUrl, {
-          method: 'GET',
-          mode: 'cors',
-          cache: 'no-store',
-          signal: AbortSignal.timeout(1200),
-        });
-        if (bridgeRes.ok) {
-          const bData = await bridgeRes.json();
-          if (bData.success) {
-            setToastMessage({
-              text: `🚀 تم فتح "${file.name}" في البرنامج الأصلي. أي تعديل بـ Ctrl+S سيُزامن فورياً!`,
-              type: 'info'
-            });
-            return;
-          }
+    try {
+      const bridgeUrl = `http://127.0.0.1:18290/open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}&storage_path=${encodeURIComponent(file.storagePath || file.id || '')}`;
+      const bridgeRes = await fetch(bridgeUrl, {
+        method: 'GET',
+        mode: 'cors',
+        cache: 'no-store',
+        signal: AbortSignal.timeout(1500),
+      });
+      if (bridgeRes.ok) {
+        const bData = await bridgeRes.json();
+        if (bData.success) {
+          setToastMessage({
+            text: `🚀 تم فتح "${file.name}" في البرنامج الأصلي. أي تعديل بـ Ctrl+S سيُزامن فورياً على نفس الملف!`,
+            type: 'info'
+          });
+          return;
         }
-      } catch {
-        // الجسر المحلي غير متاح أو المستخدم على جهاز آخر
       }
+    } catch {
+      // إذا كان المتصفح يمنع طلبات HTTP من HTTPS، نمرر عبر بروتوكول sharecoc:// المسجل بنظام ويندوز
+      try {
+        const shareCocUri = `sharecoc://open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}&storage_path=${encodeURIComponent(file.storagePath || file.id || '')}`;
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        iframe.src = shareCocUri;
+        document.body.appendChild(iframe);
+        setTimeout(() => {
+          try { document.body.removeChild(iframe); } catch {}
+        }, 1500);
+      } catch {}
     }
 
     // بروتوكولات Microsoft Office الرسمية المثبتة مع Office في ويندوز
@@ -1813,10 +1814,9 @@ export default function FilesPage() {
       setToastMessage({ text: `⏳ جاري فتح "${file.name}" في ${appName}...`, type: 'info' });
       launchExternalProtocol(`${scheme}:ofe|u|${fileUrl}`, () => {
         setToastMessage({
-          text: `⚠️ لم يستجب ${appName}. تم تنزيل نسخة من الملف بدلاً من ذلك، افتحها من مجلد التنزيلات.`,
-          type: 'error'
+          text: `ℹ️ إذا لم يفتح ${appName} تلقائياً، يمكنك تنزيل نسخة يدوياً من زر التنزيل.`,
+          type: 'info'
         });
-        triggerBrowserDownload(downloadUrl, file.name);
       });
       return;
     }

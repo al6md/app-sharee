@@ -41,10 +41,13 @@ const EXT_MIME_MAP: Record<string, string> = {
 
 export async function OPTIONS() {
   const headers = new Headers();
-  headers.set('Allow', 'GET, HEAD, OPTIONS');
+  headers.set('DAV', '1, 2');
+  headers.set('MS-Author-Via', 'DAV');
+  headers.set('Allow', 'GET, HEAD, POST, OPTIONS, PUT, PROPFIND, LOCK, UNLOCK');
   headers.set('Access-Control-Allow-Origin', '*');
-  headers.set('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  headers.set('Access-Control-Allow-Methods', 'GET, HEAD, POST, OPTIONS, PUT, PROPFIND, LOCK, UNLOCK');
   headers.set('Access-Control-Allow-Headers', '*');
+  headers.set('Access-Control-Expose-Headers', 'DAV, MS-Author-Via, Lock-Token, Content-Length, Content-Range, Content-Disposition, Accept-Ranges, X-File-Size, X-File-Name');
   headers.set('Access-Control-Max-Age', '86400');
   return new NextResponse(null, { status: 204, headers });
 }

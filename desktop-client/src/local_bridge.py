@@ -6,6 +6,7 @@ Local Companion Bridge Server (Port 18290)
 import os
 import sys
 import json
+import time
 import subprocess
 import urllib.parse
 import threading
@@ -14,6 +15,7 @@ from pathlib import Path
 import winreg
 
 from office_handler import OfficeHandler
+from gdrive_client import norm_rel
 
 BRIDGE_PORT = 18290
 

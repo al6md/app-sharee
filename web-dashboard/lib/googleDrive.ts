@@ -847,6 +847,30 @@ export async function uploadFileToDrive(
 }
 
 /**
+ * تحديث محتوى ملف موجود مباشرة في Google Drive (لحفظ تعديلات WebDAV و Ctrl+S المباشرة من Office)
+ */
+export async function updateDriveFileContent(
+  fileId: string,
+  buffer: Buffer,
+  mimeType?: string
+) {
+  const stream = new Readable();
+  stream.push(buffer);
+  stream.push(null);
+
+  invalidateCloudFilesCache();
+  const res = await drive.files.update({
+    fileId,
+    media: {
+      mimeType: mimeType || 'application/octet-stream',
+      body: stream,
+    },
+    fields: 'id, name, size, modifiedTime, webViewLink, webContentLink',
+  });
+  return res.data;
+}
+
+/**
  * بدء جلسة رفع مجزأ قابلة للاستئناف (Resumable Upload Session) لدعم الملفات الكبيرة والمجلدات دون قيود حجم الطلب
  */
 export async function initResumableUpload(params: {

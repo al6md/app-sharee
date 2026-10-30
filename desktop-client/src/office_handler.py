@@ -240,6 +240,19 @@ class OfficeHandler:
 
         path_str = str(path)
 
+        # التأكد من إزالة سمة القراءة فقط لضمان فتح الملف في وضع التحرير والحفظ المباشر
+        try:
+            import stat
+            os.chmod(path_str, stat.S_IWRITE | stat.S_IREAD)
+            if sys.platform == 'win32':
+                import ctypes
+                FILE_ATTRIBUTE_READONLY = 0x00000001
+                attrs = ctypes.windll.kernel32.GetFileAttributesW(path_str)
+                if attrs != -1 and (attrs & FILE_ATTRIBUTE_READONLY):
+                    ctypes.windll.kernel32.SetFileAttributesW(path_str, attrs & ~FILE_ATTRIBUTE_READONLY)
+        except Exception:
+            pass
+
         if sys.platform == 'win32':
             # التحقق أولاً من وجود المسار المباشر للبرنامج (Word / Excel / Access)
             exe_path = OfficeHandler.get_office_executable(path.suffix)
