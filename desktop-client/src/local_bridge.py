@@ -227,6 +227,36 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"success": False, "error": "file not found"}).encode('utf-8'))
             return
 
+        if path == '/file-status':
+            file_name = params.get('file', [''])[0].strip()
+            folder_name = params.get('folder', [''])[0].strip()
+            target_path = self._find_local_file(file_name, folder_name)
+            if target_path and target_path.exists():
+                try:
+                    stat = target_path.stat()
+                    self._set_headers(200)
+                    self.wfile.write(json.dumps({
+                        "success": True,
+                        "exists": True,
+                        "mtime": stat.st_mtime,
+                        "size": stat.st_size,
+                        "last_sync_time": getattr(LocalBridgeHandler, "last_sync_time", 0.0),
+                        "last_synced_file": getattr(LocalBridgeHandler, "last_synced_file", ""),
+                        "path": str(target_path)
+                    }, ensure_ascii=False).encode('utf-8'))
+                except Exception as e:
+                    self._set_headers(500)
+                    self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode('utf-8'))
+            else:
+                self._set_headers(200)
+                self.wfile.write(json.dumps({
+                    "success": True,
+                    "exists": False,
+                    "last_sync_time": getattr(LocalBridgeHandler, "last_sync_time", 0.0),
+                    "last_synced_file": getattr(LocalBridgeHandler, "last_synced_file", "")
+                }).encode('utf-8'))
+            return
+
         self._set_headers(404)
         self.wfile.write(json.dumps({"error": "endpoint not found"}).encode('utf-8'))
 

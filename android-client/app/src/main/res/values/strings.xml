@@ -1,0 +1,18 @@
+<resources>
+    <string name="app_name">Share COC</string>
+    <string name="app_full_title">منظومة تبادل وأرشفة مستندات غرفة تجارة كربلاء المقدسة</string>
+    <string name="status_synced">🟢 متزامن مع Google Drive</string>
+    <string name="status_syncing">🟡 جارٍ المزامنة والرفع...</string>
+    <string name="status_offline">⏳ بدون اتصال (طابور الحفظ المحلي)</string>
+    <string name="status_locked">🔒 محجوز حصرياً</string>
+    <string name="btn_open_office">فتح في تطبيق Office</string>
+    <string name="btn_open_remote_pc">افتح على حاسوب المكتب</string>
+    <string name="btn_scan_document">مسح مستند بالكاميرا</string>
+    <string name="btn_upload_file">رفع ملف جديد</string>
+    <string name="btn_lock_access">حجز قاعدة البيانات</string>
+    <string name="btn_unlock_access">فك حجز قاعدة البيانات</string>
+    <string name="pin_prompt_title">القسم محمي برمز مرور</string>
+    <string name="pin_prompt_desc">يرجى إدخال رمز PIN أو المصادقة بالبصمة للوصول لهذا القسم</string>
+    <string name="biometric_title">تأكيد الهوية</string>
+    <string name="biometric_subtitle">استخدم بصمة الإصبع أو الوجه لفتح الملفات الحساسة</string>
+</resources>

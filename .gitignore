@@ -66,5 +66,15 @@ web-dashboard/public/FileExchange_Latest.exe
 web-dashboard/public/FileExchange_Updated.exe
 web-dashboard/public/ShareCOC_Setup.exe
 
+# Android build artifacts
+.gradle/
+**/build/
+**/local.properties
+*.aab
+android-client/.gradle/
+android-client/local.properties
+android-client/build/
+android-client/app/build/
+
 # Agent metadata
 .gemini/

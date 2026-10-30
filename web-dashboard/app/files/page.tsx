@@ -285,6 +285,18 @@ export default function FilesPage() {
   const [isDraggingOver, setIsDraggingOver] = useState<boolean>(false);
   const dragCounterRef = useRef<number>(0);
 
+  // حالة محرك مراقبة التعديلات اللحظية والمزامنة التلقائية فور الحفظ (Live Auto-Sync Watcher)
+  const [activeWatchedFile, setActiveWatchedFile] = useState<FileItem | null>(null);
+  const [activeWatchedSource, setActiveWatchedSource] = useState<'bridge' | 'filesystem' | 'mobile' | null>(null);
+  const [autoSyncStatus, setAutoSyncStatus] = useState<string>('');
+  const [autoSyncCount, setAutoSyncCount] = useState<number>(0);
+  const [isAutoSyncing, setIsAutoSyncing] = useState<boolean>(false);
+  const liveWatcherIntervalRef = useRef<any>(null);
+  const activeFileHandleRef = useRef<any>(null);
+  const lastObservedMtimeRef = useRef<number>(0);
+  const isAutoSyncRunningRef = useRef<boolean>(false);
+  const mobileWatchFileInputRef = useRef<HTMLInputElement>(null);
+
   // حالة شريط ومؤشر تقدم الرفع والتنزيل السحابي الحقيقي واللحظي (النسبة % + الميغابايت MB + سرعة الإنترنت MB/s)
   interface PreciseUploadProgress {
     show: boolean;
@@ -678,6 +690,7 @@ export default function FilesPage() {
 
     return () => {
       if (bridgeInterval) clearInterval(bridgeInterval);
+      if (liveWatcherIntervalRef.current) clearInterval(liveWatcherIntervalRef.current);
       clearInterval(cloudInterval);
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisibilityChange);
@@ -1003,6 +1016,214 @@ export default function FilesPage() {
     } finally {
       setActionLoading(false);
       if (event.target) event.target.value = '';
+    }
+  };
+
+  // ========================================================
+  // محرك مراقبة التعديلات اللحظية والمزامنة التلقائية فور الحفظ (Live Auto-Sync Engine)
+  // ========================================================
+  const stopWatching = () => {
+    if (liveWatcherIntervalRef.current) {
+      clearInterval(liveWatcherIntervalRef.current);
+      liveWatcherIntervalRef.current = null;
+    }
+    activeFileHandleRef.current = null;
+    lastObservedMtimeRef.current = 0;
+    isAutoSyncRunningRef.current = false;
+    const previous = activeWatchedFile?.name;
+    setActiveWatchedFile(null);
+    setActiveWatchedSource(null);
+    setAutoSyncStatus('');
+    setIsAutoSyncing(false);
+    if (previous) {
+      setToastMessage({
+        text: `تم إيقاف المراقبة التلقائية للمستند "${previous}".`,
+        type: 'info'
+      });
+    }
+  };
+
+  // 1. مراقبة التعديلات اللحظية عبر جسر تطبيق الحاسوب (Port 18290)
+  const startLiveBridgeWatcher = async (file: FileItem) => {
+    stopWatching();
+    setActiveWatchedFile(file);
+    setActiveWatchedSource('bridge');
+    setAutoSyncStatus('🟢 المراقبة نشطة: بانتظار رصد الحفظ (Ctrl+S) في Office...');
+    setAutoSyncCount(0);
+    isAutoSyncRunningRef.current = false;
+
+    // استعلام مبدئي لتحديد وقت التعديل الأساسي
+    try {
+      const res = await fetch(`http://127.0.0.1:18290/file-status?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}`, {
+        mode: 'cors',
+        cache: 'no-store',
+        signal: AbortSignal.timeout(1200)
+      });
+      if (res.ok) {
+        const info = await res.json();
+        lastObservedMtimeRef.current = Number(info.mtime || 0);
+      }
+    } catch {
+      lastObservedMtimeRef.current = Date.now() / 1000;
+    }
+
+    // بدء حلقة المراقبة فائقة التردد (كل 600 ميلي ثانية)
+    liveWatcherIntervalRef.current = setInterval(async () => {
+      if (isAutoSyncRunningRef.current) return;
+      try {
+        const res = await fetch(`http://127.0.0.1:18290/file-status?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}`, {
+          mode: 'cors',
+          cache: 'no-store',
+          signal: AbortSignal.timeout(1000)
+        });
+        if (res.ok) {
+          const info = await res.json();
+          const currentMtime = Number(info.mtime || 0);
+
+          // تم تعديل وحفظ الملف محلياً بـ Ctrl+S!
+          if (currentMtime > 0 && lastObservedMtimeRef.current > 0 && currentMtime > lastObservedMtimeRef.current) {
+            isAutoSyncRunningRef.current = true;
+            lastObservedMtimeRef.current = currentMtime;
+            setIsAutoSyncing(true);
+            setAutoSyncStatus(`🟡 تم اكتشاف حفظ (Ctrl+S)! جاري المزامنة السحابية الفورية...`);
+
+            setToastMessage({
+              text: `⚡ تم رصد حفظ جديد للمستند "${file.name}"! جاري المزامنة مع Google Drive...`,
+              type: 'info'
+            });
+
+            // مهلة 400ms لفك مقبض أوفيس ثم طلب مزامنة الجسر وتحديث السحابة
+            setTimeout(async () => {
+              try {
+                await fetch('http://127.0.0.1:18290/sync', { mode: 'cors' }).catch(() => {});
+                await new Promise(r => setTimeout(r, 900));
+                await loadData(true, true);
+                setAutoSyncCount(prev => prev + 1);
+                const timeStr = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                setAutoSyncStatus(`🟢 تمت المزامنة التلقائية بنجاح في ${timeStr}`);
+                setToastMessage({
+                  text: `🎉 تم حفظ وتحديث "${file.name}" ومزامنته سحابياً فورياً!`,
+                  type: 'success'
+                });
+              } finally {
+                setIsAutoSyncing(false);
+                isAutoSyncRunningRef.current = false;
+              }
+            }, 500);
+          }
+        }
+      } catch {
+        // الجسر غير متاح مؤقتاً
+      }
+    }, 600);
+  };
+
+  // 2. مراقبة التعديلات المباشرة من المتصفح عبر Web File System Access API
+  const startNativeFileSystemWatcher = async (file: FileItem) => {
+    // التحقق من دعم المتصفح لميزة File System Access API
+    if (typeof window === 'undefined' || !(window as any).showOpenFilePicker) {
+      triggerUpdateFile(file);
+      return;
+    }
+
+    try {
+      setToastMessage({
+        text: `📂 يرجى اختيار ملف "${file.name}" من جهازك لتفعيل المراقبة اللحظية عند الحفظ...`,
+        type: 'info'
+      });
+
+      const [handle] = await (window as any).showOpenFilePicker({
+        multiple: false,
+        types: [{
+          description: 'Office Documents',
+          accept: {
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
+            'application/msword': ['.doc'],
+            'application/vnd.ms-excel': ['.xls'],
+            'application/pdf': ['.pdf'],
+            'application/vnd.ms-powerpoint': ['.ppt', '.pptx'],
+            'application/octet-stream': ['.*']
+          }
+        }]
+      });
+
+      if (!handle) return;
+
+      const initialFile = await handle.getFile();
+      stopWatching();
+
+      activeFileHandleRef.current = handle;
+      lastObservedMtimeRef.current = initialFile.lastModified;
+      setActiveWatchedFile(file);
+      setActiveWatchedSource('filesystem');
+      setAutoSyncStatus('🟢 مراقبة المتصفح نشطة: احفظ في Word/Excel بـ Ctrl+S وسيُرفع فوراً');
+      setAutoSyncCount(0);
+      isAutoSyncRunningRef.current = false;
+
+      setToastMessage({
+        text: `🎯 تم تفعيل مراقبة "${file.name}"! أي حفظ (Ctrl+S) في جهازك سيُزامن تلقائياً دون أي ضغطة زر!`,
+        type: 'success'
+      });
+
+      // تشغيل المراقبة اللحظية عبر فحص lastModified
+      liveWatcherIntervalRef.current = setInterval(async () => {
+        if (isAutoSyncRunningRef.current) return;
+        try {
+          const currentFile = await handle.getFile();
+          if (currentFile.lastModified > lastObservedMtimeRef.current) {
+            isAutoSyncRunningRef.current = true;
+            lastObservedMtimeRef.current = currentFile.lastModified;
+            setIsAutoSyncing(true);
+            setAutoSyncStatus(`🟡 تم اكتشاف حفظ بـ Ctrl+S! جاري الرفع التلقائي لـ Google Drive...`);
+
+            setToastMessage({
+              text: `⚡ تم رصد حفظ جديد للمستند "${file.name}"! جاري الرفع التلقائي...`,
+              type: 'info'
+            });
+
+            // مهلة 450ms ثم الرفع التلقائي
+            setTimeout(async () => {
+              try {
+                const targetPath = file.folder && file.folder !== 'القسم العام' ? file.folder : '';
+                const folderId = (targetPath && folderMap[targetPath]) || '';
+
+                await uploadFileRobustly(
+                  currentFile,
+                  file.name,
+                  {
+                    folderId: folderId || undefined,
+                    folderPath: targetPath || undefined
+                  }
+                );
+
+                notifyLocalDesktopSync();
+                await loadData(true, true);
+                setAutoSyncCount(prev => prev + 1);
+                const timeStr = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                setAutoSyncStatus(`🟢 تمت المزامنة التلقائية بنجاح في ${timeStr}`);
+                setToastMessage({
+                  text: `🎉 تم حفظ وتحديث "${file.name}" في Google Drive بنجاح!`,
+                  type: 'success'
+                });
+              } catch (err: any) {
+                console.error('Auto sync error:', err);
+                setAutoSyncStatus(`🔴 فشل الرفع التلقائي: ${err.message || err}`);
+              } finally {
+                setIsAutoSyncing(false);
+                isAutoSyncRunningRef.current = false;
+              }
+            }, 450);
+          }
+        } catch (e) {
+          // خطأ وصول للملف
+        }
+      }, 600);
+
+    } catch (e: any) {
+      if (e.name !== 'AbortError') {
+        console.error('Error starting file system watcher:', e);
+      }
     }
   };
 
@@ -1779,8 +2000,9 @@ export default function FilesPage() {
       if (bridgeRes.ok) {
         const bData = await bridgeRes.json();
         if (bData.success) {
+          startLiveBridgeWatcher(file);
           setToastMessage({
-            text: `🚀 تم فتح "${file.name}" في البرنامج الأصلي. أي تعديل بـ Ctrl+S سيُزامن فورياً على نفس الملف!`,
+            text: `🚀 تم فتح "${file.name}" وتفعيل المراقبة اللحظية. أي تعديل بـ Ctrl+S سيُزامن فورياً وتلقائياً!`,
             type: 'info'
           });
           return;
@@ -1848,6 +2070,11 @@ export default function FilesPage() {
         lastModified: Date.now()
       });
 
+      // تفعيل جلسة مراقبة الموبايل تلقائياً فور تشغيل الملف بتطبيق الهاتف
+      setActiveWatchedFile(file);
+      setActiveWatchedSource('mobile');
+      setAutoSyncStatus('📱 تم تشغيل الملف بالهاتف: احفظ التعديل ثم اضغط "رفع التعديل" ليُزامن فوراً');
+
       if (typeof navigator !== 'undefined' && navigator.canShare && navigator.canShare({ files: [fileObj] })) {
         await navigator.share({
           files: [fileObj],
@@ -1902,6 +2129,66 @@ export default function FilesPage() {
     }
   };
 
+  // 3. مراقبة التعديلات لمتصفح الموبايل والأجهزة الذكية (Mobile Browser Auto-Sync)
+  const startMobileBrowserWatcher = async (file: FileItem) => {
+    stopWatching();
+    setActiveWatchedFile(file);
+    setActiveWatchedSource('mobile');
+    setAutoSyncStatus('📱 مراقبة الهاتف نشطة: بعد الحفظ في Word/Excel اضغط "رفع التعديل" ليُزامن فوراً');
+    setAutoSyncCount(0);
+    isAutoSyncRunningRef.current = false;
+
+    setToastMessage({
+      text: `📱 تم تفعيل مراقبة "${file.name}"! جاري فتح الملف في تطبيق هاتفك...`,
+      type: 'info'
+    });
+
+    await handleOpenInMobileApp(file);
+  };
+
+  // الموجه الذكي لبدء المراقبة اللحظية بحسب منصة المستخدم (حاسوب شخصي / متصفح / هاتف محمول)
+  const startSmartWatcher = (file: FileItem) => {
+    if (activeWatchedFile?.id === file.id) {
+      stopWatching();
+      return;
+    }
+    // إذا كان المتصفح يدعم File System Access API (مثل Chrome و Edge على الحاسوب)
+    if (typeof window !== 'undefined' && (window as any).showOpenFilePicker) {
+      startNativeFileSystemWatcher(file);
+    } else {
+      // متصفح الهاتف أو الأجهزة التي لا تدعم مقبض الملفات المباشر
+      startMobileBrowserWatcher(file);
+    }
+  };
+
+  // استشعار عودة المستخدم لمتصفح الموبايل بعد التعديل في تطبيقات الهاتف (Word / Excel / WPS)
+  useEffect(() => {
+    const handleReturnToMobileBrowser = () => {
+      if (document.visibilityState === 'visible' && activeWatchedSource === 'mobile' && activeWatchedFile) {
+        setToastMessage({
+          text: `📱 تم رصد عودتك من تطبيق التعديل! اضغط الزر العائم لرفع وحفظ التعديلات في Google Drive فوراً ⚡`,
+          type: 'info'
+        });
+      }
+    };
+
+    const handleWindowFocus = () => {
+      if (activeWatchedSource === 'mobile' && activeWatchedFile) {
+        setToastMessage({
+          text: `📱 تم رصد عودتك من تطبيق التعديل! اضغط الزر العائم لرفع وحفظ التعديلات في Google Drive فوراً ⚡`,
+          type: 'info'
+        });
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleReturnToMobileBrowser);
+    window.addEventListener('focus', handleWindowFocus);
+    return () => {
+      document.removeEventListener('visibilitychange', handleReturnToMobileBrowser);
+      window.removeEventListener('focus', handleWindowFocus);
+    };
+  }, [activeWatchedSource, activeWatchedFile]);
+
   // 2. فتح المستند في تطبيقات الهاتف المختلفة أو مشاركته (Web Share API)
   const handleShareFile = async (file: FileItem) => {
     try {
@@ -1916,6 +2203,11 @@ export default function FilesPage() {
         type: blob.type || 'application/octet-stream',
         lastModified: Date.now()
       });
+
+      // تفعيل جلسة مراقبة الموبايل تلقائياً فور تشغيل الملف بتطبيق الهاتف
+      setActiveWatchedFile(file);
+      setActiveWatchedSource('mobile');
+      setAutoSyncStatus('📱 تم تشغيل الملف بالهاتف: احفظ التعديل ثم اضغط "رفع التعديل" ليُزامن فوراً');
 
       if (typeof navigator !== 'undefined' && navigator.canShare && navigator.canShare({ files: [fileObj] })) {
         await navigator.share({
@@ -3093,15 +3385,31 @@ export default function FilesPage() {
                     </button>
 
                     {activeTab === 'ACTIVE' && canEditFolder(file.folder) && ['word', 'excel', 'file', 'pdf'].includes(file.type) && (
-                      <button
-                        onClick={() => triggerUpdateFile(file)}
-                        disabled={actionLoading}
-                        className="h-9 px-2.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-semibold rounded-lg transition flex items-center gap-1 shrink-0"
-                        title="رفع نسخة معدلة وحفظ التعديلات"
-                      >
-                        <UploadCloud className="w-3.5 h-3.5" />
-                        <span>تحديث</span>
-                      </button>
+                      <>
+                        <button
+                          onClick={() => startSmartWatcher(file)}
+                          disabled={actionLoading}
+                          className={`h-9 px-2.5 text-xs font-semibold rounded-lg transition flex items-center gap-1 shrink-0 ${
+                            activeWatchedFile?.id === file.id
+                              ? 'bg-emerald-100 text-emerald-900 border border-emerald-300 animate-pulse'
+                              : 'bg-emerald-50 hover:bg-emerald-100 text-[#14372e] border border-emerald-200'
+                          }`}
+                          title="مراقبة تعديلات وحفظ هذا المستند ومزامنته فورياً في الحاسوب والمتصفح والهاتف"
+                        >
+                          <Zap className={`w-3.5 h-3.5 ${activeWatchedFile?.id === file.id ? 'text-emerald-700' : 'text-amber-500'}`} />
+                          <span>{activeWatchedFile?.id === file.id ? 'مُراقب' : 'مراقبة Ctrl+S'}</span>
+                        </button>
+
+                        <button
+                          onClick={() => triggerUpdateFile(file)}
+                          disabled={actionLoading}
+                          className="h-9 px-2.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-semibold rounded-lg transition flex items-center gap-1 shrink-0"
+                          title="رفع نسخة معدلة وحفظ التعديلات"
+                        >
+                          <UploadCloud className="w-3.5 h-3.5" />
+                          <span>تحديث</span>
+                        </button>
+                      </>
                     )}
 
                     {canDownloadFolder(file.folder) && (
@@ -3248,14 +3556,30 @@ export default function FilesPage() {
                     </button>
 
                     {activeTab === 'ACTIVE' && canEditFolder(file.folder) && ['word', 'excel', 'file', 'pdf'].includes(file.type) && (
-                      <button
-                        onClick={() => triggerUpdateFile(file)}
-                        disabled={actionLoading}
-                        className="h-9 flex items-center justify-center gap-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-semibold px-3 rounded-lg transition shrink-0"
-                      >
-                        <UploadCloud className="w-3.5 h-3.5" />
-                        <span>حفظ التعديلات</span>
-                      </button>
+                      <>
+                        <button
+                          onClick={() => startSmartWatcher(file)}
+                          disabled={actionLoading}
+                          className={`h-9 flex items-center justify-center gap-1 text-xs font-semibold px-2.5 rounded-lg transition shrink-0 ${
+                            activeWatchedFile?.id === file.id
+                              ? 'bg-emerald-100 text-emerald-900 border border-emerald-300 animate-pulse'
+                              : 'bg-emerald-50 hover:bg-emerald-100 text-[#14372e] border border-emerald-200'
+                          }`}
+                          title="مراقبة التعديل والمزامنة التلقائية فور الحفظ"
+                        >
+                          <Zap className={`w-3.5 h-3.5 ${activeWatchedFile?.id === file.id ? 'text-emerald-700' : 'text-amber-500'}`} />
+                          <span>{activeWatchedFile?.id === file.id ? 'مُراقب' : 'مراقبة'}</span>
+                        </button>
+
+                        <button
+                          onClick={() => triggerUpdateFile(file)}
+                          disabled={actionLoading}
+                          className="h-9 flex items-center justify-center gap-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-semibold px-3 rounded-lg transition shrink-0"
+                        >
+                          <UploadCloud className="w-3.5 h-3.5" />
+                          <span>تحديث</span>
+                        </button>
+                      </>
                     )}
 
                     <button
@@ -3440,14 +3764,30 @@ export default function FilesPage() {
                           </button>
 
                           {activeTab === 'ACTIVE' && canEditFolder(file.folder) && ['word', 'excel', 'file', 'pdf'].includes(file.type) && (
-                            <button
-                              onClick={() => triggerUpdateFile(file)}
-                              className="h-8 flex items-center gap-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-semibold px-2.5 rounded-lg transition"
-                              title="رفع نسخة معدلة وحفظ التعديلات في السحابة"
-                            >
-                              <UploadCloud className="w-3.5 h-3.5" />
-                              <span>حفظ التعديلات</span>
-                            </button>
+                            <>
+                              <button
+                                onClick={() => startSmartWatcher(file)}
+                                disabled={actionLoading}
+                                className={`h-8 flex items-center gap-1 text-xs font-semibold px-2.5 rounded-lg transition ${
+                                  activeWatchedFile?.id === file.id
+                                    ? 'bg-emerald-100 text-emerald-900 border border-emerald-300 animate-pulse'
+                                    : 'bg-emerald-50 hover:bg-emerald-100 text-[#14372e] border border-emerald-200'
+                                }`}
+                                title="مراقبة تعديلات وحفظ هذا المستند ومزامنته فورياً في الحاسوب والمتصفح والهاتف"
+                              >
+                                <Zap className={`w-3.5 h-3.5 ${activeWatchedFile?.id === file.id ? 'text-emerald-700' : 'text-amber-500'}`} />
+                                <span>{activeWatchedFile?.id === file.id ? 'مُراقب' : 'مراقبة Ctrl+S'}</span>
+                              </button>
+
+                              <button
+                                onClick={() => triggerUpdateFile(file)}
+                                className="h-8 flex items-center gap-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-semibold px-2.5 rounded-lg transition"
+                                title="رفع نسخة معدلة وحفظ التعديلات في السحابة"
+                              >
+                                <UploadCloud className="w-3.5 h-3.5" />
+                                <span>تحديث</span>
+                              </button>
+                            </>
                           )}
 
                           {['word', 'excel'].includes(file.type) && (
@@ -4422,6 +4762,138 @@ export default function FilesPage() {
                 />
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* مدخل ملفات خفي لمزامنة تعديلات متصفح الموبايل بنقرة واحدة فور الحفظ */}
+      <input
+        ref={mobileWatchFileInputRef}
+        type="file"
+        className="hidden"
+        onChange={async (e) => {
+          const pickedFile = e.target.files?.[0];
+          if (!pickedFile || !activeWatchedFile) return;
+          try {
+            setIsAutoSyncing(true);
+            setAutoSyncStatus(`🟡 جاري رفع ومزامنة التعديل لـ "${activeWatchedFile.name}" مع Google Drive...`);
+            setToastMessage({
+              text: `⚡ جاري مزامنة التعديل فوراً مع السحابة...`,
+              type: 'info'
+            });
+
+            const targetPath = activeWatchedFile.folder && activeWatchedFile.folder !== 'القسم العام' ? activeWatchedFile.folder : '';
+            const folderId = (targetPath && folderMap[targetPath]) || '';
+
+            await uploadFileRobustly(
+              pickedFile,
+              activeWatchedFile.name,
+              {
+                folderId: folderId || undefined,
+                folderPath: targetPath || undefined
+              }
+            );
+
+            notifyLocalDesktopSync();
+            await loadData(true, true);
+            setAutoSyncCount(prev => prev + 1);
+            const timeStr = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            setAutoSyncStatus(`🟢 تمت المزامنة التلقائية بنجاح في ${timeStr}`);
+            setToastMessage({
+              text: `🎉 تم حفظ وتحديث "${activeWatchedFile.name}" في Google Drive بنجاح!`,
+              type: 'success'
+            });
+          } catch (err: any) {
+            console.error('Mobile auto sync upload error:', err);
+            setAutoSyncStatus(`🔴 فشل الرفع: ${err.message || err}`);
+            setToastMessage({
+              text: `تعذر إتمام المزامنة: ${err.message || err}`,
+              type: 'error'
+            });
+          } finally {
+            setIsAutoSyncing(false);
+            if (e.target) e.target.value = '';
+          }
+        }}
+      />
+
+      {/* 8.5. الودجت العائم لمراقبة التعديل والمزامنة التلقائية اللحظية (Live Auto-Sync Floating Widget) - متوافق مع الموبايل والحاسوب */}
+      {activeWatchedFile && (
+        <div className="fixed bottom-3 right-3 left-3 sm:left-auto sm:right-6 sm:bottom-6 z-50 bg-[#0b1d18] border-2 border-[#10b981] shadow-2xl rounded-2xl p-3 sm:p-4 flex items-center gap-2.5 sm:gap-4 text-white animate-fade-in sm:max-w-md backdrop-blur-md">
+          <div className="relative flex items-center justify-center shrink-0">
+            {isAutoSyncing ? (
+              <RefreshCw className="w-5 h-5 text-amber-400 animate-spin" />
+            ) : (
+              <>
+                <span className="animate-ping absolute inline-flex h-5 w-5 rounded-full bg-[#10b981] opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-[#10b981]"></span>
+              </>
+            )}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs font-bold text-[#d4af37] flex items-center gap-1.5 flex-wrap">
+              <Zap className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span>مراقبة الحفظ التلقائي</span>
+              {activeWatchedSource === 'bridge' && (
+                <span className="text-[10px] bg-[#14372e] text-emerald-300 px-1.5 py-0.5 rounded font-normal">
+                  تطبيق الحاسوب
+                </span>
+              )}
+              {activeWatchedSource === 'filesystem' && (
+                <span className="text-[10px] bg-blue-900/60 text-blue-200 px-1.5 py-0.5 rounded font-normal">
+                  متصفح الحاسوب
+                </span>
+              )}
+              {activeWatchedSource === 'mobile' && (
+                <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 rounded font-normal">
+                  متصفح الموبايل
+                </span>
+              )}
+            </div>
+            <div className="text-sm font-semibold text-white truncate mt-0.5" title={activeWatchedFile.name}>
+              {activeWatchedFile.name}
+            </div>
+            <div className="text-[11px] text-gray-300 mt-0.5 truncate">
+              {autoSyncStatus || "بانتظار رصد الحفظ في Word/Excel..."}
+              {autoSyncCount > 0 && ` • تمت المزامنة ${autoSyncCount} مرات`}
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {activeWatchedSource === 'mobile' && (
+              <button
+                onClick={() => mobileWatchFileInputRef.current?.click()}
+                disabled={isAutoSyncing}
+                className="px-2.5 py-1.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-black font-bold text-xs rounded-lg shadow transition flex items-center gap-1 shrink-0"
+                title="اختيار الملف المعدل من الهاتف ورفعه فورياً"
+              >
+                <UploadCloud className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">رفع التعديل</span>
+                <span className="sm:hidden">مزامنة</span>
+              </button>
+            )}
+            <button
+              onClick={() => {
+                if (activeWatchedSource === 'bridge') {
+                  fetch('http://127.0.0.1:18290/sync', { mode: 'cors' }).catch(() => {});
+                } else if (activeWatchedSource === 'mobile') {
+                  mobileWatchFileInputRef.current?.click();
+                  return;
+                }
+                loadData(true, true);
+                setToastMessage({ text: 'تم تحديث المزامنة يدوياً', type: 'info' });
+              }}
+              className="p-1.5 bg-[#14372e] hover:bg-[#1b473b] text-emerald-300 rounded-lg transition"
+              title="مزامنة فورية الآن"
+            >
+              <RefreshCw className="w-4 h-4" />
+            </button>
+            <button
+              onClick={stopWatching}
+              className="px-2.5 py-1.5 bg-red-950/80 hover:bg-red-900 text-red-200 text-xs font-medium rounded-lg border border-red-800 transition"
+              title="إيقاف المراقبة"
+            >
+              إيقاف
+            </button>
           </div>
         </div>
       )}
