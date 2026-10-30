@@ -297,6 +297,19 @@ export default function FilesPage() {
   const isAutoSyncRunningRef = useRef<boolean>(false);
   const mobileWatchFileInputRef = useRef<HTMLInputElement>(null);
 
+  // مؤشر المزامنة الصغير الأنيق في الترويسة وبطاقات الملفات (Micro Sync Indicator)
+  interface MicroSyncInfo {
+    status: 'idle' | 'syncing' | 'synced' | 'error';
+    fileName?: string;
+    lastSyncedTime?: string;
+    message?: string;
+  }
+  const [microSyncInfo, setMicroSyncInfo] = useState<MicroSyncInfo>({
+    status: 'idle',
+    lastSyncedTime: '',
+    message: 'السحابة متزامنة تلقائياً'
+  });
+
   // حالة شريط ومؤشر تقدم الرفع والتنزيل السحابي الحقيقي واللحظي (النسبة % + الميغابايت MB + سرعة الإنترنت MB/s)
   interface PreciseUploadProgress {
     show: boolean;
@@ -1030,17 +1043,10 @@ export default function FilesPage() {
     activeFileHandleRef.current = null;
     lastObservedMtimeRef.current = 0;
     isAutoSyncRunningRef.current = false;
-    const previous = activeWatchedFile?.name;
     setActiveWatchedFile(null);
     setActiveWatchedSource(null);
     setAutoSyncStatus('');
     setIsAutoSyncing(false);
-    if (previous) {
-      setToastMessage({
-        text: `تم إيقاف المراقبة التلقائية للمستند "${previous}".`,
-        type: 'info'
-      });
-    }
   };
 
   // 1. مراقبة التعديلات اللحظية عبر جسر تطبيق الحاسوب (Port 18290)
@@ -1048,9 +1054,13 @@ export default function FilesPage() {
     stopWatching();
     setActiveWatchedFile(file);
     setActiveWatchedSource('bridge');
-    setAutoSyncStatus('🟢 المراقبة نشطة: بانتظار رصد الحفظ (Ctrl+S) في Office...');
     setAutoSyncCount(0);
     isAutoSyncRunningRef.current = false;
+    setMicroSyncInfo({
+      status: 'idle',
+      fileName: file.name,
+      message: `مراقبة حفظ "${file.name}" نشطة تلقائياً`
+    });
 
     // استعلام مبدئي لتحديد وقت التعديل الأساسي
     try {
@@ -1085,11 +1095,10 @@ export default function FilesPage() {
             isAutoSyncRunningRef.current = true;
             lastObservedMtimeRef.current = currentMtime;
             setIsAutoSyncing(true);
-            setAutoSyncStatus(`🟡 تم اكتشاف حفظ (Ctrl+S)! جاري المزامنة السحابية الفورية...`);
-
-            setToastMessage({
-              text: `⚡ تم رصد حفظ جديد للمستند "${file.name}"! جاري المزامنة مع Google Drive...`,
-              type: 'info'
+            setMicroSyncInfo({
+              status: 'syncing',
+              fileName: file.name,
+              message: `جاري مزامنة "${file.name}" مع السحابة...`
             });
 
             // مهلة 400ms لفك مقبض أوفيس ثم طلب مزامنة الجسر وتحديث السحابة
@@ -1099,12 +1108,25 @@ export default function FilesPage() {
                 await new Promise(r => setTimeout(r, 900));
                 await loadData(true, true);
                 setAutoSyncCount(prev => prev + 1);
-                const timeStr = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-                setAutoSyncStatus(`🟢 تمت المزامنة التلقائية بنجاح في ${timeStr}`);
+                const timeStr = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+                setMicroSyncInfo({
+                  status: 'synced',
+                  fileName: file.name,
+                  lastSyncedTime: timeStr,
+                  message: `تم حفظ ومزامنة "${file.name}" بنجاح في ${timeStr}`
+                });
                 setToastMessage({
                   text: `🎉 تم حفظ وتحديث "${file.name}" ومزامنته سحابياً فورياً!`,
                   type: 'success'
                 });
+                setTimeout(() => {
+                  setMicroSyncInfo(prev => {
+                    if (prev.fileName === file.name && prev.status === 'synced') {
+                      return { status: 'idle', fileName: file.name, lastSyncedTime: timeStr, message: 'السحابة متزامنة تلقائياً' };
+                    }
+                    return prev;
+                  });
+                }, 7000);
               } finally {
                 setIsAutoSyncing(false);
                 isAutoSyncRunningRef.current = false;
@@ -1127,11 +1149,6 @@ export default function FilesPage() {
     }
 
     try {
-      setToastMessage({
-        text: `📂 يرجى اختيار ملف "${file.name}" من جهازك لتفعيل المراقبة اللحظية عند الحفظ...`,
-        type: 'info'
-      });
-
       const [handle] = await (window as any).showOpenFilePicker({
         multiple: false,
         types: [{
@@ -1157,12 +1174,17 @@ export default function FilesPage() {
       lastObservedMtimeRef.current = initialFile.lastModified;
       setActiveWatchedFile(file);
       setActiveWatchedSource('filesystem');
-      setAutoSyncStatus('🟢 مراقبة المتصفح نشطة: احفظ في Word/Excel بـ Ctrl+S وسيُرفع فوراً');
       setAutoSyncCount(0);
       isAutoSyncRunningRef.current = false;
 
+      setMicroSyncInfo({
+        status: 'idle',
+        fileName: file.name,
+        message: `مراقبة متصفح الحاسوب نشطة لـ "${file.name}"`
+      });
+
       setToastMessage({
-        text: `🎯 تم تفعيل مراقبة "${file.name}"! أي حفظ (Ctrl+S) في جهازك سيُزامن تلقائياً دون أي ضغطة زر!`,
+        text: `🎯 تم ربط "${file.name}" بالمزامنة الفورية! أي حفظ بـ Ctrl+S سيُرفع تلقائياً.`,
         type: 'success'
       });
 
@@ -1175,11 +1197,10 @@ export default function FilesPage() {
             isAutoSyncRunningRef.current = true;
             lastObservedMtimeRef.current = currentFile.lastModified;
             setIsAutoSyncing(true);
-            setAutoSyncStatus(`🟡 تم اكتشاف حفظ بـ Ctrl+S! جاري الرفع التلقائي لـ Google Drive...`);
-
-            setToastMessage({
-              text: `⚡ تم رصد حفظ جديد للمستند "${file.name}"! جاري الرفع التلقائي...`,
-              type: 'info'
+            setMicroSyncInfo({
+              status: 'syncing',
+              fileName: file.name,
+              message: `جاري رفع ومزامنة "${file.name}" مع Google Drive...`
             });
 
             // مهلة 450ms ثم الرفع التلقائي
@@ -1200,15 +1221,32 @@ export default function FilesPage() {
                 notifyLocalDesktopSync();
                 await loadData(true, true);
                 setAutoSyncCount(prev => prev + 1);
-                const timeStr = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-                setAutoSyncStatus(`🟢 تمت المزامنة التلقائية بنجاح في ${timeStr}`);
+                const timeStr = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+                setMicroSyncInfo({
+                  status: 'synced',
+                  fileName: file.name,
+                  lastSyncedTime: timeStr,
+                  message: `تم حفظ ومزامنة "${file.name}" بنجاح في ${timeStr}`
+                });
                 setToastMessage({
                   text: `🎉 تم حفظ وتحديث "${file.name}" في Google Drive بنجاح!`,
                   type: 'success'
                 });
+                setTimeout(() => {
+                  setMicroSyncInfo(prev => {
+                    if (prev.fileName === file.name && prev.status === 'synced') {
+                      return { status: 'idle', fileName: file.name, lastSyncedTime: timeStr, message: 'السحابة متزامنة تلقائياً' };
+                    }
+                    return prev;
+                  });
+                }, 7000);
               } catch (err: any) {
                 console.error('Auto sync error:', err);
-                setAutoSyncStatus(`🔴 فشل الرفع التلقائي: ${err.message || err}`);
+                setMicroSyncInfo({
+                  status: 'error',
+                  fileName: file.name,
+                  message: `فشل الرفع التلقائي: ${err.message || err}`
+                });
               } finally {
                 setIsAutoSyncing(false);
                 isAutoSyncRunningRef.current = false;
@@ -2073,7 +2111,11 @@ export default function FilesPage() {
       // تفعيل جلسة مراقبة الموبايل تلقائياً فور تشغيل الملف بتطبيق الهاتف
       setActiveWatchedFile(file);
       setActiveWatchedSource('mobile');
-      setAutoSyncStatus('📱 تم تشغيل الملف بالهاتف: احفظ التعديل ثم اضغط "رفع التعديل" ليُزامن فوراً');
+      setMicroSyncInfo({
+        status: 'idle',
+        fileName: file.name,
+        message: `تم تشغيل "${file.name}" في تطبيق الهاتف`
+      });
 
       if (typeof navigator !== 'undefined' && navigator.canShare && navigator.canShare({ files: [fileObj] })) {
         await navigator.share({
@@ -2134,13 +2176,12 @@ export default function FilesPage() {
     stopWatching();
     setActiveWatchedFile(file);
     setActiveWatchedSource('mobile');
-    setAutoSyncStatus('📱 مراقبة الهاتف نشطة: بعد الحفظ في Word/Excel اضغط "رفع التعديل" ليُزامن فوراً');
     setAutoSyncCount(0);
     isAutoSyncRunningRef.current = false;
-
-    setToastMessage({
-      text: `📱 تم تفعيل مراقبة "${file.name}"! جاري فتح الملف في تطبيق هاتفك...`,
-      type: 'info'
+    setMicroSyncInfo({
+      status: 'idle',
+      fileName: file.name,
+      message: `مزامنة "${file.name}" مع تطبيق الهاتف نشطة`
     });
 
     await handleOpenInMobileApp(file);
@@ -2163,21 +2204,25 @@ export default function FilesPage() {
 
   // استشعار عودة المستخدم لمتصفح الموبايل بعد التعديل في تطبيقات الهاتف (Word / Excel / WPS)
   useEffect(() => {
-    const handleReturnToMobileBrowser = () => {
-      if (document.visibilityState === 'visible' && activeWatchedSource === 'mobile' && activeWatchedFile) {
-        setToastMessage({
-          text: `📱 تم رصد عودتك من تطبيق التعديل! اضغط الزر العائم لرفع وحفظ التعديلات في Google Drive فوراً ⚡`,
-          type: 'info'
-        });
+    const handleReturnToMobileBrowser = async () => {
+      if (document.visibilityState === 'visible') {
+        // تحديث البيانات تلقائياً في الخلفية لمطابقة أي تعديلات تمت
+        loadData(true, true);
+        if (activeWatchedFile) {
+          setMicroSyncInfo(prev => ({
+            ...prev,
+            status: 'synced',
+            fileName: activeWatchedFile.name,
+            lastSyncedTime: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
+            message: `السحابة متزامنة تلقائياً`
+          }));
+        }
       }
     };
 
     const handleWindowFocus = () => {
-      if (activeWatchedSource === 'mobile' && activeWatchedFile) {
-        setToastMessage({
-          text: `📱 تم رصد عودتك من تطبيق التعديل! اضغط الزر العائم لرفع وحفظ التعديلات في Google Drive فوراً ⚡`,
-          type: 'info'
-        });
+      if (document.visibilityState === 'visible') {
+        loadData(true, true);
       }
     };
 
@@ -2207,7 +2252,11 @@ export default function FilesPage() {
       // تفعيل جلسة مراقبة الموبايل تلقائياً فور تشغيل الملف بتطبيق الهاتف
       setActiveWatchedFile(file);
       setActiveWatchedSource('mobile');
-      setAutoSyncStatus('📱 تم تشغيل الملف بالهاتف: احفظ التعديل ثم اضغط "رفع التعديل" ليُزامن فوراً');
+      setMicroSyncInfo({
+        status: 'idle',
+        fileName: file.name,
+        message: `تم تشغيل "${file.name}" في تطبيق الهاتف`
+      });
 
       if (typeof navigator !== 'undefined' && navigator.canShare && navigator.canShare({ files: [fileObj] })) {
         await navigator.share({
@@ -2790,6 +2839,39 @@ export default function FilesPage() {
             <span className="text-xs bg-[#F7F8FA] text-[#667085] font-semibold px-2.5 py-1 rounded-md border border-[#E4E7EC] shrink-0">
               {displayedList.length} ملف
             </span>
+
+            {/* مؤشر المزامنة التلقائية الصغير والأنيق في الترويسة (Micro Sync Indicator) */}
+            <div className="inline-flex items-center shrink-0">
+              {microSyncInfo.status === 'syncing' ? (
+                <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-800 bg-amber-50 border border-amber-300 px-3 py-1 rounded-full shadow-sm animate-pulse">
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-600 shrink-0" />
+                  <span className="truncate max-w-[200px] sm:max-w-xs">{microSyncInfo.message || 'جاري المزامنة...'}</span>
+                </div>
+              ) : microSyncInfo.status === 'synced' ? (
+                <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-800 bg-emerald-100 border border-emerald-300 px-3 py-1 rounded-full shadow-sm transition-all duration-300">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span className="truncate max-w-[240px] sm:max-w-sm">
+                    {microSyncInfo.message || `تمت المزامنة بنجاح ${microSyncInfo.lastSyncedTime ? `(${microSyncInfo.lastSyncedTime})` : ''}`}
+                  </span>
+                </div>
+              ) : microSyncInfo.status === 'error' ? (
+                <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-red-800 bg-red-50 border border-red-300 px-3 py-1 rounded-full shadow-sm">
+                  <AlertCircle className="w-3.5 h-3.5 text-red-600 shrink-0" />
+                  <span className="truncate max-w-[200px]">{microSyncInfo.message || 'فشلت المزامنة'}</span>
+                </div>
+              ) : (
+                <div className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-800 bg-emerald-50/90 border border-emerald-200/90 px-2.5 py-1 rounded-full">
+                  <span className="relative flex h-2 w-2 shrink-0">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                  </span>
+                  <span>السحابة متزامنة تلقائياً</span>
+                  {microSyncInfo.lastSyncedTime && (
+                    <span className="text-[11px] text-emerald-600/80 mr-0.5">({microSyncInfo.lastSyncedTime})</span>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
           <p className="text-[13px] text-[#667085] mt-1">
             {currentFolder ? `المسار الحالي: ${currentFolder}` : 'مزامنة سحابية مباشرة مع أجهزة الحاسوب في الغرفة'}
@@ -3344,13 +3426,25 @@ export default function FilesPage() {
 
                   {/* الاسم الكامل للملف مع الامتداد دون أي اقتطاع */}
                   <div>
-                    <h4
-                      onClick={() => handleOpenFile(file)}
-                      className="text-[15px] font-medium text-[#1B1F24] hover:text-[#14372e] break-words whitespace-normal leading-relaxed cursor-pointer transition"
-                      title={file.name}
-                    >
-                      {file.name}
-                    </h4>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h4
+                        onClick={() => handleOpenFile(file)}
+                        className="text-[15px] font-medium text-[#1B1F24] hover:text-[#14372e] break-words whitespace-normal leading-relaxed cursor-pointer transition"
+                        title={file.name}
+                      >
+                        {file.name}
+                      </h4>
+                      {microSyncInfo.fileName === file.name && microSyncInfo.status === 'syncing' && (
+                        <span className="inline-flex items-center gap-1 text-[10px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200 animate-pulse">
+                          <RefreshCw className="w-2.5 h-2.5 animate-spin" /> جاري المزامنة...
+                        </span>
+                      )}
+                      {microSyncInfo.fileName === file.name && microSyncInfo.status === 'synced' && (
+                        <span className="inline-flex items-center gap-1 text-[10px] text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full border border-emerald-300">
+                          <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" /> تمت المزامنة
+                        </span>
+                      )}
+                    </div>
                     <p className="text-[13px] text-[#667085] mt-1 break-words whitespace-normal">
                       {file.folder}
                     </p>
@@ -3383,34 +3477,6 @@ export default function FilesPage() {
                           : 'فتح'}
                       </span>
                     </button>
-
-                    {activeTab === 'ACTIVE' && canEditFolder(file.folder) && ['word', 'excel', 'file', 'pdf'].includes(file.type) && (
-                      <>
-                        <button
-                          onClick={() => startSmartWatcher(file)}
-                          disabled={actionLoading}
-                          className={`h-9 px-2.5 text-xs font-semibold rounded-lg transition flex items-center gap-1 shrink-0 ${
-                            activeWatchedFile?.id === file.id
-                              ? 'bg-emerald-100 text-emerald-900 border border-emerald-300 animate-pulse'
-                              : 'bg-emerald-50 hover:bg-emerald-100 text-[#14372e] border border-emerald-200'
-                          }`}
-                          title="مراقبة تعديلات وحفظ هذا المستند ومزامنته فورياً في الحاسوب والمتصفح والهاتف"
-                        >
-                          <Zap className={`w-3.5 h-3.5 ${activeWatchedFile?.id === file.id ? 'text-emerald-700' : 'text-amber-500'}`} />
-                          <span>{activeWatchedFile?.id === file.id ? 'مُراقب' : 'مراقبة Ctrl+S'}</span>
-                        </button>
-
-                        <button
-                          onClick={() => triggerUpdateFile(file)}
-                          disabled={actionLoading}
-                          className="h-9 px-2.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-semibold rounded-lg transition flex items-center gap-1 shrink-0"
-                          title="رفع نسخة معدلة وحفظ التعديلات"
-                        >
-                          <UploadCloud className="w-3.5 h-3.5" />
-                          <span>تحديث</span>
-                        </button>
-                      </>
-                    )}
 
                     {canDownloadFolder(file.folder) && (
                       <button
@@ -3519,12 +3585,26 @@ export default function FilesPage() {
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-start justify-between gap-2">
-                        <h4
-                          onClick={() => handleOpenFile(file)}
-                          className="text-[15px] font-medium text-[#1B1F24] break-words whitespace-normal leading-relaxed cursor-pointer hover:text-[#14372e]"
-                        >
-                          {file.name}
-                        </h4>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4
+                              onClick={() => handleOpenFile(file)}
+                              className="text-[15px] font-medium text-[#1B1F24] break-words whitespace-normal leading-relaxed cursor-pointer hover:text-[#14372e]"
+                            >
+                              {file.name}
+                            </h4>
+                            {microSyncInfo.fileName === file.name && microSyncInfo.status === 'syncing' && (
+                              <span className="inline-flex items-center gap-1 text-[10px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200 animate-pulse">
+                                <RefreshCw className="w-2.5 h-2.5 animate-spin" /> جاري المزامنة...
+                              </span>
+                            )}
+                            {microSyncInfo.fileName === file.name && microSyncInfo.status === 'synced' && (
+                              <span className="inline-flex items-center gap-1 text-[10px] text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full border border-emerald-300">
+                                <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" /> تمت المزامنة
+                              </span>
+                            )}
+                          </div>
+                        </div>
                         <div className="shrink-0">{getFileBadge(file.type)}</div>
                       </div>
                       <div className="flex items-center gap-3 text-[13px] text-[#667085] mt-1 flex-wrap">
@@ -3554,33 +3634,6 @@ export default function FilesPage() {
                           : 'فتح المستند'}
                       </span>
                     </button>
-
-                    {activeTab === 'ACTIVE' && canEditFolder(file.folder) && ['word', 'excel', 'file', 'pdf'].includes(file.type) && (
-                      <>
-                        <button
-                          onClick={() => startSmartWatcher(file)}
-                          disabled={actionLoading}
-                          className={`h-9 flex items-center justify-center gap-1 text-xs font-semibold px-2.5 rounded-lg transition shrink-0 ${
-                            activeWatchedFile?.id === file.id
-                              ? 'bg-emerald-100 text-emerald-900 border border-emerald-300 animate-pulse'
-                              : 'bg-emerald-50 hover:bg-emerald-100 text-[#14372e] border border-emerald-200'
-                          }`}
-                          title="مراقبة التعديل والمزامنة التلقائية فور الحفظ"
-                        >
-                          <Zap className={`w-3.5 h-3.5 ${activeWatchedFile?.id === file.id ? 'text-emerald-700' : 'text-amber-500'}`} />
-                          <span>{activeWatchedFile?.id === file.id ? 'مُراقب' : 'مراقبة'}</span>
-                        </button>
-
-                        <button
-                          onClick={() => triggerUpdateFile(file)}
-                          disabled={actionLoading}
-                          className="h-9 flex items-center justify-center gap-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-semibold px-3 rounded-lg transition shrink-0"
-                        >
-                          <UploadCloud className="w-3.5 h-3.5" />
-                          <span>تحديث</span>
-                        </button>
-                      </>
-                    )}
 
                     <button
                       onClick={() => handleOpenInMobileApp(file)}
@@ -3714,12 +3767,24 @@ export default function FilesPage() {
                         >
                           {getFileIcon(file.type, 'md')}
                           <div className="min-w-0 flex-1">
-                            <span
-                              className="text-[15px] font-medium text-[#1B1F24] group-hover/title:text-[#14372e] break-words whitespace-normal leading-relaxed block transition"
-                              title={file.name}
-                            >
-                              {file.name}
-                            </span>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span
+                                className="text-[15px] font-medium text-[#1B1F24] group-hover/title:text-[#14372e] break-words whitespace-normal leading-relaxed block transition"
+                                title={file.name}
+                              >
+                                {file.name}
+                              </span>
+                              {microSyncInfo.fileName === file.name && microSyncInfo.status === 'syncing' && (
+                                <span className="inline-flex items-center gap-1 text-[10px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200 animate-pulse">
+                                  <RefreshCw className="w-2.5 h-2.5 animate-spin" /> جاري المزامنة...
+                                </span>
+                              )}
+                              {microSyncInfo.fileName === file.name && microSyncInfo.status === 'synced' && (
+                                <span className="inline-flex items-center gap-1 text-[10px] text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full border border-emerald-300">
+                                  <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" /> تمت المزامنة
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
                       </td>
@@ -3762,33 +3827,6 @@ export default function FilesPage() {
                                 : 'فتح'}
                             </span>
                           </button>
-
-                          {activeTab === 'ACTIVE' && canEditFolder(file.folder) && ['word', 'excel', 'file', 'pdf'].includes(file.type) && (
-                            <>
-                              <button
-                                onClick={() => startSmartWatcher(file)}
-                                disabled={actionLoading}
-                                className={`h-8 flex items-center gap-1 text-xs font-semibold px-2.5 rounded-lg transition ${
-                                  activeWatchedFile?.id === file.id
-                                    ? 'bg-emerald-100 text-emerald-900 border border-emerald-300 animate-pulse'
-                                    : 'bg-emerald-50 hover:bg-emerald-100 text-[#14372e] border border-emerald-200'
-                                }`}
-                                title="مراقبة تعديلات وحفظ هذا المستند ومزامنته فورياً في الحاسوب والمتصفح والهاتف"
-                              >
-                                <Zap className={`w-3.5 h-3.5 ${activeWatchedFile?.id === file.id ? 'text-emerald-700' : 'text-amber-500'}`} />
-                                <span>{activeWatchedFile?.id === file.id ? 'مُراقب' : 'مراقبة Ctrl+S'}</span>
-                              </button>
-
-                              <button
-                                onClick={() => triggerUpdateFile(file)}
-                                className="h-8 flex items-center gap-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-semibold px-2.5 rounded-lg transition"
-                                title="رفع نسخة معدلة وحفظ التعديلات في السحابة"
-                              >
-                                <UploadCloud className="w-3.5 h-3.5" />
-                                <span>تحديث</span>
-                              </button>
-                            </>
-                          )}
 
                           {['word', 'excel'].includes(file.type) && (
                             <button
@@ -4776,10 +4814,10 @@ export default function FilesPage() {
           if (!pickedFile || !activeWatchedFile) return;
           try {
             setIsAutoSyncing(true);
-            setAutoSyncStatus(`🟡 جاري رفع ومزامنة التعديل لـ "${activeWatchedFile.name}" مع Google Drive...`);
-            setToastMessage({
-              text: `⚡ جاري مزامنة التعديل فوراً مع السحابة...`,
-              type: 'info'
+            setMicroSyncInfo({
+              status: 'syncing',
+              fileName: activeWatchedFile.name,
+              message: `جاري رفع ومزامنة "${activeWatchedFile.name}" مع Google Drive...`
             });
 
             const targetPath = activeWatchedFile.folder && activeWatchedFile.folder !== 'القسم العام' ? activeWatchedFile.folder : '';
@@ -4797,15 +4835,32 @@ export default function FilesPage() {
             notifyLocalDesktopSync();
             await loadData(true, true);
             setAutoSyncCount(prev => prev + 1);
-            const timeStr = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-            setAutoSyncStatus(`🟢 تمت المزامنة التلقائية بنجاح في ${timeStr}`);
+            const timeStr = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+            setMicroSyncInfo({
+              status: 'synced',
+              fileName: activeWatchedFile.name,
+              lastSyncedTime: timeStr,
+              message: `تم حفظ ومزامنة "${activeWatchedFile.name}" بنجاح في ${timeStr}`
+            });
             setToastMessage({
               text: `🎉 تم حفظ وتحديث "${activeWatchedFile.name}" في Google Drive بنجاح!`,
               type: 'success'
             });
+            setTimeout(() => {
+              setMicroSyncInfo(prev => {
+                if (prev.fileName === activeWatchedFile?.name && prev.status === 'synced') {
+                  return { status: 'idle', fileName: activeWatchedFile?.name, lastSyncedTime: timeStr, message: 'السحابة متزامنة تلقائياً' };
+                }
+                return prev;
+              });
+            }, 7000);
           } catch (err: any) {
             console.error('Mobile auto sync upload error:', err);
-            setAutoSyncStatus(`🔴 فشل الرفع: ${err.message || err}`);
+            setMicroSyncInfo({
+              status: 'error',
+              fileName: activeWatchedFile.name,
+              message: `تعذر إتمام المزامنة: ${err.message || err}`
+            });
             setToastMessage({
               text: `تعذر إتمام المزامنة: ${err.message || err}`,
               type: 'error'
@@ -4816,87 +4871,6 @@ export default function FilesPage() {
           }
         }}
       />
-
-      {/* 8.5. الودجت العائم لمراقبة التعديل والمزامنة التلقائية اللحظية (Live Auto-Sync Floating Widget) - متوافق مع الموبايل والحاسوب */}
-      {activeWatchedFile && (
-        <div className="fixed bottom-3 right-3 left-3 sm:left-auto sm:right-6 sm:bottom-6 z-50 bg-[#0b1d18] border-2 border-[#10b981] shadow-2xl rounded-2xl p-3 sm:p-4 flex items-center gap-2.5 sm:gap-4 text-white animate-fade-in sm:max-w-md backdrop-blur-md">
-          <div className="relative flex items-center justify-center shrink-0">
-            {isAutoSyncing ? (
-              <RefreshCw className="w-5 h-5 text-amber-400 animate-spin" />
-            ) : (
-              <>
-                <span className="animate-ping absolute inline-flex h-5 w-5 rounded-full bg-[#10b981] opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-[#10b981]"></span>
-              </>
-            )}
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="text-xs font-bold text-[#d4af37] flex items-center gap-1.5 flex-wrap">
-              <Zap className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-              <span>مراقبة الحفظ التلقائي</span>
-              {activeWatchedSource === 'bridge' && (
-                <span className="text-[10px] bg-[#14372e] text-emerald-300 px-1.5 py-0.5 rounded font-normal">
-                  تطبيق الحاسوب
-                </span>
-              )}
-              {activeWatchedSource === 'filesystem' && (
-                <span className="text-[10px] bg-blue-900/60 text-blue-200 px-1.5 py-0.5 rounded font-normal">
-                  متصفح الحاسوب
-                </span>
-              )}
-              {activeWatchedSource === 'mobile' && (
-                <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 rounded font-normal">
-                  متصفح الموبايل
-                </span>
-              )}
-            </div>
-            <div className="text-sm font-semibold text-white truncate mt-0.5" title={activeWatchedFile.name}>
-              {activeWatchedFile.name}
-            </div>
-            <div className="text-[11px] text-gray-300 mt-0.5 truncate">
-              {autoSyncStatus || "بانتظار رصد الحفظ في Word/Excel..."}
-              {autoSyncCount > 0 && ` • تمت المزامنة ${autoSyncCount} مرات`}
-            </div>
-          </div>
-          <div className="flex items-center gap-1.5 shrink-0">
-            {activeWatchedSource === 'mobile' && (
-              <button
-                onClick={() => mobileWatchFileInputRef.current?.click()}
-                disabled={isAutoSyncing}
-                className="px-2.5 py-1.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-black font-bold text-xs rounded-lg shadow transition flex items-center gap-1 shrink-0"
-                title="اختيار الملف المعدل من الهاتف ورفعه فورياً"
-              >
-                <UploadCloud className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">رفع التعديل</span>
-                <span className="sm:hidden">مزامنة</span>
-              </button>
-            )}
-            <button
-              onClick={() => {
-                if (activeWatchedSource === 'bridge') {
-                  fetch('http://127.0.0.1:18290/sync', { mode: 'cors' }).catch(() => {});
-                } else if (activeWatchedSource === 'mobile') {
-                  mobileWatchFileInputRef.current?.click();
-                  return;
-                }
-                loadData(true, true);
-                setToastMessage({ text: 'تم تحديث المزامنة يدوياً', type: 'info' });
-              }}
-              className="p-1.5 bg-[#14372e] hover:bg-[#1b473b] text-emerald-300 rounded-lg transition"
-              title="مزامنة فورية الآن"
-            >
-              <RefreshCw className="w-4 h-4" />
-            </button>
-            <button
-              onClick={stopWatching}
-              className="px-2.5 py-1.5 bg-red-950/80 hover:bg-red-900 text-red-200 text-xs font-medium rounded-lg border border-red-800 transition"
-              title="إيقاف المراقبة"
-            >
-              إيقاف
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* 9. إشعار عائم هادئ (Toast Notification) */}
       {toastMessage && (
