@@ -364,14 +364,18 @@ export default function AccessHubPage() {
 
       {/* 3. شريط التحكم الداخلي: اختيار الجداول، البحث، والإجراءات */}
       <div className="p-6 space-y-4">
-        {/* اختيار الجدول الداخلي إذا كنا في خانة ملف محدد */}
-        {activeFile !== 'all' && data?.available_tables && data.available_tables.length > 0 && (
+        {/* اختيار الجدول: متاح في خانة الدمج الشامل وفي خانات الملفات المستقلة */}
+        {data?.available_tables && data.available_tables.length > 0 && (
           <div className="flex items-center gap-2 overflow-x-auto pb-1">
-            <span className="text-xs font-semibold text-[#667085] ml-2 shrink-0">جداول هذا الملف:</span>
+            <span className="text-xs font-semibold text-[#667085] ml-2 shrink-0">
+              {activeFile === 'all' ? 'اختر الجدول الموحد:' : 'جداول هذا الملف:'}
+            </span>
             {data.available_tables.map((tbl) => {
               const isTblActive = activeTable === tbl;
               const count =
-                data.files.find((f) => f.name === activeFile)?.table_counts[tbl] || 0;
+                activeFile === 'all'
+                  ? data.files.reduce((acc, f) => acc + (f.table_counts[tbl] || 0), 0)
+                  : data.files.find((f) => f.name === activeFile)?.table_counts[tbl] || 0;
               return (
                 <button
                   key={tbl}
@@ -666,19 +670,17 @@ export default function AccessHubPage() {
 
             <form onSubmit={handleEditSubmit} className="flex-1 overflow-y-auto p-5 space-y-3.5">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-                {Object.keys(selectedRecord)
-                  .filter((k) => !k.startsWith('_adh_') && !k.startsWith('Field'))
-                  .map((col) => (
-                    <div key={col} className="space-y-1">
-                      <label className="text-xs font-semibold text-[#475467]">{col}</label>
-                      <input
-                        type="text"
-                        value={formData[col] || ''}
-                        onChange={(e) => setFormData({ ...formData, [col]: e.target.value })}
-                        className="w-full px-3 py-2 text-xs bg-[#F7F8FA] border border-[#E4E7EC] rounded-lg text-[#1B1F24] focus:outline-none focus:border-[#14372e]"
-                      />
-                    </div>
-                  ))}
+                {data?.columns.map((col) => (
+                  <div key={col} className="space-y-1">
+                    <label className="text-xs font-semibold text-[#475467]">{col}</label>
+                    <input
+                      type="text"
+                      value={formData[col] || ''}
+                      onChange={(e) => setFormData({ ...formData, [col]: e.target.value })}
+                      className="w-full px-3 py-2 text-xs bg-[#F7F8FA] border border-[#E4E7EC] rounded-lg text-[#1B1F24] focus:outline-none focus:border-[#14372e]"
+                    />
+                  </div>
+                ))}
               </div>
 
               <div className="pt-4 border-t border-[#E4E7EC] flex justify-end gap-2">

@@ -37,7 +37,7 @@ function saveFileContent(fileName: string, data: any) {
   }
 }
 
-// GET: الاستعلام عن الجداول والبحث مع الفرز والترقيم
+// GET: الاستعلام عن الجداول والبيانات بالحفاظ التام 100% على ترتيب الحقول والمعلومات الأصلية
 export async function GET(req: NextRequest) {
   try {
     const url = new URL(req.url);
@@ -51,7 +51,7 @@ export async function GET(req: NextRequest) {
     const index = getIndex();
     const currentSig = index.last_sync || '1';
 
-    // إذا كان الموظف فقط يفحص التحديثات الحية
+    // فحص التحديثات الحية
     if (checkSig !== null && checkSig !== undefined && checkSig === currentSig) {
       return NextResponse.json({ success: true, changed: false, sig: currentSig });
     }
@@ -63,57 +63,49 @@ export async function GET(req: NextRequest) {
 
     if (requestedFile === 'all') {
       // 🌐 وضع الدمج الشامل (كافة الملفات مدمجة)
-      // نجمع السجلات من كافة الملفات
+      // استخراج كافة أسماء الجداول المشتركة من الفهرس
       const allFiles = index.files || [];
-      const commonColsSet = new Set<string>();
+      const tablesSet = new Set<string>();
+      allFiles.forEach((f: any) => {
+        (f.tables || []).forEach((t: string) => tablesSet.add(t));
+      });
+      availableTables = Array.from(tablesSet);
+
+      if (!activeTable || !tablesSet.has(activeTable)) {
+        activeTable = availableTables[0] || 'التجار';
+      }
+
+      // جمع الأعمدة بترتيبها الأصلي الدقيق من ملفات Access بدون أي تعديل أو فرز
+      const colsOrder: string[] = [];
+      const colsSeen = new Set<string>();
 
       for (const f of allFiles) {
         const content = getFileContent(f.name);
         if (!content || !content.tables) continue;
 
-        for (const tbl of Object.keys(content.tables)) {
-          const tableRows = content.tables[tbl] || [];
-          for (const row of tableRows) {
-            // فلترة البحث
-            if (search) {
-              const matches = Object.values(row).some(
-                (val) => val && String(val).toLowerCase().includes(search)
-              );
-              if (!matches) continue;
-            }
-            rows.push(row);
-            // جمع الأعمدة الأكثر تكراراً
-            Object.keys(row).forEach((k) => {
-              if (!k.startsWith('_adh_') && !k.startsWith('Field')) {
-                commonColsSet.add(k);
-              }
-            });
+        // قراءة الأعمدة الأصلية كما هي في ملف Access
+        const origCols = content.columns?.[activeTable] || [];
+        for (const col of origCols) {
+          if (!colsSeen.has(col)) {
+            colsSeen.add(col);
+            colsOrder.push(col);
           }
+        }
+
+        // جمع السجلات بنفس ترتيب ورودها الأصلي
+        const tableRows = content.tables[activeTable] || [];
+        for (const row of tableRows) {
+          if (search) {
+            const matches = Object.values(row).some(
+              (val) => val && String(val).toLowerCase().includes(search)
+            );
+            if (!matches) continue;
+          }
+          rows.push(row);
         }
       }
 
-      // تحديد الأعمدة الأكثر أهمية لعرضها في الدمج الشامل
-      const priorityOrder = [
-        'الإسم التجاري', 'ArabicCommercialName',
-        'رقم الأسم التجاري', 'IDNo', 'CommercialNo',
-        'اسم التاجر', 'ArabicName', 'اسم صاحب الشركة', 'اسم الدلال', 'اسم الصيدلية', 'اسم الفندق',
-        'العمل', 'Activity',
-        'العنوان', 'Address',
-        'تأريخه', 'AffiliationDate', 'تاريخه',
-        'المواليد', 'Class', 'Mobile',
-        'الشطب', 'التعديل'
-      ];
-
-      const sortedCols = Array.from(commonColsSet).sort((a, b) => {
-        const ia = priorityOrder.indexOf(a);
-        const ib = priorityOrder.indexOf(b);
-        if (ia !== -1 && ib !== -1) return ia - ib;
-        if (ia !== -1) return -1;
-        if (ib !== -1) return 1;
-        return a.localeCompare(b, 'ar');
-      });
-
-      columns = sortedCols.slice(0, 10);
+      columns = colsOrder;
     } else {
       // 📁 وضع خانة ملف محدد باسمه الحقيقي
       const content = getFileContent(requestedFile);
@@ -126,11 +118,11 @@ export async function GET(req: NextRequest) {
         activeTable = availableTables[0] || '';
       }
 
-      const tableRows = content.tables[activeTable] || [];
-      columns = (content.columns?.[activeTable] || []).filter(
-        (c: string) => !c.startsWith('Field')
-      );
+      // الأعمدة بنفس ترتيبها الأصلي 100% من ملف Access بدون حذف أي حقل
+      columns = content.columns?.[activeTable] || [];
 
+      // السجلات بنفس ترتيب ورودها الأصلي في ملف Access
+      const tableRows = content.tables[activeTable] || [];
       for (const row of tableRows) {
         if (search) {
           const matches = Object.values(row).some(
@@ -223,7 +215,6 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'السجل المطلوب غير موجود' }, { status: 404 });
     }
 
-    // تحديث السجل
     tableRows[rowIndex] = {
       ...tableRows[rowIndex],
       ...updates,
