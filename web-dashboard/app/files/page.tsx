@@ -2882,22 +2882,12 @@ export default function FilesPage() {
 
         {/* أزرار الإجراءات الرئيسية */}
         <div className="flex items-center gap-2 flex-wrap">
-          {/* زر مركز بيانات Access الموحد البارز للوصول الفوري */}
-          <Link
-            href="/access-hub"
-            className="flex items-center gap-2 bg-[#14372e] hover:bg-[#1b473b] text-[#ecd58a] text-xs font-bold h-10 px-4 rounded-lg transition border border-[#c59b27] shadow-sm shrink-0"
-            title="الانتقال إلى مركز بيانات وقواعد بيانات Access المدمجة"
-          >
-            <Database className="w-4 h-4 text-[#ecd58a]" />
-            <span>🏛️ مركز بيانات Access الموحد (88,987 قيد)</span>
-          </Link>
-
           {canUploadFolder(activeBrowsePath) && (
             <>
               <button
                 onClick={() => fileInputRef.current?.click()}
                 disabled={actionLoading}
-                className="flex items-center gap-2 bg-[#14372e] hover:bg-[#1b473b] text-white text-xs font-semibold h-10 px-4 rounded-lg transition shrink-0"
+                className="flex items-center gap-1.5 bg-[#14372e] hover:bg-[#1b473b] text-white text-xs font-bold h-9 px-3.5 rounded-lg transition shadow-2xs shrink-0 cursor-pointer"
                 title="رفع ملفات متعددة"
               >
                 <Upload className="w-4 h-4" />
@@ -2914,11 +2904,11 @@ export default function FilesPage() {
               <button
                 onClick={() => folderInputRef.current?.click()}
                 disabled={actionLoading}
-                className="flex items-center gap-1.5 bg-white hover:bg-[#F7F8FA] text-[#1B1F24] text-xs font-semibold h-10 px-3.5 rounded-lg transition border border-[#E4E7EC] shrink-0"
+                className="flex items-center gap-1.5 bg-white hover:bg-[#F7F8FA] text-[#1B1F24] text-xs font-semibold h-9 px-3 rounded-lg transition border border-[#E4E7EC] shrink-0 cursor-pointer"
                 title="رفع مجلد كامل بمحتوياته"
               >
                 <FolderOpen className="w-4 h-4 text-[#14372e]" />
-                <span>رفع مجلد</span>
+                <span className="hidden sm:inline">رفع مجلد</span>
               </button>
               <input 
                 type="file" 
@@ -2932,11 +2922,11 @@ export default function FilesPage() {
               <button
                 onClick={() => cameraInputRef.current?.click()}
                 disabled={actionLoading}
-                className="flex items-center gap-1.5 bg-white hover:bg-[#F7F8FA] text-[#1B1F24] text-xs font-semibold h-10 px-3.5 rounded-lg transition border border-[#E4E7EC] shrink-0"
+                className="flex items-center gap-1.5 bg-white hover:bg-[#F7F8FA] text-[#1B1F24] text-xs font-semibold h-9 px-3 rounded-lg transition border border-[#E4E7EC] shrink-0 cursor-pointer"
                 title="تصوير كتاب رسمي بالكاميرا"
               >
                 <Camera className="w-4 h-4 text-[#c59b27]" />
-                <span>تصوير كتاب</span>
+                <span className="hidden sm:inline">تصوير كتاب</span>
               </button>
               <input 
                 type="file" 
@@ -2959,17 +2949,17 @@ export default function FilesPage() {
           {canCreateSubFolder(activeBrowsePath) && (
             <button
               onClick={() => setShowNewFolderModal(true)}
-              className="flex items-center gap-1.5 bg-white hover:bg-[#F7F8FA] text-[#1B1F24] text-xs font-semibold h-10 px-3.5 rounded-lg transition border border-[#E4E7EC] shrink-0"
+              className="flex items-center gap-1.5 bg-white hover:bg-[#F7F8FA] text-[#1B1F24] text-xs font-semibold h-9 px-3 rounded-lg transition border border-[#E4E7EC] shrink-0 cursor-pointer"
               title="إنشاء مجلد فرعي جديد"
             >
               <FolderPlus className="w-4 h-4 text-[#14372e]" />
-              <span>مجلد جديد</span>
+              <span className="hidden sm:inline">مجلد جديد</span>
             </button>
           )}
 
           <button
             onClick={() => setShowStats(!showStats)}
-            className={`flex items-center gap-1.5 h-10 px-3 rounded-lg text-xs font-semibold transition border shrink-0 ${
+            className={`flex items-center gap-1.5 h-9 px-3 rounded-lg text-xs font-semibold transition border shrink-0 cursor-pointer ${
               showStats 
                 ? 'bg-[#14372e] text-white border-[#14372e]' 
                 : 'bg-white hover:bg-[#F7F8FA] text-[#667085] border-[#E4E7EC]'
@@ -2983,7 +2973,7 @@ export default function FilesPage() {
           <button
             onClick={() => loadData(false, true)}
             disabled={loading}
-            className="h-10 w-10 flex items-center justify-center bg-white hover:bg-[#F7F8FA] text-[#667085] hover:text-[#1B1F24] rounded-lg border border-[#E4E7EC] transition"
+            className="h-9 w-9 flex items-center justify-center bg-white hover:bg-[#F7F8FA] text-[#667085] hover:text-[#1B1F24] rounded-lg border border-[#E4E7EC] transition cursor-pointer"
             title="تحديث الملفات"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-[#14372e]' : ''}`} />
@@ -3226,78 +3216,6 @@ export default function FilesPage() {
               <span>شبكة</span>
             </button>
           </div>
-        </div>
-      </div>
-
-      {/* تنبيه ذكي بارز للانتقال المباشر إلى مركز بيانات Access الموحد */}
-      <div className="bg-gradient-to-r from-[#14372e] to-[#1e5245] text-white p-3.5 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs border border-[#c59b27]/30">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-white/10 flex items-center justify-center text-[#ecd58a] shrink-0">
-            <Database className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="text-xs font-bold text-white flex items-center gap-2">
-              <span>🏛️ قسم قواعد بيانات Access الموحد متاح الآن سحابياً!</span>
-              <span className="bg-[#ecd58a] text-[#14372e] text-[10px] font-extrabold px-2 py-0.5 rounded-full">
-                88,987 قيد مدمج
-              </span>
-            </div>
-            <p className="text-[11px] text-white/80 mt-0.5">
-              تم دمج واستخراج كافة ملفات Access الـ 7 (من 1984 إلى 2026) مع محرك بحث فوري وتعديل وحذف مباشر لجميع الموظفين.
-            </p>
-          </div>
-        </div>
-        <Link
-          href="/access-hub"
-          className="inline-flex items-center justify-center gap-1.5 px-4 py-2 bg-[#ecd58a] hover:bg-[#ffe394] text-[#14372e] rounded-lg text-xs font-bold transition shrink-0 shadow-sm"
-        >
-          <span>فتح مركز بيانات Access المدمج</span>
-          <ArrowRight className="w-3.5 h-3.5 rotate-180" />
-        </Link>
-      </div>
-
-      {/* 🏛️ شبكة أقسام وخانات ملفات Access المباشرة الظاهرة بوضوح */}
-      <div className="bg-white rounded-xl border border-[#E4E7EC] p-4 space-y-2.5 shadow-2xs">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-bold text-[#14372e] flex items-center gap-1.5">
-            <Layers className="w-4 h-4 text-[#c59b27]" />
-            <span>أقسام وخانات ملفات Access المدمجة (اضغط على أي ملف لفتح بياناته فوراً):</span>
-          </span>
-          <Link
-            href="/access-hub"
-            className="text-[11px] font-bold text-[#14372e] hover:underline flex items-center gap-1"
-          >
-            <span>عرض الدمج الشامل (88,987 قيد)</span>
-            <ChevronLeft className="w-3.5 h-3.5" />
-          </Link>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
-          {[
-            { name: 'الاسم التجاري 2024', rows: '2,107 قيد' },
-            { name: 'الاسم التجاري 2025 - 2026', rows: '2,668 قيد' },
-            { name: 'الاسم التجاري 2023', rows: '1,953 قيد' },
-            { name: 'الاسم التجاري 2022', rows: '1,597 قيد' },
-            { name: 'اسماء التجار والدلالين من جهاز الاشتراكات', rows: '21,602 قيد' },
-            { name: 'الاسماء التجارية الكلية والمبتكرة لكل السنوات - جديد', rows: '14,375 قيد' },
-            { name: 'الاسماء التجارية من سنة 1984 لسنة 2021', rows: '44,685 قيد' },
-          ].map((sec) => (
-            <Link
-              key={sec.name}
-              href={`/access-hub?file=${encodeURIComponent(sec.name)}`}
-              className="p-2.5 rounded-lg border border-[#E4E7EC] hover:border-[#14372e] hover:bg-[#F7F8FA] transition flex items-center justify-between group bg-[#FAFAFC]"
-            >
-              <div className="flex items-center gap-2 min-w-0">
-                <Database className="w-4 h-4 text-[#c59b27] shrink-0" />
-                <span className="text-xs font-bold text-[#1B1F24] truncate group-hover:text-[#14372e]">
-                  {sec.name}
-                </span>
-              </div>
-              <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded shrink-0 font-mono">
-                {sec.rows}
-              </span>
-            </Link>
-          ))}
         </div>
       </div>
 
