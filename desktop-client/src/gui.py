@@ -896,7 +896,7 @@ class FileExchangeMainWindow(QMainWindow):
         self.active_dept_name = None
         self.current_subpath = Path(".")
         self.selected_rel_paths = set()
-        self._unlocked_pin_depts = set()
+        self._unlocked_pin_depts = self._load_persistent_unlocked_depts()
         self._cloud_trash_cache = []
         self._cloud_trash_fetching = False
 
@@ -2365,8 +2365,87 @@ class FileExchangeMainWindow(QMainWindow):
 
         return has_changes
 
+    def _get_persistent_unlocked_file(self):
+        """الحصول على مسار ملف تخزين الأقسام المعتمدة على القرص لتثبيتها للأبد"""
+        try:
+            folder = Path(os.environ.get('APPDATA', os.environ.get('USERPROFILE', 'C:'))) / "ShareCOC"
+            folder.mkdir(parents=True, exist_ok=True)
+            return folder / "unlocked_departments.json"
+        except Exception:
+            return None
+
+    def _load_persistent_unlocked_depts(self):
+        """تحميل قائمة الأقسام المعتمدة لهذا الجهاز للأبد من القرص المحلي"""
+        depts = set()
+        try:
+            if hasattr(self, 'state_mgr') and self.state_mgr:
+                val = self.state_mgr.get_setting("unlocked_departments_json")
+                if val:
+                    loaded = json.loads(val)
+                    if isinstance(loaded, list):
+                        depts.update(loaded)
+        except Exception:
+            pass
+
+        try:
+            f = self._get_persistent_unlocked_file()
+            if f and f.exists():
+                data = json.loads(f.read_text(encoding="utf-8"))
+                if isinstance(data, list):
+                    depts.update(data)
+        except Exception:
+            pass
+        return depts
+
+    def _save_persistent_unlocked_dept(self, dept_name):
+        """حفظ اعتماد القسم لهذا الجهاز على القرص بشكل دائم للأبد"""
+        clean_name = str(dept_name).strip()
+        if not clean_name:
+            return
+        if not hasattr(self, '_unlocked_pin_depts') or not isinstance(self._unlocked_pin_depts, set):
+            self._unlocked_pin_depts = set()
+        self._unlocked_pin_depts.add(clean_name)
+        dept_list = list(self._unlocked_pin_depts)
+
+        try:
+            if hasattr(self, 'state_mgr') and self.state_mgr:
+                self.state_mgr.set_setting("unlocked_departments_json", json.dumps(dept_list, ensure_ascii=False))
+        except Exception:
+            pass
+
+        try:
+            f = self._get_persistent_unlocked_file()
+            if f:
+                f.write_text(json.dumps(dept_list, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _remove_persistent_unlocked_dept(self, dept_name):
+        """إلغاء وسحب اعتماد القسم محلياً عند حذفه من قِبل الأدمن في لوحة التحكم"""
+        clean_name = str(dept_name).strip()
+        if not clean_name:
+            return
+        if hasattr(self, '_unlocked_pin_depts') and isinstance(self._unlocked_pin_depts, set):
+            self._unlocked_pin_depts.discard(clean_name)
+            dept_list = list(self._unlocked_pin_depts)
+        else:
+            dept_list = []
+
+        try:
+            if hasattr(self, 'state_mgr') and self.state_mgr:
+                self.state_mgr.set_setting("unlocked_departments_json", json.dumps(dept_list, ensure_ascii=False))
+        except Exception:
+            pass
+
+        try:
+            f = self._get_persistent_unlocked_file()
+            if f:
+                f.write_text(json.dumps(dept_list, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
     def _check_department_permission(self, dept_name=None, action='write'):
-        """فحص الصلاحيات الإدارية المفصلة (9 صلاحيات + الرمز السري PIN) المحددة من قبل الأدمن"""
+        """فحص الصلاحيات الإدارية المفصلة (9 صلاحيات + أمان القسم واعتماد الحاسوب لمرة واحدة)"""
         target_dept = dept_name or self.active_dept_name
         if not target_dept or target_dept == "__ALL__":
             return True
@@ -2376,7 +2455,6 @@ class FileExchangeMainWindow(QMainWindow):
 
         try:
             if hasattr(self.client, 'get_cached_folder_permissions'):
-                # قراءة فورية من الذاكرة حتى لا يتجمد خيط الواجهة بانتظار الشبكة عند كل نقرة
                 perms_map = self.client.get_cached_folder_permissions()
             elif hasattr(self.client, 'get_folder_permissions'):
                 perms_map = self.client.get_folder_permissions()
@@ -2395,7 +2473,24 @@ class FileExchangeMainWindow(QMainWindow):
                     computer_name = os.environ.get('COMPUTERNAME', 'حاسوب-الموظف')
 
                     is_protected = bool(dept_user or dept_pass or pin_code)
-                    is_already_authed = my_guid in authed_devices or target_dept in getattr(self, '_unlocked_pin_depts', set())
+
+                    # فحص الاعتماد السحابي والمحلي
+                    is_cloud_authed = my_guid in authed_devices
+                    is_locally_authed = target_dept in getattr(self, '_unlocked_pin_depts', set())
+
+                    # فحص الإلغاء/الحذف من لوحة الأدمن:
+                    # إذا كان القسم محمياً ومفتوحاً محلياً، لكن السحابة تظهر قائمة الأجهزة المعتمدة وبصمة الجهاز غير موجودة بها،
+                    # فهذا يعني أن الأدمن قد قام بحذف هذا الجهاز وسحب اعتماده؛ فيتم قفله فورياً وإلغاء تسجيله
+                    if is_locally_authed and isinstance(authed_devices, list) and not is_cloud_authed:
+                        self._remove_persistent_unlocked_dept(target_dept)
+                        is_locally_authed = False
+
+                    # إذا كان معتمداً سحابياً، نثبّته في الذاكرة الدائمة المحلية للأبد
+                    if is_cloud_authed and not is_locally_authed:
+                        self._save_persistent_unlocked_dept(target_dept)
+                        is_locally_authed = True
+
+                    is_already_authed = is_cloud_authed or is_locally_authed
 
                     if is_protected and not is_already_authed:
                         if dept_user:
@@ -2405,7 +2500,7 @@ class FileExchangeMainWindow(QMainWindow):
                             dialog.setFixedWidth(380)
                             vbox = QVBoxLayout(dialog)
 
-                            lbl_info = QLabel(f"هذا القسم ({target_dept}) محمي بحساب خاص من الإدارة.\nيرجى تسجيل الدخول لمرة واحدة لاعتماد هذا الحاسوب ({computer_name}):", dialog)
+                            lbl_info = QLabel(f"هذا القسم ({target_dept}) محمي بحساب خاص من الإدارة.\nيرجى تسجيل الدخول لمرة واحدة لاعتماد هذا الحاسوب ({computer_name}) للأبد:", dialog)
                             lbl_info.setWordWrap(True)
                             vbox.addWidget(lbl_info)
 
@@ -2443,15 +2538,37 @@ class FileExchangeMainWindow(QMainWindow):
                             entered_pin, ok = QInputDialog.getText(
                                 self,
                                 f"🔒 قسم محمي برمز سري ({target_dept})",
-                                f"هذا القسم ({target_dept}) محمي برمز مرور خاص من الإدارة.\nيرجى إدخال الرمز السري للمتابعة:",
+                                f"هذا القسم ({target_dept}) محمي برمز مرور خاص من الإدارة.\nيرجى إدخال الرمز السري للمتابعة واعتماد هذا الحاسوب ({computer_name}) للأبد:",
                                 QLineEdit.EchoMode.Password
                             )
-                            if not ok or entered_pin.strip() != pin_code:
-                                if ok:
-                                    QMessageBox.critical(self, "رمز خاطئ ❌", "الرمز السري الذي أدخلته غير صحيح.")
+                            if not ok:
+                                return False
+                            clean_entered = entered_pin.strip()
+                            valid_pin = clean_entered in (pin_code, dept_pass)
+                            if not valid_pin:
+                                QMessageBox.critical(self, "رمز خاطئ ❌", "الرمز السري الذي أدخلته غير صحيح.")
                                 return False
 
-                        self._unlocked_pin_depts.add(target_dept)
+                        # حفظ دائم على القرص المحلي لعدم طلب الرمز مرة أخرى إطلاقاً
+                        self._save_persistent_unlocked_dept(target_dept)
+
+                        # تسجيل واعتماد الجهاز سحابياً في لوحة تحكم الأدمن في Google Drive
+                        if hasattr(self, 'client') and self.client:
+                            rule.setdefault('authorized_devices', [])
+                            if my_guid not in rule['authorized_devices']:
+                                rule['authorized_devices'].append(my_guid)
+                            if 'authorizedDevices' in rule and my_guid not in rule['authorizedDevices']:
+                                rule['authorizedDevices'].append(my_guid)
+
+                            import threading
+                            threading.Thread(
+                                target=self.client.authorize_device_for_dept,
+                                args=(target_dept, my_guid, computer_name, "Windows Desktop"),
+                                daemon=True
+                            ).start()
+
+                        # تحديث فوري للأيقونات في القائمة الجانبية (إظهار 🔓)
+                        self._refresh_departments_sidebar()
 
                     # 2. فحص الصلاحيات التسع التفصيلية
                     action_checks = {
@@ -2535,11 +2652,19 @@ class FileExchangeMainWindow(QMainWindow):
             rule = perms.get(name, {}) if isinstance(perms, dict) else {}
             can_view = rule.get('canView', rule.get('can_view', True))
             pin_code = str(rule.get('pinCode') or rule.get('pin_code') or '').strip()
+            dept_user = str(rule.get('deptUsername') or rule.get('dept_username') or '').strip()
+            dept_pass = str(rule.get('deptPassword') or rule.get('dept_password') or '').strip()
+            authed_devices = rule.get('authorizedDevices') or rule.get('authorized_devices') or []
+            my_guid = get_desktop_machine_guid()
+
+            is_locked = bool(pin_code or dept_user or dept_pass)
+            is_unlocked = (name in unlocked_pins) or (my_guid in authed_devices)
+
             if not can_view:
                 icon = '⛔'
-            elif pin_code and name not in unlocked_pins:
+            elif is_locked and not is_unlocked:
                 icon = '🔒'
-            elif pin_code and name in unlocked_pins:
+            elif is_locked and is_unlocked:
                 icon = '🔓'
             else:
                 icon = ''
@@ -3037,7 +3162,13 @@ class FileExchangeMainWindow(QMainWindow):
                 if not rule.get('canView', rule.get('can_view', True)):
                     return False
                 pin_c = str(rule.get('pinCode') or rule.get('pin_code') or '').strip()
-                if pin_c and d_name not in unlocked_pins:
+                dept_u = str(rule.get('deptUsername') or rule.get('dept_username') or '').strip()
+                dept_p = str(rule.get('deptPassword') or rule.get('dept_password') or '').strip()
+                authed_d = rule.get('authorizedDevices') or rule.get('authorized_devices') or []
+                my_g = get_desktop_machine_guid()
+                is_p = bool(pin_c or dept_u or dept_p)
+                is_u = (d_name in unlocked_pins) or (my_g in authed_d)
+                if is_p and not is_u:
                     return False
                 return True
 
@@ -4925,7 +5056,13 @@ class FileExchangeMainWindow(QMainWindow):
                 if not rule.get('canView', rule.get('can_view', True)):
                     return False
                 pin_c = str(rule.get('pinCode') or rule.get('pin_code') or '').strip()
-                if pin_c and d_name not in unlocked_pins:
+                dept_u = str(rule.get('deptUsername') or rule.get('dept_username') or '').strip()
+                dept_p = str(rule.get('deptPassword') or rule.get('dept_password') or '').strip()
+                authed_d = rule.get('authorizedDevices') or rule.get('authorized_devices') or []
+                my_g = get_desktop_machine_guid()
+                is_p = bool(pin_c or dept_u or dept_p)
+                is_u = (d_name in unlocked_pins) or (my_g in authed_d)
+                if is_p and not is_u:
                     return False
                 return True
 

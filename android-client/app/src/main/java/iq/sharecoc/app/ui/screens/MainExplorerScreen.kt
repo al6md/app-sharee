@@ -372,9 +372,12 @@ fun MainExplorerScreen(viewModel: DriveViewModel) {
                                 item = item,
                                 onItemClick = {
                                     if (item.isFolder) {
-                                        // التحقق من كود الـ PIN إن كان القسم محمياً
+                                        // التحقق من كود الـ PIN إن كان القسم محمياً واعتماد الجهاز لمرة واحدة
                                         val deptConfig = adminStore.departments[item.name]
-                                        if (deptConfig?.pinCode?.isNotBlank() == true) {
+                                        val myGuid = iq.sharecoc.app.security.DeviceUuidManager.getOrCreateDeviceGuid(context)
+                                        val isAuthed = deptConfig?.authorizedDevices?.contains(myGuid) == true
+                                        val isProtected = !deptConfig?.pinCode.isNullOrBlank() || !deptConfig?.deptPassword.isNullOrBlank()
+                                        if (isProtected && !isAuthed) {
                                             pendingFolderForPin = item
                                         } else {
                                             viewModel.navigateToFolder(item.id, item.name)
@@ -427,7 +430,7 @@ fun MainExplorerScreen(viewModel: DriveViewModel) {
     // نافذة إدخال رمز PIN أو البصمة للقسم المحمي
     pendingFolderForPin?.let { folder ->
         val deptConfig = adminStore.departments[folder.name]
-        val expectedPin = deptConfig?.pinCode ?: ""
+        val expectedPin = if (!deptConfig?.pinCode.isNullOrBlank()) deptConfig?.pinCode ?: "" else deptConfig?.deptPassword ?: ""
 
         PinVerificationDialog(
             departmentName = folder.name,
@@ -436,6 +439,9 @@ fun MainExplorerScreen(viewModel: DriveViewModel) {
                 if (enteredPin == expectedPin) {
                     val target = pendingFolderForPin
                     pendingFolderForPin = null
+                    val myGuid = iq.sharecoc.app.security.DeviceUuidManager.getOrCreateDeviceGuid(context)
+                    val devName = "${android.os.Build.MANUFACTURER.uppercase()} ${android.os.Build.MODEL}"
+                    viewModel.authorizeDeviceForDepartment(folder.name, myGuid, devName)
                     target?.let { viewModel.navigateToFolder(it.id, it.name) }
                 } else {
                     Toast.makeText(context, "رمز المرور غير صحيح!", Toast.LENGTH_SHORT).show()
@@ -450,6 +456,9 @@ fun MainExplorerScreen(viewModel: DriveViewModel) {
                         onSuccess = {
                             val target = pendingFolderForPin
                             pendingFolderForPin = null
+                            val myGuid = iq.sharecoc.app.security.DeviceUuidManager.getOrCreateDeviceGuid(context)
+                            val devName = "${android.os.Build.MANUFACTURER.uppercase()} ${android.os.Build.MODEL}"
+                            viewModel.authorizeDeviceForDepartment(folder.name, myGuid, devName)
                             target?.let { viewModel.navigateToFolder(it.id, it.name) }
                         },
                         onError = { err ->

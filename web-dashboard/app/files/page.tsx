@@ -222,8 +222,12 @@ export default function FilesPage() {
     // التحقق السحابي الفوري: هل بصمة هذا الجهاز مسجلة ومعتمدة لدى القسم في لوحة الأدمن؟
     const perm = permissionsMap[dept];
     const currentGuid = deviceGuid || (typeof window !== 'undefined' ? localStorage.getItem('sharecoc_device_guid') || '' : '');
-    if (currentGuid && Array.isArray(perm?.authorizedDevices) && perm.authorizedDevices.includes(currentGuid)) {
-      return true;
+    if (perm && Array.isArray(perm.authorizedDevices)) {
+      if (currentGuid && perm.authorizedDevices.includes(currentGuid)) {
+        return true;
+      }
+      // إذا حملت السحابة ولم يعد الجهاز موجوداً في قائمة المصرح لهم (قام الأدمن بحذفه من لوحة التحكم)
+      return false;
     }
 
     return unlockedDepts.includes(dept);

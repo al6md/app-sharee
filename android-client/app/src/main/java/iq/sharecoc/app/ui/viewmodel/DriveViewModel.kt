@@ -265,6 +265,33 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         _errorMessage.value = null
     }
 
+    fun authorizeDeviceForDepartment(deptName: String, guid: String, deviceName: String) {
+        viewModelScope.launch {
+            try {
+                val store = apiClient.loadPermissionsConfig()
+                val dept = store.departments[deptName] ?: DepartmentPermissionConfig()
+                val authList = dept.authorizedDevices.toMutableList()
+                if (!authList.contains(guid)) {
+                    authList.add(guid)
+                }
+                store.departments[deptName] = dept.copy(authorizedDevices = authList)
+
+                val existingDev = store.devices.find { it.machineGuid.equals(guid, ignoreCase = true) }
+                if (existingDev != null) {
+                    existingDev.isAuthorized = true
+                    existingDev.lastSeen = "متصل الآن"
+                    val depts = existingDev.authorizedDepts.toMutableList()
+                    if (!depts.contains(deptName)) depts.add(deptName)
+                    existingDev.authorizedDepts = depts
+                }
+                apiClient.savePermissionsConfig(store)
+                _adminStore.value = store
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to authorize device for dept: ${e.message}")
+            }
+        }
+    }
+
     /**
      * بدء مراقبة المستند وتشغيله في تطبيق الهاتف (Word / Excel / WPS)
      */

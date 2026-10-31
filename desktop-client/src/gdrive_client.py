@@ -19,6 +19,7 @@ import http.client
 import urllib.parse
 import mimetypes
 import threading
+from datetime import datetime
 from pathlib import Path
 
 import requests
@@ -731,6 +732,7 @@ class GoogleDriveClient:
                     can_upload = bool(cfg.get("canUpload", cfg.get("canWrite", True)))
                     can_edit = bool(cfg.get("canEdit", cfg.get("canWrite", True)))
                     can_delete = bool(cfg.get("canDelete", True))
+                    auth_devs = list(cfg.get("authorizedDevices", []) or cfg.get("authorized_devices", []) or [])
                     normalized[dept_name] = {
                         "can_view": bool(cfg.get("canView", True)),
                         "can_download": bool(cfg.get("canDownload", True)),
@@ -743,9 +745,17 @@ class GoogleDriveClient:
                         "can_permanent_delete": bool(cfg.get("canPermanentDelete", can_delete)),
                         "can_write": can_upload or can_edit,
                         "pin_code": str(cfg.get("pinCode", "") or ""),
+                        "dept_username": str(cfg.get("deptUsername", "") or cfg.get("dept_username", "") or ""),
+                        "dept_password": str(cfg.get("deptPassword", "") or cfg.get("dept_password", "") or ""),
+                        "authorized_devices": auth_devs,
+                        "pinCode": str(cfg.get("pinCode", "") or ""),
+                        "deptUsername": str(cfg.get("deptUsername", "") or cfg.get("dept_username", "") or ""),
+                        "deptPassword": str(cfg.get("deptPassword", "") or cfg.get("dept_password", "") or ""),
+                        "authorizedDevices": auth_devs,
                     }
             self._perms_cache_data = normalized
             self._perms_cache_ts = now
+            self._cloud_devices_list = data.get("devices", []) if isinstance(data, dict) else []
             try:
                 lf = self._get_local_perms_file()
                 lf.parent.mkdir(parents=True, exist_ok=True)
@@ -756,6 +766,91 @@ class GoogleDriveClient:
         except Exception as e:
             _safe_log(f"[GDRIVE] Error reading folder permissions: {e}")
             return getattr(self, "_perms_cache_data", {}) or {}
+
+    def authorize_device_for_dept(self, dept_name, machine_guid, device_name, os_info="Windows"):
+        """اعتماد وتسجيل الجهاز لقسم معين سحابياً في .sharecoc_permissions.json لتثبيت الدخول للأبد"""
+        if not self.is_configured():
+            return False
+        try:
+            from googleapiclient.http import MediaInMemoryUpload
+            res = self._execute(lambda s: s.files().list(
+                q=f"'{self.root_folder_id}' in parents and name = '.sharecoc_permissions.json' and trashed = false",
+                fields="files(id, name)",
+                pageSize=5
+            ))
+            files = res.get("files", [])
+            data = {}
+            cfg_id = None
+            if files:
+                cfg_id = files[0]["id"]
+                raw_bytes = self._execute(lambda s: s.files().get_media(fileId=cfg_id))
+                raw_text = raw_bytes.decode("utf-8", errors="replace") if isinstance(raw_bytes, bytes) else str(raw_bytes)
+                data = json.loads(raw_text or "{}")
+
+            if not isinstance(data, dict):
+                data = {}
+
+            clean_guid = str(machine_guid).strip()
+            clean_name = str(device_name).strip() or "حاسوب موظف"
+            clean_dept = str(dept_name).strip()
+
+            depts = data.setdefault("departments", {})
+            dept_cfg = depts.setdefault(clean_dept, {})
+            auth_devs = list(dept_cfg.get("authorizedDevices", []) or dept_cfg.get("authorized_devices", []) or [])
+            if clean_guid not in auth_devs:
+                auth_devs.append(clean_guid)
+            dept_cfg["authorizedDevices"] = auth_devs
+            dept_cfg["authorized_devices"] = auth_devs
+            dept_cfg["updatedAt"] = datetime.utcnow().isoformat() + "Z"
+
+            # تسجيل أو تحديث الجهاز في لوحة الأدمن سحابياً
+            devs_list = data.setdefault("devices", [])
+            found = False
+            for d in devs_list:
+                if d.get("machineGuid") == clean_guid or d.get("id") == clean_guid:
+                    d["name"] = clean_name
+                    d["isAuthorized"] = True
+                    d["lastSeen"] = "متصل الآن"
+                    d["status"] = "متصل الآن"
+                    d["os"] = os_info
+                    authed_d = list(d.get("authorizedDepts", []) or [])
+                    if clean_dept not in authed_d:
+                        authed_d.append(clean_dept)
+                    d["authorizedDepts"] = authed_d
+                    d["department"] = clean_dept
+                    found = True
+                    break
+            if not found:
+                devs_list.append({
+                    "id": f"dev-{int(time.time()*1000)}",
+                    "name": clean_name,
+                    "user": clean_name,
+                    "os": os_info,
+                    "machineGuid": clean_guid,
+                    "isAuthorized": True,
+                    "lastSeen": "متصل الآن",
+                    "status": "متصل الآن",
+                    "department": clean_dept,
+                    "authorizedDepts": [clean_dept],
+                    "registeredAt": datetime.utcnow().isoformat() + "Z"
+                })
+
+            data["updatedAt"] = datetime.utcnow().isoformat() + "Z"
+            new_payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+            media = MediaInMemoryUpload(new_payload, mimetype="application/json", resumable=False)
+
+            if cfg_id:
+                self._execute(lambda s: s.files().update(fileId=cfg_id, media_body=media))
+            else:
+                self._execute(lambda s: s.files().create(body={'name': '.sharecoc_permissions.json', 'parents': [self.root_folder_id]}, media_body=media))
+
+            # تحديث الكاش المحلي فورياً
+            self.get_folder_permissions(force_refresh=True)
+            _safe_log(f"[GDRIVE] Successfully authorized device {clean_name} ({clean_guid}) for department {clean_dept}")
+            return True
+        except Exception as e:
+            _safe_log(f"[GDRIVE ERROR] authorize_device_for_dept failed: {e}")
+            return False
 
     def _get_local_perms_file(self):
         folder = getattr(self, "sync_folder", None)
