@@ -2,20 +2,23 @@
 """
 غرفة تجارة كربلاء المقدسة – منظومة Share COC
 مركز قواعد بيانات Access الموحد (Access Data Hub Desktop Widget)
-يدعم الدمج الشامل، الخانات الحقيقية، الترتيب الأصلي الدقيق 100% للحقول، والـ CRUD الكامل مع المزامنة السحابية.
+يدعم الدمج الشامل، الخانات الحقيقية، الترتيب الأصلي الدقيق 100% للحقول،
+الفرز الزمني (من الجديد إلى القديم والعكس)، إضافة وحذف الحقول ديناميكياً، والـ CRUD الكامل مع المزامنة السحابية.
 """
 
 import os
 import sys
+import re
 import json
 import requests
 from pathlib import Path
+from datetime import datetime
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QTableWidget, QTableWidgetItem, QHeaderView,
     QButtonGroup, QFrame, QDialog, QMessageBox, QFileDialog,
-    QScrollArea, QAbstractItemView, QProgressDialog
+    QScrollArea, QAbstractItemView, QProgressDialog, QComboBox
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread
 from PyQt6.QtGui import QFont, QColor, QCursor, QIcon
@@ -26,26 +29,70 @@ LOCAL_API_URL = "http://localhost:3000/api/access-hub"
 # مسار مجلد البيانات المحلي كنسخة احتياطية سريعة
 LOCAL_DATA_DIR = Path(__file__).parent.parent.parent / "web-dashboard" / "data" / "access-hub"
 
+DATE_KEYWORDS = ['date', 'تاريخ', 'affiliation', 'expiration', 'year', 'سنة', 'مواليد']
+
+
+def parse_date_value(val):
+    """تحليل ذكي لقيم التواريخ لتحويلها إلى Timestamp للمقارنة والفرز"""
+    if val is None or val == "":
+        return None
+    s = str(val).strip()
+
+    # YYYY-MM-DD أو YYYY/MM/DD
+    m = re.match(r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})", s)
+    if m:
+        try:
+            return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3))).timestamp()
+        except Exception:
+            pass
+
+    # DD/MM/YYYY أو DD-MM-YYYY
+    m = re.match(r"^(\d{1,2})[-/](\d{1,2})[-/](\d{4})", s)
+    if m:
+        try:
+            return datetime(int(m.group(3)), int(m.group(2)), int(m.group(1))).timestamp()
+        except Exception:
+            pass
+
+    # محاولة التحليل القياسي
+    try:
+        return datetime.fromisoformat(s).timestamp()
+    except Exception:
+        pass
+
+    # سنة فقط e.g. 2024
+    if re.match(r"^\d{4}$", s):
+        try:
+            return datetime(int(s), 1, 1).timestamp()
+        except Exception:
+            pass
+
+    return None
+
+
 class DataLoaderThread(QThread):
     data_loaded = pyqtSignal(dict)
     error_occurred = pyqtSignal(str)
 
-    def __init__(self, file_name, table_name, search_query="", page=1, limit=100):
+    def __init__(self, file_name, table_name, search_query="", page=1, limit=50, sort_dir="none", sort_col="date_auto"):
         super().__init__()
         self.file_name = file_name
         self.table_name = table_name
         self.search_query = search_query
         self.page = page
         self.limit = limit
+        self.sort_dir = sort_dir
+        self.sort_col = sort_col
 
     def run(self):
-        # محاولة الاتصال بالخادم المحلي أو السحابي أولاً
         params = {
             "file": self.file_name,
             "table": self.table_name,
             "search": self.search_query,
             "page": self.page,
-            "limit": self.limit
+            "limit": self.limit,
+            "sort_dir": self.sort_dir,
+            "sort_col": self.sort_col
         }
 
         # 1. فحص الخادم المحلي السريع
@@ -69,7 +116,7 @@ class DataLoaderThread(QThread):
 
         # 3. الاتصال بالسحابة المباشرة Vercel
         try:
-            r = requests.get(CLOUD_API_URL, params=params, timeout=10)
+            r = requests.get(CLOUD_API_URL, params=params, timeout=12)
             if r.status_code == 200:
                 self.data_loaded.emit(r.json())
                 return
@@ -89,6 +136,16 @@ class DataLoaderThread(QThread):
         req_table = self.table_name
         search = self.search_query.strip().lower()
 
+        # قراءة الطفرات السحابية المخزنة محلياً إن وجدت
+        mutations = {"adds": [], "updates": {}, "deletes": [], "added_columns": {}, "deleted_columns": {}}
+        mut_path = LOCAL_DATA_DIR / "mutations.json"
+        if mut_path.exists():
+            try:
+                with open(mut_path, "r", encoding="utf-8") as mf:
+                    mutations = json.load(mf)
+            except Exception:
+                pass
+
         rows = []
         columns = []
         available_tables = []
@@ -98,6 +155,9 @@ class DataLoaderThread(QThread):
             for f in idx.get("files", []):
                 for t in f.get("tables", []):
                     tables_set.add(t)
+            for a in mutations.get("adds", []):
+                if a.get("_adh_table"):
+                    tables_set.add(a["_adh_table"])
             available_tables = list(tables_set)
             if not req_table or req_table not in tables_set:
                 req_table = available_tables[0] if available_tables else "التجار"
@@ -107,25 +167,28 @@ class DataLoaderThread(QThread):
 
             for f in idx.get("files", []):
                 fpath = LOCAL_DATA_DIR / f"{f['name']}.json"
-                if not fpath.exists(): continue
+                if not fpath.exists():
+                    continue
                 with open(fpath, "r", encoding="utf-8") as jf:
                     data = json.load(jf)
-                
+
                 orig_cols = data.get("columns", {}).get(req_table, [])
                 for c in orig_cols:
                     if c not in cols_seen:
                         cols_seen.add(c)
-                        cols_order.push(c) if hasattr(cols_order, 'push') else cols_order.append(c)
+                        cols_order.append(c)
 
                 for r in data.get("tables", {}).get(req_table, []):
-                    if search:
-                        match = any(v and search in str(v).lower() for v in r.values())
-                        if not match: continue
-                    rows.append(r)
+                    r_copy = dict(r)
+                    r_copy["_adh_file"] = f["name"]
+                    r_copy["_adh_table"] = req_table
+                    rows.append(r_copy)
+
             columns = cols_order
         else:
             fpath = LOCAL_DATA_DIR / f"{req_file}.json"
-            if not fpath.exists(): return None
+            if not fpath.exists():
+                return None
             with open(fpath, "r", encoding="utf-8") as jf:
                 data = json.load(jf)
 
@@ -133,25 +196,106 @@ class DataLoaderThread(QThread):
             if not req_table or req_table not in data.get("tables", {}):
                 req_table = available_tables[0] if available_tables else ""
 
-            columns = data.get("columns", {}).get(req_table, [])
+            columns = list(data.get("columns", {}).get(req_table, []))
             for r in data.get("tables", {}).get(req_table, []):
-                if search:
-                    match = any(v and search in str(v).lower() for v in r.values())
-                    if not match: continue
-                rows.append(r)
+                r_copy = dict(r)
+                r_copy["_adh_file"] = req_file
+                r_copy["_adh_table"] = req_table
+                rows.append(r_copy)
 
-        total_matches = len(rows)
+        # دمج الحقول المضافة والمحذوفة
+        added_for_tbl = []
+        deleted_for_tbl = []
+        for k, v in mutations.get("added_columns", {}).items():
+            if k.endswith(f":{req_table}") or (req_file != "all" and k == f"{req_file}:{req_table}"):
+                for c in v:
+                    if c not in added_for_tbl:
+                        added_for_tbl.append(c)
+
+        for k, v in mutations.get("deleted_columns", {}).items():
+            if k.endswith(f":{req_table}") or (req_file != "all" and k == f"{req_file}:{req_table}"):
+                for c in v:
+                    if c not in deleted_for_tbl:
+                        deleted_for_tbl.append(c)
+
+        active_columns = [c for c in columns if c not in deleted_for_tbl]
+        for c in added_for_tbl:
+            if c not in active_columns and c not in deleted_for_tbl:
+                active_columns.append(c)
+
+        # استخراج أعمدة التواريخ
+        date_columns = []
+        for c in active_columns:
+            clow = c.lower()
+            if any(k in clow for k in DATE_KEYWORDS):
+                date_columns.append(c)
+
+        # تطبيق الحذف والتعديل والإضافة
+        deleted_ids = set(mutations.get("deletes", []))
+        updates = mutations.get("updates", {})
+
+        filtered_rows = []
+        for r in rows:
+            r_id = r.get("_adh_id") or f"{r.get('_adh_file')}:{r.get('_adh_table')}:{r.get('ID') or r.get('id') or r.get('ت')}"
+            if r_id in deleted_ids:
+                continue
+            merged = dict(r)
+            if r_id in updates:
+                merged.update(updates[r_id])
+            merged["_adh_id"] = r_id
+            if search:
+                match = any(v and search in str(v).lower() for k, v in merged.items() if not k.startswith("_adh_"))
+                if not match:
+                    continue
+            filtered_rows.append(merged)
+
+        # إضافة السجلات الجديدة
+        for a in mutations.get("adds", []):
+            if req_file == "all" or a.get("_adh_file") == req_file:
+                if a.get("_adh_table") == req_table:
+                    a_id = a.get("_adh_id")
+                    if a_id and a_id in deleted_ids:
+                        continue
+                    merged = dict(a)
+                    if a_id and a_id in updates:
+                        merged.update(updates[a_id])
+                    if search:
+                        match = any(v and search in str(v).lower() for k, v in merged.items() if not k.startswith("_adh_"))
+                        if not match:
+                            continue
+                    filtered_rows.insert(0, merged)
+
+        # الفرز الزمني إذا طُلب
+        actual_sort_col = self.sort_col
+        if self.sort_dir in ('desc', 'asc'):
+            if actual_sort_col == 'date_auto' or not actual_sort_col:
+                actual_sort_col = date_columns[0] if date_columns else (active_columns[0] if active_columns else "")
+
+            if actual_sort_col:
+                def sort_key(row):
+                    val = row.get(actual_sort_col)
+                    ts = parse_date_value(val)
+                    if ts is not None:
+                        return (0, ts)
+                    return (1, str(val or ""))
+
+                filtered_rows.sort(key=sort_key, reverse=(self.sort_dir == 'desc'))
+
+        total_matches = len(filtered_rows)
         start_idx = (self.page - 1) * self.limit
-        page_rows = rows[start_idx:start_idx + self.limit]
+        page_rows = filtered_rows[start_idx:start_idx + self.limit]
 
         return {
             "success": True,
             "files": idx.get("files", []),
-            "total_records": idx.get("total_records", 0),
+            "total_records": idx.get("total_records", 0) + len(mutations.get("adds", [])) - len(mutations.get("deletes", [])),
             "active_file": req_file,
             "active_table": req_table,
             "available_tables": available_tables,
-            "columns": columns,
+            "columns": active_columns,
+            "date_columns": date_columns,
+            "sort_col": actual_sort_col,
+            "sort_dir": self.sort_dir,
             "total_matches": total_matches,
             "page": self.page,
             "limit": self.limit,
@@ -162,27 +306,57 @@ class DataLoaderThread(QThread):
 
 class RecordFormDialog(QDialog):
     """نافذة لإضافة أو تعديل قيد بالحفاظ الكامل على ترتيب الحقول الأصلية 100%"""
-    def __init__(self, title, columns, initial_data=None, parent=None):
+    def __init__(self, title, columns, initial_data=None, files_list=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.resize(550, 600)
+        self.resize(580, 650)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.columns = columns
+        self.files_list = files_list or []
         self.inputs = {}
+        self.selected_file = None
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(10)
+        layout.setSpacing(12)
+        layout.setContentsMargins(16, 16, 16, 16)
 
         header = QLabel(title)
         header.setFont(QFont("IBM Plex Sans Arabic", 11, QFont.Weight.Bold))
         header.setStyleSheet("color: #14372e; padding-bottom: 6px; border-bottom: 2px solid #c59b27;")
         layout.addWidget(header)
 
+        # اختيار الملف في حالة الإضافة وكان في وضع الدمج الشامل
+        if self.files_list and initial_data is None:
+            file_box = QVBoxLayout()
+            file_box.setSpacing(4)
+            lbl_file = QLabel("📁 حفظ القيد في ملف / قسم:")
+            lbl_file.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+            lbl_file.setStyleSheet("color: #344054;")
+            file_box.addWidget(lbl_file)
+
+            self.file_combo = QComboBox()
+            self.file_combo.setFont(QFont("IBM Plex Sans Arabic", 9))
+            self.file_combo.setStyleSheet("""
+                QComboBox {
+                    background: #F8F9FA;
+                    border: 1.5px solid #14372e;
+                    border-radius: 6px;
+                    padding: 6px 12px;
+                    font-weight: bold;
+                    color: #14372e;
+                }
+            """)
+            for f in self.files_list:
+                fname = f.get("name", "") if isinstance(f, dict) else str(f)
+                self.file_combo.addItem(fname)
+            file_box.addWidget(self.file_combo)
+            layout.addLayout(file_box)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll_content = QWidget()
         scroll_layout = QVBoxLayout(scroll_content)
-        scroll_layout.setSpacing(8)
+        scroll_layout.setSpacing(10)
 
         for col in self.columns:
             row_box = QVBoxLayout()
@@ -216,18 +390,20 @@ class RecordFormDialog(QDialog):
         layout.addWidget(scroll, stretch=1)
 
         btn_row = QHBoxLayout()
-        btn_save = QPushButton("حفظ ومزامنة سحابية")
+        btn_save = QPushButton("💾 حفظ ومزامنة سحابية فورية")
         btn_save.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+        btn_save.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         btn_save.setStyleSheet("""
             background: #14372e;
             color: #FFFFFF;
             border-radius: 6px;
-            padding: 8px 16px;
+            padding: 8px 18px;
         """)
         btn_save.clicked.connect(self.accept)
 
         btn_cancel = QPushButton("إلغاء")
         btn_cancel.setFont(QFont("IBM Plex Sans Arabic", 9))
+        btn_cancel.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         btn_cancel.setStyleSheet("""
             background: #F2F4F7;
             color: #344054;
@@ -245,6 +421,151 @@ class RecordFormDialog(QDialog):
     def get_data(self):
         return {col: self.inputs[col].text().strip() for col in self.columns}
 
+    def get_target_file(self):
+        if hasattr(self, 'file_combo'):
+            return self.file_combo.currentText()
+        return None
+
+
+class AddColumnDialog(QDialog):
+    """نافذة لإضافة حقل جديد إلى الجدول مع تعميمه سحابياً"""
+    def __init__(self, table_name, file_name, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("إضافة حقل جديد")
+        self.resize(440, 230)
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(18, 18, 18, 18)
+
+        lbl_title = QLabel("➕ إضافة حقل جديد إلى قاعدة البيانات")
+        lbl_title.setFont(QFont("IBM Plex Sans Arabic", 11, QFont.Weight.Bold))
+        lbl_title.setStyleSheet("color: #14372e;")
+        layout.addWidget(lbl_title)
+
+        info = QLabel(f"الجدول المستهدف: {table_name} | القسم: {file_name}")
+        info.setFont(QFont("IBM Plex Sans Arabic", 9))
+        info.setStyleSheet("color: #667085;")
+        layout.addWidget(info)
+
+        lbl_name = QLabel("اسم الحقل الجديد:")
+        lbl_name.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+        lbl_name.setStyleSheet("color: #344054;")
+        layout.addWidget(lbl_name)
+
+        self.input_col = QLineEdit()
+        self.input_col.setPlaceholderText("مثال: رقم الهاتف الثاني، الملاحظات، الرقم الضريبي...")
+        self.input_col.setFont(QFont("IBM Plex Sans Arabic", 9))
+        self.input_col.setStyleSheet("""
+            QLineEdit {
+                background: #FFFFFF;
+                border: 1.5px solid #D0D5DD;
+                border-radius: 6px;
+                padding: 8px 12px;
+            }
+            QLineEdit:focus { border-color: #14372e; }
+        """)
+        layout.addWidget(self.input_col)
+
+        hint = QLabel("💡 سيتم تعميم هذا الحقل فورياً في السحابة لجميع الموظفين ولوحة الويب.")
+        hint.setFont(QFont("IBM Plex Sans Arabic", 8))
+        hint.setStyleSheet("color: #027A48;")
+        layout.addWidget(hint)
+
+        btn_row = QHBoxLayout()
+        btn_add = QPushButton("إضافة وتعميم سحابي")
+        btn_add.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+        btn_add.setStyleSheet("background: #14372e; color: #FFFFFF; border-radius: 6px; padding: 8px 16px;")
+        btn_add.clicked.connect(self._validate_and_accept)
+
+        btn_cancel = QPushButton("إلغاء")
+        btn_cancel.setFont(QFont("IBM Plex Sans Arabic", 9))
+        btn_cancel.setStyleSheet("background: #F2F4F7; color: #344054; border: 1px solid #D0D5DD; border-radius: 6px; padding: 8px 16px;")
+        btn_cancel.clicked.connect(self.reject)
+
+        btn_row.addStretch()
+        btn_row.addWidget(btn_cancel)
+        btn_row.addWidget(btn_add)
+        layout.addLayout(btn_row)
+
+    def _validate_and_accept(self):
+        val = self.input_col.text().strip()
+        if not val:
+            QMessageBox.warning(self, "تنبيه", "يرجى كتابة اسم الحقل أولاً.")
+            return
+        self.accept()
+
+    def get_column_name(self):
+        return self.input_col.text().strip()
+
+
+class DeleteColumnDialog(QDialog):
+    """نافذة لحذف أو إخفاء حقل من الجدول وتعميمه سحابياً"""
+    def __init__(self, table_name, columns, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("إدارة وحذف الحقول")
+        self.resize(440, 240)
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(18, 18, 18, 18)
+
+        lbl_title = QLabel("🗑️ حذف حقل من الجدول")
+        lbl_title.setFont(QFont("IBM Plex Sans Arabic", 11, QFont.Weight.Bold))
+        lbl_title.setStyleSheet("color: #B42318;")
+        layout.addWidget(lbl_title)
+
+        info = QLabel(f"الجدول المستهدف: {table_name}")
+        info.setFont(QFont("IBM Plex Sans Arabic", 9))
+        info.setStyleSheet("color: #667085;")
+        layout.addWidget(info)
+
+        lbl_pick = QLabel("اختر الحقل المراد حذفه:")
+        lbl_pick.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+        lbl_pick.setStyleSheet("color: #344054;")
+        layout.addWidget(lbl_pick)
+
+        self.combo_cols = QComboBox()
+        self.combo_cols.setFont(QFont("IBM Plex Sans Arabic", 9))
+        self.combo_cols.setStyleSheet("""
+            QComboBox {
+                background: #FFFFFF;
+                border: 1.5px solid #D0D5DD;
+                border-radius: 6px;
+                padding: 6px 12px;
+            }
+        """)
+        for c in columns:
+            self.combo_cols.addItem(c)
+        layout.addWidget(self.combo_cols)
+
+        warn = QLabel("⚠️ تحذير: سيتم إخفاء هذا الحقل وحذفه من العرض لجميع المستخدمين في كافة المنصات.")
+        warn.setFont(QFont("IBM Plex Sans Arabic", 8))
+        warn.setStyleSheet("color: #B42318;")
+        warn.setWordWrap(True)
+        layout.addWidget(warn)
+
+        btn_row = QHBoxLayout()
+        btn_del = QPushButton("تأكيد حذف الحقل")
+        btn_del.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+        btn_del.setStyleSheet("background: #D92D20; color: #FFFFFF; border-radius: 6px; padding: 8px 16px;")
+        btn_del.clicked.connect(self.accept)
+
+        btn_cancel = QPushButton("إلغاء")
+        btn_cancel.setFont(QFont("IBM Plex Sans Arabic", 9))
+        btn_cancel.setStyleSheet("background: #F2F4F7; color: #344054; border: 1px solid #D0D5DD; border-radius: 6px; padding: 8px 16px;")
+        btn_cancel.clicked.connect(self.reject)
+
+        btn_row.addStretch()
+        btn_row.addWidget(btn_cancel)
+        btn_row.addWidget(btn_del)
+        layout.addLayout(btn_row)
+
+    def get_selected_column(self):
+        return self.combo_cols.currentText()
+
 
 class AccessHubWidget(QWidget):
     """القسم المستقل لمركز بيانات Access الموحد داخل تطبيق الحاسوب"""
@@ -256,6 +577,9 @@ class AccessHubWidget(QWidget):
         self.active_table = "التجار"
         self.current_page = 1
         self.limit = 50
+        self.sort_dir = "none"  # "none", "desc", "asc"
+        self.sort_col = "date_auto"
+        self.date_columns = []
         self.current_data = None
         self.loader_thread = None
 
@@ -287,7 +611,7 @@ class AccessHubWidget(QWidget):
         title.setStyleSheet("color: #14372e; border: none; background: transparent;")
         title_col.addWidget(title)
 
-        subtitle = QLabel("دمج سحابي فوري لكافة السجلات مع الحفاظ التام 100% على ترتيب الحقول والمعلومات الأصلية")
+        subtitle = QLabel("دمج سحابي فوري لكافة السجلات مع الحفاظ التام 100% على ترتيب الحقول والمعلومات الأصلية والفرز الزمني وإدارة الحقول")
         subtitle.setFont(QFont("IBM Plex Sans Arabic", 9))
         subtitle.setStyleSheet("color: #667085; border: none; background: transparent;")
         title_col.addWidget(subtitle)
@@ -360,7 +684,7 @@ class AccessHubWidget(QWidget):
 
         main_layout.addWidget(self.subtables_frame)
 
-        # 4. شريط البحث والعمليات
+        # 4. شريط البحث وإجراءات القيود (Row 1)
         toolbar = QHBoxLayout()
         toolbar.setSpacing(8)
 
@@ -380,21 +704,21 @@ class AccessHubWidget(QWidget):
         self.search_input.textChanged.connect(self._on_search_changed)
         toolbar.addWidget(self.search_input, stretch=1)
 
-        self.btn_add = QPushButton("➕ إضافة قيد")
+        self.btn_add = QPushButton("➕ إضافة قيد جديد")
         self.btn_add.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
         self.btn_add.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.btn_add.setStyleSheet("background: #14372e; color: #FFFFFF; border-radius: 6px; padding: 6px 12px;")
+        self.btn_add.setStyleSheet("background: #14372e; color: #FFFFFF; border-radius: 6px; padding: 6px 14px;")
         self.btn_add.clicked.connect(self._on_add_clicked)
         toolbar.addWidget(self.btn_add)
 
-        self.btn_edit = QPushButton("✏️ تعديل")
+        self.btn_edit = QPushButton("✏️ تعديل قيد")
         self.btn_edit.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
         self.btn_edit.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.btn_edit.setStyleSheet("background: #F7F8FA; color: #14372e; border: 1px solid #D0D5DD; border-radius: 6px; padding: 6px 12px;")
         self.btn_edit.clicked.connect(self._on_edit_clicked)
         toolbar.addWidget(self.btn_edit)
 
-        self.btn_delete = QPushButton("🗑️ حذف")
+        self.btn_delete = QPushButton("🗑️ حذف قيد")
         self.btn_delete.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
         self.btn_delete.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.btn_delete.setStyleSheet("background: #FEF3F2; color: #B42318; border: 1px solid #FECDCA; border-radius: 6px; padding: 6px 12px;")
@@ -410,7 +734,111 @@ class AccessHubWidget(QWidget):
 
         main_layout.addLayout(toolbar)
 
-        # 5. الجدول الرئيسي (ترتيب الحقول والمعلومات الأصلي 100%)
+        # 5. شريط الترتيب الزمني وإدارة الحقول المتقدم (Row 2)
+        controls_frame = QFrame()
+        controls_frame.setStyleSheet("""
+            QFrame {
+                background: #F8F9FA;
+                border: 1px solid #E4E7EC;
+                border-radius: 8px;
+                padding: 4px 8px;
+            }
+        """)
+        controls_layout = QHBoxLayout(controls_frame)
+        controls_layout.setContentsMargins(6, 4, 6, 4)
+        controls_layout.setSpacing(10)
+
+        # قسم ترتيب التاريخ
+        lbl_sort = QLabel("📅 ترتيب التاريخ:")
+        lbl_sort.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+        lbl_sort.setStyleSheet("color: #14372e;")
+        controls_layout.addWidget(lbl_sort)
+
+        self.btn_sort_desc = QPushButton("⬇️ من الجديد إلى القديم")
+        self.btn_sort_desc.setFont(QFont("IBM Plex Sans Arabic", 8, QFont.Weight.Bold))
+        self.btn_sort_desc.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_sort_desc.clicked.connect(lambda: self._set_sort_dir("desc"))
+        controls_layout.addWidget(self.btn_sort_desc)
+
+        self.btn_sort_asc = QPushButton("⬆️ من القديم إلى الجديد")
+        self.btn_sort_asc.setFont(QFont("IBM Plex Sans Arabic", 8, QFont.Weight.Bold))
+        self.btn_sort_asc.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_sort_asc.clicked.connect(lambda: self._set_sort_dir("asc"))
+        controls_layout.addWidget(self.btn_sort_asc)
+
+        self.btn_sort_none = QPushButton("🔄 الترتيب الأصلي")
+        self.btn_sort_none.setFont(QFont("IBM Plex Sans Arabic", 8))
+        self.btn_sort_none.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_sort_none.clicked.connect(lambda: self._set_sort_dir("none"))
+        controls_layout.addWidget(self.btn_sort_none)
+
+        # حقل اختيار عمود التاريخ
+        self.combo_date_col = QComboBox()
+        self.combo_date_col.setFont(QFont("IBM Plex Sans Arabic", 8))
+        self.combo_date_col.setStyleSheet("""
+            QComboBox {
+                background: #FFFFFF;
+                border: 1px solid #D0D5DD;
+                border-radius: 5px;
+                padding: 3px 8px;
+                color: #344054;
+            }
+        """)
+        self.combo_date_col.addItem("تلقائي (حقل التاريخ الذكي)", "date_auto")
+        self.combo_date_col.currentIndexChanged.connect(self._on_date_col_changed)
+        controls_layout.addWidget(self.combo_date_col)
+
+        # فاصل
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setFrameShadow(QFrame.Shadow.Sunken)
+        sep.setStyleSheet("color: #D0D5DD;")
+        controls_layout.addWidget(sep)
+
+        # قسم إدارة الحقول
+        lbl_cols_mgmt = QLabel("📋 إدارة الحقول:")
+        lbl_cols_mgmt.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+        lbl_cols_mgmt.setStyleSheet("color: #14372e;")
+        controls_layout.addWidget(lbl_cols_mgmt)
+
+        self.btn_add_col = QPushButton("➕ إضافة حقل جديد")
+        self.btn_add_col.setFont(QFont("IBM Plex Sans Arabic", 8, QFont.Weight.Bold))
+        self.btn_add_col.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_add_col.setStyleSheet("""
+            QPushButton {
+                background: #EDF5F2;
+                color: #14372e;
+                border: 1px solid #A6D4C3;
+                border-radius: 5px;
+                padding: 4px 10px;
+            }
+            QPushButton:hover { background: #D8EDE5; }
+        """)
+        self.btn_add_col.clicked.connect(self._on_add_column_clicked)
+        controls_layout.addWidget(self.btn_add_col)
+
+        self.btn_del_col = QPushButton("🗑️ حذف حقل")
+        self.btn_del_col.setFont(QFont("IBM Plex Sans Arabic", 8, QFont.Weight.Bold))
+        self.btn_del_col.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_del_col.setStyleSheet("""
+            QPushButton {
+                background: #FEF3F2;
+                color: #B42318;
+                border: 1px solid #FECDCA;
+                border-radius: 5px;
+                padding: 4px 10px;
+            }
+            QPushButton:hover { background: #FEE4E2; }
+        """)
+        self.btn_del_col.clicked.connect(self._on_del_column_clicked)
+        controls_layout.addWidget(self.btn_del_col)
+
+        controls_layout.addStretch()
+        main_layout.addWidget(controls_frame)
+
+        self._update_sort_btn_styles()
+
+        # 6. الجدول الرئيسي (ترتيب الحقول والمعلومات الأصلي 100%)
         self.table_widget = QTableWidget()
         self.table_widget.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.table_widget.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -418,6 +846,7 @@ class AccessHubWidget(QWidget):
         self.table_widget.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table_widget.horizontalHeader().setStretchLastSection(True)
         self.table_widget.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.table_widget.horizontalHeader().sectionClicked.connect(self._on_header_clicked)
         self.table_widget.setFont(QFont("IBM Plex Sans Arabic", 9))
         self.table_widget.doubleClicked.connect(self._on_edit_clicked)
         self.table_widget.setStyleSheet("""
@@ -433,6 +862,7 @@ class AccessHubWidget(QWidget):
                 font-weight: bold;
                 padding: 6px 8px;
                 border: 1px solid #E4E7EC;
+                cursor: pointer;
             }
             QTableWidget::item:selected {
                 background: #EDF5F2;
@@ -441,7 +871,7 @@ class AccessHubWidget(QWidget):
         """)
         main_layout.addWidget(self.table_widget, stretch=1)
 
-        # 6. شريط الترقيم والتنقل
+        # 7. شريط الترقيم والتنقل
         pagination_row = QHBoxLayout()
         self.lbl_page_info = QLabel("الصفحة 1 من 1")
         self.lbl_page_info.setFont(QFont("IBM Plex Sans Arabic", 9))
@@ -502,12 +932,66 @@ class AccessHubWidget(QWidget):
             }
         """
 
+    def _update_sort_btn_styles(self):
+        active_style = "background: #14372e; color: #FFFFFF; border: 1px solid #14372e; border-radius: 5px; padding: 4px 10px;"
+        inactive_style = "background: #FFFFFF; color: #344054; border: 1px solid #D0D5DD; border-radius: 5px; padding: 4px 10px;"
+
+        self.btn_sort_desc.setStyleSheet(active_style if self.sort_dir == "desc" else inactive_style)
+        self.btn_sort_asc.setStyleSheet(active_style if self.sort_dir == "asc" else inactive_style)
+        self.btn_sort_none.setStyleSheet(active_style if self.sort_dir == "none" else inactive_style)
+
+    def _set_sort_dir(self, direction):
+        self.sort_dir = direction
+        self._update_sort_btn_styles()
+        self.current_page = 1
+        self.load_data()
+
+    def _on_date_col_changed(self):
+        val = self.combo_date_col.currentData()
+        if val:
+            self.sort_col = val
+            if self.sort_dir != "none":
+                self.current_page = 1
+                self.load_data()
+
+    def _on_header_clicked(self, logical_index):
+        if not self.current_data:
+            return
+        cols = self.current_data.get("columns", [])
+        c_offset = 1 if self.active_file == "all" else 0
+        if logical_index < c_offset:
+            return
+        col_name = cols[logical_index - c_offset]
+
+        if self.sort_col == col_name:
+            if self.sort_dir == "desc":
+                self.sort_dir = "asc"
+            elif self.sort_dir == "asc":
+                self.sort_dir = "none"
+            else:
+                self.sort_dir = "desc"
+        else:
+            self.sort_col = col_name
+            self.sort_dir = "desc"
+
+        self._update_sort_btn_styles()
+        self.current_page = 1
+        self.load_data()
+
     def load_data(self):
         self.btn_refresh.setEnabled(False)
         self.btn_refresh.setText("جاري التحميل...")
 
         query = self.search_input.text().strip()
-        self.loader_thread = DataLoaderThread(self.active_file, self.active_table, query, self.current_page, self.limit)
+        self.loader_thread = DataLoaderThread(
+            self.active_file,
+            self.active_table,
+            query,
+            self.current_page,
+            self.limit,
+            sort_dir=self.sort_dir,
+            sort_col=self.sort_col
+        )
         self.loader_thread.data_loaded.connect(self._on_data_loaded)
         self.loader_thread.error_occurred.connect(self._on_data_error)
         self.loader_thread.start()
@@ -516,6 +1000,22 @@ class AccessHubWidget(QWidget):
         self.btn_refresh.setEnabled(True)
         self.btn_refresh.setText("🔄 تحديث فوري")
         self.current_data = data
+
+        # تحديث قائمة أعمدة التواريخ في الكومبوبوكس
+        self.date_columns = data.get("date_columns", [])
+        self.combo_date_col.blockSignals(True)
+        self.combo_date_col.clear()
+        self.combo_date_col.addItem("تلقائي (حقل التاريخ الذكي)", "date_auto")
+        for dc in self.date_columns:
+            self.combo_date_col.addItem(f"📅 {dc}", dc)
+
+        # تحديد العنصر الحالي
+        cur_col = data.get("sort_col", self.sort_col)
+        for i in range(self.combo_date_col.count()):
+            if self.combo_date_col.itemData(i) == cur_col:
+                self.combo_date_col.setCurrentIndex(i)
+                break
+        self.combo_date_col.blockSignals(False)
 
         # تحديث أزرار الملفات ديناميكياً إذا لم تكن مضافة
         if self.file_btn_group.buttons() and len(self.file_btn_group.buttons()) <= 1:
@@ -555,7 +1055,18 @@ class AccessHubWidget(QWidget):
         rows = data.get("rows", [])
 
         # إضافة عمود الملف في خانة الدمج الشامل
-        display_cols = (["الملف المصدر"] + cols) if self.active_file == "all" else cols
+        display_cols = []
+        if self.active_file == "all":
+            display_cols.append("الملف المصدر")
+
+        for c in cols:
+            header_txt = c
+            if c == data.get("sort_col"):
+                if self.sort_dir == "desc":
+                    header_txt = f"{c} ⬇️"
+                elif self.sort_dir == "asc":
+                    header_txt = f"{c} ⬆️"
+            display_cols.append(header_txt)
 
         self.table_widget.setColumnCount(len(display_cols))
         self.table_widget.setHorizontalHeaderLabels(display_cols)
@@ -616,15 +1127,66 @@ class AccessHubWidget(QWidget):
         self.current_page += 1
         self.load_data()
 
+    def _on_add_column_clicked(self):
+        """إضافة حقل جديد إلى الجدول"""
+        if not self.current_data:
+            return
+        target_file = self.active_file if self.active_file != "all" else (self.current_data["files"][0]["name"] if self.current_data.get("files") else "الاسم التجاري 2025 - 2026")
+        dlg = AddColumnDialog(self.active_table, target_file, parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            new_col = dlg.get_column_name()
+            try:
+                r = requests.post(CLOUD_API_URL, json={
+                    "file": target_file,
+                    "table": self.active_table,
+                    "action": "ADD_COLUMN",
+                    "columnName": new_col
+                }, timeout=10)
+                if r.status_code == 200:
+                    QMessageBox.information(self, "نجاح", f"تمت إضافة الحقل '{new_col}' سحابياً بنجاح وتعميمه للجميع.")
+                    self.load_data()
+                else:
+                    QMessageBox.warning(self, "تنبيه", f"فشلت إضافة الحقل: {r.text}")
+            except Exception as e:
+                QMessageBox.critical(self, "خطأ", f"تعذر الاتصال بالسحابة: {e}")
+
+    def _on_del_column_clicked(self):
+        """حذف حقل من الجدول"""
+        if not self.current_data or not self.current_data.get("columns"):
+            QMessageBox.information(self, "تنبيه", "لا توجد حقول لحذفها في هذا الجدول.")
+            return
+
+        cols = self.current_data["columns"]
+        dlg = DeleteColumnDialog(self.active_table, cols, parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            col_to_del = dlg.get_selected_column()
+            target_file = self.active_file if self.active_file != "all" else (self.current_data["files"][0]["name"] if self.current_data.get("files") else "الاسم التجاري 2025 - 2026")
+            try:
+                r = requests.post(CLOUD_API_URL, json={
+                    "file": target_file,
+                    "table": self.active_table,
+                    "action": "DELETE_COLUMN",
+                    "columnName": col_to_del
+                }, timeout=10)
+                if r.status_code == 200:
+                    QMessageBox.information(self, "نجاح", f"تم حذف الحقل '{col_to_del}' سحابياً بنجاح.")
+                    self.load_data()
+                else:
+                    QMessageBox.warning(self, "تنبيه", f"فشل حذف الحقل: {r.text}")
+            except Exception as e:
+                QMessageBox.critical(self, "خطأ", f"تعذر الاتصال بالسحابة: {e}")
+
     def _on_add_clicked(self):
+        """إضافة قيد جديد مع إمكانية تحديد الملف إذا كان في وضع الدمج الشامل"""
         if not self.current_data or not self.current_data.get("columns"):
             return
         cols = self.current_data["columns"]
-        dlg = RecordFormDialog(f"إضافة قيد جديد في جدول ({self.active_table})", cols, parent=self)
+        files = self.current_data.get("files", [])
+        dlg = RecordFormDialog(f"إضافة قيد جديد في جدول ({self.active_table})", cols, files_list=files if self.active_file == "all" else None, parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             new_data = dlg.get_data()
+            target_file = dlg.get_target_file() or (self.active_file if self.active_file != "all" else self.current_data["files"][0]["name"])
             try:
-                target_file = self.active_file if self.active_file != "all" else self.current_data["files"][0]["name"]
                 r = requests.post(CLOUD_API_URL, json={
                     "file": target_file,
                     "table": self.active_table,
