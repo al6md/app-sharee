@@ -1067,11 +1067,20 @@ class GoogleDriveClient:
                                 progress_callback(int(status.resumable_progress), int(status.total_size or 1))
                             except Exception:
                                 pass
-                os.replace(tmp, dest)
+                try:
+                    os.replace(tmp, dest)
+                except (PermissionError, OSError) as os_err:
+                    try:
+                        from office_handler import OfficeHandler
+                        applied = OfficeHandler.safe_apply_file(str(dest), str(tmp))
+                        if not applied:
+                            raise os_err
+                    except Exception:
+                        raise os_err
             finally:
                 if tmp.exists():
                     try:
-                        tmp.unlink()
+                        tmp.unlink(missing_ok=True)
                     except Exception:
                         pass
             _safe_log(f"[GDRIVE] Downloaded: {file_name} -> {dest}")

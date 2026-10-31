@@ -270,19 +270,18 @@ class OfficeHandler:
                 OfficeHandler._bring_window_to_front(path_str, synchronous=synchronous)
                 return True
             except Exception as e_startfile:
-                # الطريقة الثالثة البديلة: استدعاء أمر التشغيل في cmd
+                # الطريقة الثالثة البديلة الآمنة: استدعاء مستكشف ويندوز بدون وسيط الشل (منع حقن الأوامر)
                 try:
-                    subprocess.Popen(f'cmd /c start "" "{path_str}"', shell=True)
+                    subprocess.Popen(['explorer.exe', path_str], shell=False)
                     OfficeHandler._bring_window_to_front(path_str, synchronous=synchronous)
                     return True
-                except Exception as e_cmd:
-                    # الطريقة الرابعة: عبر powershell Start-Process
+                except Exception as e_exp:
                     try:
-                        subprocess.Popen(['powershell', '-Command', f'Start-Process -FilePath "{path_str}"'], shell=True)
+                        subprocess.Popen(['cmd.exe', '/c', 'start', '', path_str], shell=False)
                         OfficeHandler._bring_window_to_front(path_str, synchronous=synchronous)
                         return True
-                    except Exception as e_ps:
-                        raise RuntimeError(f"تعذر فتح الملف بالبرنامج الأصلي: {e_startfile} | {e_cmd} | {e_ps}")
+                    except Exception as e_cmd:
+                        raise RuntimeError(f"تعذر فتح الملف بالبرنامج الأصلي: {e_startfile} | {e_exp} | {e_cmd}")
         else:
             subprocess.run(['xdg-open', path_str])
             return True

@@ -27,11 +27,46 @@ try:
 except Exception:
     pass
 
+def _safe_log_err(msg):
+    try:
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        with open(_log_file, "a", encoding="utf-8", errors="replace") as f:
+            f.write(f"[{timestamp}] {msg}\n")
+    except Exception:
+        pass
+
+def _global_exception_handler(exc_type, exc_value, exc_traceback):
+    """حارس الاستثناءات العالمي: تسجيل الأخطاء غير المتوقعة ومنع انهيار PyQt6 المفاجئ"""
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+    import traceback
+    err_text = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+    _safe_log_err(f"[UNHANDLED EXCEPTION]: {err_text}")
+
+def _thread_exception_handler(args):
+    """حارس استثناءات الخيوط الخلفية لمنع توقف المحرك فجأة"""
+    if issubclass(args.exc_type, KeyboardInterrupt):
+        return
+    import traceback
+    err_text = "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback))
+    _safe_log_err(f"[THREAD EXCEPTION in {getattr(args.thread, 'name', 'unknown')}]: {err_text}")
+
+sys.excepthook = _global_exception_handler
+if hasattr(threading, 'excepthook'):
+    threading.excepthook = _thread_exception_handler
+
 from PyQt6.QtWidgets import (
     QApplication, QDialog, QVBoxLayout,
     QLabel, QLineEdit, QPushButton, QMessageBox
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, qInstallMessageHandler, QtMsgType
+
+def _qt_message_handler(msg_type, context, message):
+    if msg_type in (QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg):
+        _safe_log_err(f"[Qt {msg_type.name}]: {message}")
+
+qInstallMessageHandler(_qt_message_handler)
 
 from supabase_client import SupabaseClient
 from gdrive_client import GoogleDriveClient
@@ -195,18 +230,45 @@ def ensure_desktop_shortcut():
         print(f"[Shortcut creation]: {e}")
 
 
+def _find_sharecoc_hwnds():
+    hwnds = []
+    try:
+        import ctypes
+        import ctypes.wintypes
+        user32 = ctypes.windll.user32
+        def _enum_proc(hwnd, _):
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length > 0:
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buf, length + 1)
+                t = buf.value.lower()
+                if "share coc" in t or "تبادل الملفات" in t or "كربلاء" in t:
+                    hwnds.append(hwnd)
+            return 1
+        CB = ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)(_enum_proc)
+        user32.EnumWindows(CB, 0)
+    except Exception:
+        pass
+    return hwnds
+
+
 def _activate_running_instance(retries=2, delay=0.15):
     """محاولة إيقاظ وإظهار النسخة العاملة حالياً والتحقق من وجود نافذة حقيقية"""
-    # 1. فحص وجود نافذة Win32 حقيقية وتنشيطها
+    # 1. فحص وجود نافذة Win32 حقيقية وتنشيطها (حتى لو كانت مصغرة أو في صينية النظام)
     try:
         import ctypes
         user32 = ctypes.windll.user32
-        for title in ("Share COC – غرفة تجارة كربلاء المقدسة", "Share COC"):
-            hwnd = user32.FindWindowW(None, title)
-            if hwnd:
-                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
-                user32.SetForegroundWindow(hwnd)
-                return True
+        hwnds = _find_sharecoc_hwnds()
+        if hwnds:
+            for hwnd in hwnds:
+                try:
+                    user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                    user32.ShowWindow(hwnd, 5)  # SW_SHOW
+                    user32.BringWindowToTop(hwnd)
+                    user32.SetForegroundWindow(hwnd)
+                except Exception:
+                    pass
+            return True
     except Exception:
         pass
 
@@ -214,7 +276,7 @@ def _activate_running_instance(retries=2, delay=0.15):
     import urllib.request
     try:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        with opener.open("http://127.0.0.1:18290/show", timeout=0.8) as resp:
+        with opener.open("http://127.0.0.1:18290/show", timeout=1.2) as resp:
             if resp.status == 200:
                 return True
     except Exception:
@@ -229,16 +291,9 @@ def _activate_running_instance(retries=2, delay=0.15):
         if h_ev:
             kernel32.SetEvent(h_ev)
             kernel32.CloseHandle(h_ev)
-            # ننتظر قليلاً للتأكد هل ظهرت نافذة
-            time.sleep(0.2)
-            user32 = ctypes.windll.user32
-            for title in ("Share COC – غرفة تجارة كربلاء المقدسة", "Share COC"):
-                if user32.FindWindowW(None, title):
-                    return True
+            return True
     except Exception:
         pass
-
-    return False
 
     return False
 
@@ -408,7 +463,21 @@ def main():
         if activated:
             sys.exit(0)
 
-        # إذا تعذر التنشيط، فالعملية السابقة متجمدة أو معلقة؛ إنهاؤها وتحرير المنفذ والقفل فوراً
+        # فحص إضافي: هل المنفذ 18290 يستجيب للـ status؟ إذا كان يستجيب فالبرنامج يعمل بنشاط في الخلفية ولا يجوز قتله
+        is_alive = False
+        try:
+            import urllib.request
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open("http://127.0.0.1:18290/status", timeout=1.0) as resp:
+                if resp.status == 200:
+                    is_alive = True
+        except Exception:
+            is_alive = False
+
+        if is_alive:
+            sys.exit(0)
+
+        # فقط إذا تعذر التنشيط والمنفذ لا يستجيب تماماً، فالعملية السابقة متجمدة؛ إنهاؤها وتحرير المنفذ والقفل
         _kill_unresponsive_zombies()
         try:
             kernel32.CloseHandle(_single_instance_mutex)

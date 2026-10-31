@@ -190,11 +190,15 @@ class LanSyncService:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         except Exception:
             pass
-        try:
-            sock.bind(('0.0.0.0', LAN_DISCOVERY_PORT))
-        except Exception as e:
-            _safe_log(f"[LAN Turbo-Sync] Could not bind UDP port {LAN_DISCOVERY_PORT}: {e}")
-            return
+        for attempt in range(5):
+            try:
+                sock.bind(('0.0.0.0', LAN_DISCOVERY_PORT))
+                break
+            except Exception as e:
+                if attempt == 4:
+                    _safe_log(f"[LAN Turbo-Sync] Could not bind UDP port {LAN_DISCOVERY_PORT}: {e}")
+                    return
+                time.sleep(1.0)
 
         sock.settimeout(2.0)
         while self.is_running:
@@ -245,7 +249,19 @@ class LanSyncService:
         if not rel_path or not self.sync_engine:
             return
 
-        dest_file = self.sync_folder / rel_path
+        safe_rel = norm_rel(rel_path).replace("\\", "/").strip("/")
+        while "../" in safe_rel or "..\\" in safe_rel:
+            safe_rel = safe_rel.replace("../", "").replace("..\\", "")
+        dest_file = (self.sync_folder / safe_rel).resolve()
+        sync_root = self.sync_folder.resolve()
+        try:
+            if not dest_file.is_relative_to(sync_root):
+                _safe_log(f"[LAN Turbo-Sync Security] Traversal attempt blocked: {rel_path}")
+                return
+        except AttributeError:
+            if not str(dest_file).startswith(str(sync_root)):
+                _safe_log(f"[LAN Turbo-Sync Security] Traversal attempt blocked: {rel_path}")
+                return
 
         # إذا كان الملف موجوداً ومطابقاً للبصمة مسبقاً، لا داعي لإعادة جلبه
         if dest_file.exists() and dest_file.is_file() and remote_md5:

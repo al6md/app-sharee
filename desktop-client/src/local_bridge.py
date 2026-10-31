@@ -28,6 +28,10 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
     last_sync_time = 0.0
     last_synced_file = ""
 
+    def _is_loopback(self):
+        client_ip = getattr(self, 'client_address', ('',))[0]
+        return client_ip in ('127.0.0.1', '::1', 'localhost')
+
     def _set_headers(self, status=200, content_type='application/json'):
         self.send_response(status)
         self.send_header('Content-Type', f'{content_type}; charset=utf-8')
@@ -45,6 +49,12 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         params = urllib.parse.parse_qs(parsed.query)
+
+        # منع استدعاء المسارات الحساسة والتحكم بالتطبيق من خارج الجهاز المحلي
+        if path in ('/open', '/show', '/reveal', '/unlock', '/sync') and not self._is_loopback():
+            self._set_headers(403)
+            self.wfile.write(json.dumps({"success": False, "error": "Forbidden: Local loopback access only"}, ensure_ascii=False).encode('utf-8'))
+            return
 
         if path == '/ping' or path == '/status':
             self._set_headers(200)
@@ -118,6 +128,12 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
             file_name = params.get('file', [''])[0].strip()
             folder_name = params.get('folder', [''])[0].strip()
             storage_path = params.get('storage_path', [''])[0].strip()
+
+            # حماية المسارات من محاولات التخطي (Path Traversal Protection)
+            while "../" in file_name or "..\\" in file_name:
+                file_name = file_name.replace("../", "").replace("..\\", "")
+            while "../" in folder_name or "..\\" in folder_name:
+                folder_name = folder_name.replace("../", "").replace("..\\", "")
 
             if not file_name:
                 self._set_headers(400)
@@ -203,6 +219,10 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
             file_name = params.get('file', [''])[0].strip()
             folder_name = params.get('folder', [''])[0].strip()
             storage_path = params.get('storage_path', [''])[0].strip()
+            while "../" in file_name or "..\\" in file_name:
+                file_name = file_name.replace("../", "").replace("..\\", "")
+            while "../" in folder_name or "..\\" in folder_name:
+                folder_name = folder_name.replace("../", "").replace("..\\", "")
             target_path = self._find_or_download_file(file_name, folder_name, storage_path)
             if target_path and target_path.exists():
                 OfficeHandler.cleanup_orphaned_office_locks(str(target_path))
@@ -217,6 +237,10 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
             file_name = params.get('file', [''])[0].strip()
             folder_name = params.get('folder', [''])[0].strip()
             storage_path = params.get('storage_path', [''])[0].strip()
+            while "../" in file_name or "..\\" in file_name:
+                file_name = file_name.replace("../", "").replace("..\\", "")
+            while "../" in folder_name or "..\\" in folder_name:
+                folder_name = folder_name.replace("../", "").replace("..\\", "")
             target_path = self._find_or_download_file(file_name, folder_name, storage_path)
             if target_path and target_path.exists():
                 subprocess.Popen(['explorer.exe', f'/select,{str(target_path)}'])
@@ -230,6 +254,10 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
         if path == '/file-status':
             file_name = params.get('file', [''])[0].strip()
             folder_name = params.get('folder', [''])[0].strip()
+            while "../" in file_name or "..\\" in file_name:
+                file_name = file_name.replace("../", "").replace("..\\", "")
+            while "../" in folder_name or "..\\" in folder_name:
+                folder_name = folder_name.replace("../", "").replace("..\\", "")
             target_path = self._find_local_file(file_name, folder_name)
             if target_path and target_path.exists():
                 try:

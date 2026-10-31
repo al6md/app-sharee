@@ -12,8 +12,10 @@
   • تخزين مؤقت لبصمة MD5 حتى للملفات الضخمة لتفادي إعادة قراءة مئات الميجابايتات في كل دورة.
 """
 import os
+import sys
 import json
 import time
+import shutil
 import hashlib
 import threading
 from datetime import datetime
@@ -748,13 +750,18 @@ class SyncEngine:
                         pass
 
     def _background_sync_loop(self):
-        delta_interval = 1.5
+        delta_interval = 2.0
+        last_poll_error_time = 0.0
         while self.is_running:
             waited = 0.0
             while self.is_running and waited < CYCLE_SECONDS:
                 if self._wake_event.wait(timeout=min(delta_interval, CYCLE_SECONDS - waited)):
                     break
                 waited += delta_interval
+                now_t = time.time()
+                # تهدئة الاستعلام عند انقطاع الاتصال لتفادي استهلاك الحصة أو المعالج
+                if (now_t - last_poll_error_time) < 15.0:
+                    continue
                 try:
                     if hasattr(self.client, "poll_changes_since_last"):
                         res = self.client.poll_changes_since_last()
@@ -765,6 +772,7 @@ class SyncEngine:
                                 self._apply_delta_pull(ch_list)
                             break
                 except Exception as poll_e:
+                    last_poll_error_time = time.time()
                     _safe_log(f"[Poll loop error]: {poll_e}")
             self._wake_event.clear()
             while self.is_running:

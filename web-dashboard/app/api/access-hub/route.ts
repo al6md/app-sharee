@@ -105,8 +105,9 @@ function getIndex() {
 }
 
 function getFileContent(fileName: string) {
-  const filePath = path.join(DATA_DIR, `${fileName}.json`);
-  if (!fs.existsSync(filePath)) {
+  const safeName = path.basename(fileName).replace(/[^a-zA-Z0-9_\u0600-\u06FF\s.-]/g, '');
+  const filePath = path.join(DATA_DIR, `${safeName}.json`);
+  if (!filePath.startsWith(DATA_DIR) || !fs.existsSync(filePath)) {
     return null;
   }
   try {
