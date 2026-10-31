@@ -19,6 +19,8 @@ export interface AccessMutations {
   adds: AccessRecord[];
   updates: Record<string, Record<string, any>>;
   deletes: string[];
+  added_columns?: Record<string, string[]>;
+  deleted_columns?: Record<string, string[]>;
   last_sync: string;
 }
 
@@ -26,6 +28,8 @@ const DEFAULT_MUTATIONS: AccessMutations = {
   adds: [],
   updates: {},
   deletes: [],
+  added_columns: {},
+  deleted_columns: {},
   last_sync: new Date().toISOString(),
 };
 
@@ -266,6 +270,92 @@ export async function deleteAccessRecord(id: string): Promise<boolean> {
 
   await saveAccessHubMutations(mutations);
   return true;
+}
+
+/**
+ * إضافة حقل جديد سحابياً لجدول معين وتعميمه على جميع الموظفين
+ */
+export async function addColumnToTable(file: string, table: string, columnName: string): Promise<string[]> {
+  const cleanCol = columnName.trim();
+  if (!cleanCol) throw new Error('اسم الحقل مطلوب');
+
+  const { mutations } = await getAccessHubMutations(true);
+  if (!mutations.added_columns) mutations.added_columns = {};
+  if (!mutations.deleted_columns) mutations.deleted_columns = {};
+
+  const key = `${file}_${table}`;
+  const currentAdded = mutations.added_columns[key] || [];
+  if (!currentAdded.includes(cleanCol)) {
+    mutations.added_columns[key] = [...currentAdded, cleanCol];
+  }
+
+  // إذا كان الحقل في المحذوفات نزيله منها
+  const currentDeleted = mutations.deleted_columns[key] || [];
+  if (currentDeleted.includes(cleanCol)) {
+    mutations.deleted_columns[key] = currentDeleted.filter((c) => c !== cleanCol);
+  }
+
+  await saveAccessHubMutations(mutations);
+  return mutations.added_columns[key];
+}
+
+/**
+ * حذف حقل سحابياً من جدول معين وتعميم الحذف على جميع الموظفين
+ */
+export async function deleteColumnFromTable(file: string, table: string, columnName: string): Promise<string[]> {
+  const cleanCol = columnName.trim();
+  if (!cleanCol) throw new Error('اسم الحقل مطلوب');
+
+  const { mutations } = await getAccessHubMutations(true);
+  if (!mutations.added_columns) mutations.added_columns = {};
+  if (!mutations.deleted_columns) mutations.deleted_columns = {};
+
+  const key = `${file}_${table}`;
+
+  // إزالته من الحقول المضافة إن وجد
+  const currentAdded = mutations.added_columns[key] || [];
+  if (currentAdded.includes(cleanCol)) {
+    mutations.added_columns[key] = currentAdded.filter((c) => c !== cleanCol);
+  }
+
+  // إضافته إلى قائمة الحقول المحذوفة
+  const currentDeleted = mutations.deleted_columns[key] || [];
+  if (!currentDeleted.includes(cleanCol)) {
+    mutations.deleted_columns[key] = [...currentDeleted, cleanCol];
+  }
+
+  await saveAccessHubMutations(mutations);
+  return mutations.deleted_columns[key];
+}
+
+/**
+ * استخراج قائمة الأعمدة النهائية بدمج الأعمدة المضافة وتصفية المحذوفة
+ */
+export function getCustomColumns(file: string, table: string, baseColumns: string[], mutations: AccessMutations): string[] {
+  const key = `${file}_${table}`;
+  const allKey = `all_${table}`;
+
+  const deletedSet = new Set<string>([
+    ...(mutations.deleted_columns?.[key] || []),
+    ...(mutations.deleted_columns?.[allKey] || [])
+  ]);
+
+  const addedList = [
+    ...(mutations.added_columns?.[allKey] || []),
+    ...(mutations.added_columns?.[key] || [])
+  ];
+
+  // 1. تصفية الحقول المحذوفة من الأعمدة الأساسية
+  const finalCols = baseColumns.filter((c) => !deletedSet.has(c));
+
+  // 2. إضافة الحقول المضافة حديثاً إذا لم تكن موجودة بالفعل
+  for (const col of addedList) {
+    if (!deletedSet.has(col) && !finalCols.includes(col)) {
+      finalCols.push(col);
+    }
+  }
+
+  return finalCols;
 }
 
 /**

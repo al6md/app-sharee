@@ -6,7 +6,10 @@ import {
   addAccessRecord, 
   updateAccessRecord, 
   deleteAccessRecord, 
-  applyMutations 
+  applyMutations,
+  addColumnToTable,
+  deleteColumnFromTable,
+  getCustomColumns
 } from '@/lib/accessCloudStore';
 
 export const dynamic = 'force-dynamic';
@@ -39,7 +42,44 @@ function getFileContent(fileName: string) {
   }
 }
 
-// GET: الاستعلام عن الجداول والبيانات بالحفاظ التام 100% على ترتيب الحقول والمعلومات الأصلية + دمج التعديلات السحابية
+/**
+ * تحليل ذكي لقيم التواريخ لتحويلها إلى Timestamp للمقارنة والفرز
+ */
+function parseDateValue(val: any): number | null {
+  if (val === null || val === undefined || val === '') return null;
+  const s = String(val).trim();
+
+  // YYYY-MM-DD أو YYYY/MM/DD
+  let match = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (match) {
+    const y = parseInt(match[1], 10);
+    const m = parseInt(match[2], 10) - 1;
+    const d = parseInt(match[3], 10);
+    return new Date(y, m, d).getTime();
+  }
+
+  // DD/MM/YYYY أو DD-MM-YYYY
+  match = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+  if (match) {
+    const d = parseInt(match[1], 10);
+    const m = parseInt(match[2], 10) - 1;
+    const y = parseInt(match[3], 10);
+    return new Date(y, m, d).getTime();
+  }
+
+  // محاولة التحليل القياسي
+  const parsed = Date.parse(s);
+  if (!isNaN(parsed)) return parsed;
+
+  // في حال كانت السنة فقط e.g. 2024
+  if (/^\d{4}$/.test(s)) {
+    return new Date(parseInt(s, 10), 0, 1).getTime();
+  }
+
+  return null;
+}
+
+// GET: الاستعلام عن الجداول والبيانات بالحفاظ التام 100% على ترتيب الحقول + الفرز الزمني + إدارة الحقول
 export async function GET(req: NextRequest) {
   try {
     const url = new URL(req.url);
@@ -49,6 +89,10 @@ export async function GET(req: NextRequest) {
     const page = Math.max(1, parseInt(url.searchParams.get('page') || '1'));
     const limit = Math.min(200, Math.max(10, parseInt(url.searchParams.get('limit') || '50')));
     const checkSig = url.searchParams.get('sig');
+
+    // خيارات الفرز الزمني
+    const sortDir = (url.searchParams.get('sort_dir') || 'none').toLowerCase(); // 'desc' | 'asc' | 'none'
+    const sortColParam = url.searchParams.get('sort_col') || 'date_auto';
 
     const index = getIndex();
     const { mutations } = await getAccessHubMutations();
@@ -60,7 +104,7 @@ export async function GET(req: NextRequest) {
     }
 
     let rawRows: any[] = [];
-    let columns: string[] = [];
+    let baseColumns: string[] = [];
     let availableTables: string[] = [];
     let activeTable = requestedTable;
 
@@ -110,7 +154,7 @@ export async function GET(req: NextRequest) {
         }
       }
 
-      columns = colsOrder;
+      baseColumns = colsOrder;
     } else {
       // 📁 وضع خانة ملف محدد باسمه الحقيقي
       const content = getFileContent(requestedFile);
@@ -120,7 +164,6 @@ export async function GET(req: NextRequest) {
 
       const fileTables = Object.keys(content.tables || {});
       const fileTablesSet = new Set(fileTables);
-      // إضافة الجداول من السجلات المضافة لهذا الملف إن وجدت
       (mutations.adds || []).forEach((a) => {
         if (a._adh_file === requestedFile && a._adh_table) {
           fileTablesSet.add(a._adh_table);
@@ -132,8 +175,8 @@ export async function GET(req: NextRequest) {
         activeTable = availableTables[0] || '';
       }
 
-      // الأعمدة بنفس ترتيبها الأصلي 100% من ملف Access بدون حذف أي حقل
-      columns = content.columns?.[activeTable] || [];
+      // الأعمدة بنفس ترتيبها الأصلي 100% من ملف Access
+      baseColumns = content.columns?.[activeTable] || [];
 
       // السجلات الأساسية
       const tableRows = content.tables[activeTable] || [];
@@ -149,15 +192,20 @@ export async function GET(req: NextRequest) {
     // تطبيق التعديلات والإضافات والمحذوفات السحابية
     const mergedRows = applyMutations(requestedFile, activeTable, rawRows, mutations);
 
-    // التحقق من وجود أعمدة جديدة في السجلات المضافة لم تكن موجودة بالأصل
-    for (const addRec of mutations.adds || []) {
-      if ((requestedFile === 'all' || addRec._adh_file === requestedFile) && addRec._adh_table === activeTable) {
-        for (const k of Object.keys(addRec)) {
-          if (!k.startsWith('_adh_') && !columns.includes(k)) {
-            columns.push(k);
-          }
-        }
-      }
+    // تطبيق الأعمدة المخصصة (إضافة / حذف الأعمدة السحابية)
+    let columns = getCustomColumns(requestedFile, activeTable, baseColumns, mutations);
+
+    // استكشاف حقول التواريخ المتاحة تلقائياً في هذا الجدول
+    const dateKeywords = ['date', 'تاريخ', 'affiliation', 'expiration', 'year', 'سنة', 'مواليد', 'انتساب', 'شطب', 'تعديل', 'تسجيل'];
+    const dateColumns = columns.filter((col) => {
+      const lower = col.toLowerCase();
+      return dateKeywords.some((kw) => lower.includes(kw));
+    });
+
+    // تحديد عمود الفرز الفعلي
+    let actualSortCol = sortColParam;
+    if (actualSortCol === 'date_auto') {
+      actualSortCol = dateColumns[0] || '';
     }
 
     // تصفية البحث
@@ -166,6 +214,32 @@ export async function GET(req: NextRequest) {
       filteredRows = mergedRows.filter((row) =>
         Object.values(row).some((val) => val && String(val).toLowerCase().includes(search))
       );
+    }
+
+    // تطبيق الترتيب الزمني (من الجديد للقديم أو العكس)
+    if (sortDir === 'desc' || sortDir === 'asc') {
+      const targetCol = actualSortCol || (dateColumns.length > 0 ? dateColumns[0] : '');
+      if (targetCol) {
+        filteredRows = [...filteredRows].sort((a, b) => {
+          const valA = a[targetCol];
+          const valB = b[targetCol];
+          const timeA = parseDateValue(valA);
+          const timeB = parseDateValue(valB);
+
+          // كلاهما يحملان تاريخاً صحيحاً
+          if (timeA !== null && timeB !== null) {
+            return sortDir === 'desc' ? timeB - timeA : timeA - timeB;
+          }
+          // الصف الذي يحتوي على تاريخ يظهر أولاً
+          if (timeA !== null) return -1;
+          if (timeB !== null) return 1;
+
+          // نص احتياطي
+          const strA = valA !== null && valA !== undefined ? String(valA) : '';
+          const strB = valB !== null && valB !== undefined ? String(valB) : '';
+          return sortDir === 'desc' ? strB.localeCompare(strA, 'ar') : strA.localeCompare(strB, 'ar');
+        });
+      }
     }
 
     const totalMatches = filteredRows.length;
@@ -183,6 +257,9 @@ export async function GET(req: NextRequest) {
       active_table: activeTable,
       available_tables: availableTables,
       columns,
+      date_columns: dateColumns,
+      sort_col: actualSortCol,
+      sort_dir: sortDir,
       total_matches: totalMatches,
       page,
       limit,
@@ -195,19 +272,46 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// POST: إضافة سجل جديد وتعميمه سحابياً 100% بدون الاعتماد على نظام الملفات المحلي المقفل على Vercel
+// POST: إضافة سجل جديد، أو إضافة حقل جديد، أو حذف حقل سحابياً
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { file, table, record } = body;
 
-    if (!file || !table || !record) {
-      return NextResponse.json({ success: false, error: 'بيانات غير مكتملة' }, { status: 400 });
+    // 1. إضافة حقل جديد للجدول
+    if (body.action === 'ADD_COLUMN') {
+      const { file, table, columnName } = body;
+      if (!file || !table || !columnName) {
+        return NextResponse.json({ success: false, error: 'بيانات الحقل غير مكتملة' }, { status: 400 });
+      }
+      const added = await addColumnToTable(file, table, columnName);
+      return NextResponse.json({
+        success: true,
+        message: `تمت إضافة الحقل "${columnName}" سحابياً بنجاح وتعميمه على الجميع`,
+        added_columns: added,
+      });
     }
 
-    // إضافة القيد سحابياً عبر accessCloudStore
-    const newRecord = await addAccessRecord(file, table, record);
+    // 2. حذف حقل من الجدول
+    if (body.action === 'DELETE_COLUMN') {
+      const { file, table, columnName } = body;
+      if (!file || !table || !columnName) {
+        return NextResponse.json({ success: false, error: 'بيانات الحقل غير مكتملة' }, { status: 400 });
+      }
+      const deleted = await deleteColumnFromTable(file, table, columnName);
+      return NextResponse.json({
+        success: true,
+        message: `تم حذف الحقل "${columnName}" سحابياً بنجاح`,
+        deleted_columns: deleted,
+      });
+    }
 
+    // 3. إضافة قيد بيانات جديد (Standard Record Add)
+    const { file, table, record } = body;
+    if (!file || !table || !record) {
+      return NextResponse.json({ success: false, error: 'بيانات القيد غير مكتملة' }, { status: 400 });
+    }
+
+    const newRecord = await addAccessRecord(file, table, record);
     return NextResponse.json({ 
       success: true, 
       message: 'تمت إضافة القيد وحفظه سحابياً بنجاح',
@@ -229,9 +333,7 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'بيانات التعديل غير مكتملة' }, { status: 400 });
     }
 
-    // تعديل القيد سحابياً عبر accessCloudStore
     const updated = await updateAccessRecord(id, updates);
-
     return NextResponse.json({ 
       success: true, 
       message: 'تم حفظ التعديل سحابياً بنجاح',
@@ -243,19 +345,31 @@ export async function PUT(req: NextRequest) {
   }
 }
 
-// DELETE: حذف سجل وتعميم الحذف سحابياً
+// DELETE: حذف سجل أو حذف حقل
 export async function DELETE(req: NextRequest) {
   try {
     const url = new URL(req.url);
-    const id = url.searchParams.get('id');
+    const type = url.searchParams.get('type');
 
+    // حذف حقل عبر DELETE request اختياري
+    if (type === 'column') {
+      const file = url.searchParams.get('file');
+      const table = url.searchParams.get('table');
+      const columnName = url.searchParams.get('columnName');
+      if (!file || !table || !columnName) {
+        return NextResponse.json({ success: false, error: 'بيانات الحقل غير مكتملة' }, { status: 400 });
+      }
+      await deleteColumnFromTable(file, table, columnName);
+      return NextResponse.json({ success: true, message: `تم حذف الحقل "${columnName}" سحابياً` });
+    }
+
+    // حذف قيد بيانات
+    const id = url.searchParams.get('id');
     if (!id) {
       return NextResponse.json({ success: false, error: 'معرف الحذف غير مكتمل' }, { status: 400 });
     }
 
-    // حذف القيد سحابياً عبر accessCloudStore
     await deleteAccessRecord(id);
-
     return NextResponse.json({ 
       success: true, 
       message: 'تم الحذف وتحديث السحابة بنجاح' 

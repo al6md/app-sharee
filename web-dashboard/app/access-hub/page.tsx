@@ -18,12 +18,19 @@ import {
   ChevronRight,
   ChevronLeft,
   ArrowUpDown,
+  ArrowDown,
+  ArrowUp,
   Filter,
   Eye,
   Save,
   Clock,
   Sparkles,
-  ShieldCheck
+  ShieldCheck,
+  Calendar,
+  SlidersHorizontal,
+  Columns,
+  PlusCircle,
+  Settings
 } from 'lucide-react';
 
 interface FileInfo {
@@ -43,6 +50,9 @@ interface ApiResponse {
   active_table: string;
   available_tables: string[];
   columns: string[];
+  date_columns?: string[];
+  sort_col?: string;
+  sort_dir?: string;
   total_matches: number;
   page: number;
   limit: number;
@@ -59,6 +69,10 @@ export default function AccessHubPage() {
   const [page, setPage] = useState<number>(1);
   const [limit, setLimit] = useState<number>(50);
 
+  // Sorting States (ترتيب التواريخ من الجديد للقديم وبالعكس)
+  const [sortDir, setSortDir] = useState<'none' | 'desc' | 'asc'>('none');
+  const [sortCol, setSortCol] = useState<string>('date_auto');
+
   // Data States
   const [data, setData] = useState<ApiResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -66,7 +80,21 @@ export default function AccessHubPage() {
   const [lastSig, setLastSig] = useState<string>('');
   const [autoSyncMessage, setAutoSyncMessage] = useState<string | null>(null);
 
-  // قراءة معلمات الرابط في حال تم النقر على قسم محدد من الصفحة الرئيسية
+  // Modals States: Records (البيانات)
+  const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
+  const [isEditModalOpen, setIsEditModalOpen] = useState<boolean>(false);
+  const [selectedRecord, setSelectedRecord] = useState<any | null>(null);
+  const [formData, setFormData] = useState<Record<string, any>>({});
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+
+  // Modals States: Columns Management (إضافة وحذف الحقول)
+  const [isAddColModalOpen, setIsAddColModalOpen] = useState<boolean>(false);
+  const [newColName, setNewColName] = useState<string>('');
+  const [isManageColsModalOpen, setIsManageColsModalOpen] = useState<boolean>(false);
+  const [deleteColConfirm, setDeleteColConfirm] = useState<string | null>(null);
+
+  // قراءة معلمات الرابط عند الانتقال
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const sp = new URLSearchParams(window.location.search);
@@ -77,15 +105,7 @@ export default function AccessHubPage() {
     }
   }, []);
 
-  // Modals States
-  const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
-  const [isEditModalOpen, setIsEditModalOpen] = useState<boolean>(false);
-  const [selectedRecord, setSelectedRecord] = useState<any | null>(null);
-  const [formData, setFormData] = useState<Record<string, any>>({});
-  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
-
-  // Fetch data
+  // Fetch data with sorting & cloud params
   const fetchData = async (isBackground = false) => {
     if (!isBackground) setLoading(true);
     setError(null);
@@ -97,6 +117,8 @@ export default function AccessHubPage() {
         search: searchQuery,
         page: page.toString(),
         limit: limit.toString(),
+        sort_dir: sortDir,
+        sort_col: sortCol,
       });
 
       const res = await fetch(`/api/access-hub?${params.toString()}`);
@@ -120,7 +142,7 @@ export default function AccessHubPage() {
 
   useEffect(() => {
     fetchData();
-  }, [activeFile, activeTable, page, limit]);
+  }, [activeFile, activeTable, page, limit, sortDir, sortCol]);
 
   // Handle Search Debounce
   useEffect(() => {
@@ -131,7 +153,7 @@ export default function AccessHubPage() {
     return () => clearTimeout(handler);
   }, [searchQuery]);
 
-  // Realtime Cloud Auto-Sync Polling (كل 5 ثوانٍ للتحقق من أي تعديل قام به موظف آخر)
+  // Realtime Cloud Auto-Sync Polling
   useEffect(() => {
     const interval = setInterval(async () => {
       if (!lastSig) return;
@@ -139,7 +161,6 @@ export default function AccessHubPage() {
         const res = await fetch(`/api/access-hub?sig=${lastSig}`);
         const check = await res.json();
         if (check.changed) {
-          // يوجد تعديل جديد من جهاز آخر!
           setAutoSyncMessage('تم استلام تحديث حي فوري من السحابة!');
           fetchData(true);
           setTimeout(() => setAutoSyncMessage(null), 4000);
@@ -150,7 +171,7 @@ export default function AccessHubPage() {
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [lastSig, activeFile, activeTable, page, limit, searchQuery]);
+  }, [lastSig, activeFile, activeTable, page, limit, searchQuery, sortDir, sortCol]);
 
   // Export to Excel / CSV
   const handleExportCSV = () => {
@@ -178,7 +199,7 @@ export default function AccessHubPage() {
     document.body.removeChild(link);
   };
 
-  // Submit Add
+  // Submit Add Record
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeTable) return;
@@ -199,7 +220,7 @@ export default function AccessHubPage() {
         setFormData({});
         fetchData();
         setAutoSyncMessage('تمت إضافة القيد بنجاح ومزامنته سحابياً مع الجميع');
-        setTimeout(() => setAutoSyncMessage(null), 3000);
+        setTimeout(() => setAutoSyncMessage(null), 3500);
       } else {
         alert(resJson.error || 'فشل حفظ القيد');
       }
@@ -210,7 +231,7 @@ export default function AccessHubPage() {
     }
   };
 
-  // Submit Edit
+  // Submit Edit Record
   const handleEditSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedRecord) return;
@@ -233,7 +254,7 @@ export default function AccessHubPage() {
         setFormData({});
         fetchData();
         setAutoSyncMessage('تم تعديل السجل ومزامنته سحابياً لجميع الموظفين');
-        setTimeout(() => setAutoSyncMessage(null), 3000);
+        setTimeout(() => setAutoSyncMessage(null), 3500);
       } else {
         alert(resJson.error || 'فشل حفظ التعديلات');
       }
@@ -244,11 +265,11 @@ export default function AccessHubPage() {
     }
   };
 
-  // Submit Delete
+  // Submit Delete Record
   const handleDelete = async (record: any) => {
     try {
       const res = await fetch(
-        `/api/access-hub?file=${encodeURIComponent(record._adh_file)}&table=${encodeURIComponent(record._adh_table)}&id=${encodeURIComponent(record._adh_id)}`,
+        `/api/access-hub?id=${encodeURIComponent(record._adh_id)}`,
         { method: 'DELETE' }
       );
       const resJson = await res.json();
@@ -256,12 +277,96 @@ export default function AccessHubPage() {
         setDeleteConfirmId(null);
         fetchData();
         setAutoSyncMessage('تم حذف السجل ومزامنته مع النظام السحابي');
-        setTimeout(() => setAutoSyncMessage(null), 3000);
+        setTimeout(() => setAutoSyncMessage(null), 3500);
       } else {
         alert(resJson.error || 'فشل حذف السجل');
       }
     } catch (err: any) {
       alert('خطأ: ' + err.message);
+    }
+  };
+
+  // Submit Add Column (إضافة حقل جديد للجدول)
+  const handleAddColumn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const colTrimmed = newColName.trim();
+    if (!colTrimmed) return;
+    if (!activeTable) {
+      alert('يرجى اختيار جدول أولاً لإضافة الحقل إليه');
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      const res = await fetch('/api/access-hub', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'ADD_COLUMN',
+          file: activeFile,
+          table: activeTable,
+          columnName: colTrimmed,
+        }),
+      });
+      const resJson = await res.json();
+      if (resJson.success) {
+        setIsAddColModalOpen(false);
+        setNewColName('');
+        fetchData();
+        setAutoSyncMessage(`تمت إضافة الحقل "${colTrimmed}" بنجاح وتعميمه سحابياً`);
+        setTimeout(() => setAutoSyncMessage(null), 3500);
+      } else {
+        alert(resJson.error || 'فشل إضافة الحقل');
+      }
+    } catch (err: any) {
+      alert('خطأ في إضافة الحقل: ' + err.message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Submit Delete Column (حذف حقل من الجدول)
+  const handleDeleteColumn = async (colToDelete: string) => {
+    if (!activeTable) return;
+    setIsSubmitting(true);
+    try {
+      const res = await fetch('/api/access-hub', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'DELETE_COLUMN',
+          file: activeFile,
+          table: activeTable,
+          columnName: colToDelete,
+        }),
+      });
+      const resJson = await res.json();
+      if (resJson.success) {
+        setDeleteColConfirm(null);
+        fetchData();
+        setAutoSyncMessage(`تم حذف الحقل "${colToDelete}" سحابياً`);
+        setTimeout(() => setAutoSyncMessage(null), 3500);
+      } else {
+        alert(resJson.error || 'فشل حذف الحقل');
+      }
+    } catch (err: any) {
+      alert('خطأ في حذف الحقل: ' + err.message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Toggle Header Column Sort (الفرز عند النقر على رأس العمود)
+  const handleColumnHeaderClick = (col: string) => {
+    if (sortCol === col) {
+      if (sortDir === 'none') setSortDir('desc');
+      else if (sortDir === 'desc') setSortDir('asc');
+      else {
+        setSortDir('none');
+        setSortCol('date_auto');
+      }
+    } else {
+      setSortCol(col);
+      setSortDir('desc');
     }
   };
 
@@ -282,7 +387,7 @@ export default function AccessHubPage() {
               </span>
             </div>
             <p className="text-xs text-[#667085] mt-0.5">
-              دمج كامل لكافة ملفات Access مع البحث، التعديل، والحذف اللحظي لجميع الموظفين
+              ترتيب زمني حي، إدارة وحذف وإضافة الحقول، وحفظ سحابي فوري لكافة الموظفين
             </p>
           </div>
         </div>
@@ -290,7 +395,7 @@ export default function AccessHubPage() {
         {/* مؤشرات الإحصائيات والإشعارات السحابية */}
         <div className="flex items-center gap-3">
           {autoSyncMessage && (
-            <div className="bg-emerald-50 text-emerald-800 text-xs px-3 py-1.5 rounded-lg border border-emerald-200 flex items-center gap-1.5 animate-bounce">
+            <div className="bg-emerald-50 text-emerald-800 text-xs px-3 py-1.5 rounded-lg border border-emerald-200 flex items-center gap-1.5 animate-bounce shadow-xs">
               <ShieldCheck className="w-4 h-4 text-emerald-600" />
               <span>{autoSyncMessage}</span>
             </div>
@@ -299,7 +404,7 @@ export default function AccessHubPage() {
           <div className="bg-[#F7F8FA] px-3 py-1.5 rounded-lg border border-[#E4E7EC] text-right">
             <div className="text-[11px] text-[#667085]">إجمالي السجلات المركزية</div>
             <div className="text-sm font-bold text-[#14372e]">
-              {data?.total_records ? data.total_records.toLocaleString('ar-IQ') : '29,927'} قيد
+              {data?.total_records ? data.total_records.toLocaleString('ar-IQ') : '88,987'} قيد
             </div>
           </div>
 
@@ -382,7 +487,6 @@ export default function AccessHubPage() {
               );
             })
           ) : (
-            /* في حال كان التحميل جارياً، إظهار الخانات الافتراضية للسرعة البصرية */
             [
               'اسماء التجار والدلالين من جهاز الاشتراكات',
               'الاسم التجاري 2025 - 2026',
@@ -412,9 +516,9 @@ export default function AccessHubPage() {
         </div>
       </div>
 
-      {/* 3. شريط التحكم الداخلي: اختيار الجداول، البحث، والإجراءات */}
+      {/* 3. شريط التحكم الداخلي: اختيار الجداول، البحث، الترتيب الزمني، وإدارة الحقول */}
       <div className="p-6 space-y-4">
-        {/* اختيار الجدول: متاح في خانة الدمج الشامل وفي خانات الملفات المستقلة */}
+        {/* اختيار الجدول */}
         {data?.available_tables && data.available_tables.length > 0 && (
           <div className="flex items-center gap-2 overflow-x-auto pb-1">
             <span className="text-xs font-semibold text-[#667085] ml-2 shrink-0">
@@ -445,6 +549,115 @@ export default function AccessHubPage() {
             })}
           </div>
         )}
+
+        {/* شريط أدوات الفرز الزمني وإدارة الحقول */}
+        <div className="bg-white p-3.5 rounded-xl border border-[#E4E7EC] flex flex-wrap items-center justify-between gap-3 shadow-2xs">
+          {/* قسم الترتيب الزمني */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-bold text-[#14372e] flex items-center gap-1.5 ml-1">
+              <Calendar className="w-4 h-4 text-[#c59b27]" />
+              <span>ترتيب التاريخ:</span>
+            </span>
+
+            {/* زر من الجديد للقديم */}
+            <button
+              onClick={() => {
+                setSortDir('desc');
+                setPage(1);
+              }}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition border ${
+                sortDir === 'desc'
+                  ? 'bg-[#14372e] text-white border-[#14372e] shadow-xs'
+                  : 'bg-[#F7F8FA] text-[#344054] hover:bg-[#ECEFF3] border-[#E4E7EC]'
+              }`}
+              title="ترتيب السجلات من الأحدث تاريخاً إلى الأقدم"
+            >
+              <ArrowDown className="w-3.5 h-3.5 text-[#ecd58a]" />
+              <span>من الجديد إلى القديم (تنازلي)</span>
+            </button>
+
+            {/* زر من القديم للجديد */}
+            <button
+              onClick={() => {
+                setSortDir('asc');
+                setPage(1);
+              }}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition border ${
+                sortDir === 'asc'
+                  ? 'bg-[#14372e] text-white border-[#14372e] shadow-xs'
+                  : 'bg-[#F7F8FA] text-[#344054] hover:bg-[#ECEFF3] border-[#E4E7EC]'
+              }`}
+              title="ترتيب السجلات من الأقدم تاريخاً إلى الأحدث"
+            >
+              <ArrowUp className="w-3.5 h-3.5 text-[#ecd58a]" />
+              <span>من القديم إلى الجديد (تصاعدي)</span>
+            </button>
+
+            {/* زر الترتيب الأصلي */}
+            <button
+              onClick={() => {
+                setSortDir('none');
+                setSortCol('date_auto');
+                setPage(1);
+              }}
+              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition border ${
+                sortDir === 'none'
+                  ? 'bg-gray-200 text-gray-800 font-bold border-gray-300'
+                  : 'bg-white text-[#667085] hover:bg-[#F7F8FA] border-[#E4E7EC]'
+              }`}
+              title="إعادة الترتيب التلقائي الأصلي لملف Access"
+            >
+              🔄 الترتيب الأصلي
+            </button>
+
+            {/* اختيار حقل التاريخ للفرز في حال توفر أكثر من حقل */}
+            {data?.date_columns && data.date_columns.length > 1 && (
+              <div className="flex items-center gap-1 text-xs mr-2">
+                <span className="text-[#667085]">الحقل:</span>
+                <select
+                  value={sortCol}
+                  onChange={(e) => {
+                    setSortCol(e.target.value);
+                    if (sortDir === 'none') setSortDir('desc');
+                    setPage(1);
+                  }}
+                  className="px-2 py-1 text-xs bg-[#F7F8FA] border border-[#E4E7EC] rounded-md text-[#1B1F24] focus:outline-none"
+                >
+                  <option value="date_auto">تلقائي (أول حقل تاريخ)</option>
+                  {data.date_columns.map((dc) => (
+                    <option key={dc} value={dc}>
+                      {dc}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+
+          {/* قسم إدارة الحقول (إضافة حقل جديد / إدارة الحقول وحذفها) */}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                setNewColName('');
+                setIsAddColModalOpen(true);
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg text-xs font-bold transition shadow-2xs"
+              title="إضافة عمود / حقل جديد لهذا الجدول ومزامنته سحابياً"
+            >
+              <PlusCircle className="w-3.5 h-3.5 text-emerald-600" />
+              <span>+ إضافة حقل جديد</span>
+            </button>
+
+            <button
+              onClick={() => setIsManageColsModalOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-[#F7F8FA] text-[#475467] border border-[#E4E7EC] rounded-lg text-xs font-semibold transition"
+              title="عرض قائمة حقول الجدول وإمكانية حذف أي حقل منها"
+            >
+              <Columns className="w-3.5 h-3.5 text-[#14372e]" />
+              <span>إدارة وحذف الحقول ({data?.columns?.length || 0})</span>
+            </button>
+          </div>
+        </div>
 
         {/* شريط البحث والأزرار */}
         <div className="bg-white p-4 rounded-xl border border-[#E4E7EC] flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-xs">
@@ -493,18 +706,16 @@ export default function AccessHubPage() {
             </button>
 
             {/* إضافة قيد جديد */}
-            {activeFile !== 'all' && (
-              <button
-                onClick={() => {
-                  setFormData({});
-                  setIsAddModalOpen(true);
-                }}
-                className="flex items-center gap-1.5 px-3.5 py-2 bg-[#14372e] hover:bg-[#1a473b] text-white rounded-lg text-xs font-semibold transition shadow-xs"
-              >
-                <Plus className="w-4 h-4 text-[#ecd58a]" />
-                <span>إضافة قيد جديد</span>
-              </button>
-            )}
+            <button
+              onClick={() => {
+                setFormData({});
+                setIsAddModalOpen(true);
+              }}
+              className="flex items-center gap-1.5 px-3.5 py-2 bg-[#14372e] hover:bg-[#1a473b] text-white rounded-lg text-xs font-semibold transition shadow-xs"
+            >
+              <Plus className="w-4 h-4 text-[#ecd58a]" />
+              <span>+ إضافة قيد جديد</span>
+            </button>
           </div>
         </div>
 
@@ -514,7 +725,7 @@ export default function AccessHubPage() {
             <div className="p-12 flex flex-col items-center justify-center text-center gap-3">
               <RefreshCw className="w-8 h-8 text-[#14372e] animate-spin" />
               <p className="text-sm font-semibold text-[#1B1F24]">جاري جلب السجلات السحابية...</p>
-              <p className="text-xs text-[#667085]">يتم استخراج ومزامنة السجلات من السحابة المركزية</p>
+              <p className="text-xs text-[#667085]">يتم استخراج ومزامنة السجلات وترتيبها سحابياً</p>
             </div>
           ) : error ? (
             <div className="p-8 text-center text-red-600 space-y-2">
@@ -530,11 +741,43 @@ export default function AccessHubPage() {
                     {activeFile === 'all' && (
                       <th className="py-3.5 px-4 whitespace-nowrap">الملف الحقيقي المصدر</th>
                     )}
-                    {data.columns.map((col) => (
-                      <th key={col} className="py-3.5 px-4 whitespace-nowrap">
-                        {col}
-                      </th>
-                    ))}
+                    {data.columns.map((col) => {
+                      const isSorted = sortCol === col || (sortCol === 'date_auto' && data.date_columns?.[0] === col);
+                      return (
+                        <th
+                          key={col}
+                          className="py-3.5 px-4 whitespace-nowrap select-none group"
+                        >
+                          <div className="flex items-center justify-between gap-1.5">
+                            <button
+                              onClick={() => handleColumnHeaderClick(col)}
+                              className="flex items-center gap-1 hover:text-[#14372e] transition"
+                              title="اضغط للفرز حسب هذا العمود"
+                            >
+                              <span>{col}</span>
+                              {isSorted && sortDir === 'desc' && (
+                                <ArrowDown className="w-3.5 h-3.5 text-[#14372e]" />
+                              )}
+                              {isSorted && sortDir === 'asc' && (
+                                <ArrowUp className="w-3.5 h-3.5 text-[#14372e]" />
+                              )}
+                              {!isSorted && (
+                                <ArrowUpDown className="w-3 h-3 text-[#D0D5DD] opacity-0 group-hover:opacity-100 transition" />
+                              )}
+                            </button>
+
+                            {/* زر حذف هذا الحقل مباشرة */}
+                            <button
+                              onClick={() => setDeleteColConfirm(col)}
+                              className="text-[#D0D5DD] hover:text-red-600 p-0.5 rounded transition opacity-0 group-hover:opacity-100"
+                              title={`حذف حقل "${col}" من هذا الجدول`}
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        </th>
+                      );
+                    })}
                     <th className="py-3.5 px-4 text-center w-28 whitespace-nowrap">الإجراءات</th>
                   </tr>
                 </thead>
@@ -616,8 +859,8 @@ export default function AccessHubPage() {
           ) : (
             <div className="p-12 text-center text-[#667085]">
               <AlertCircle className="w-8 h-8 mx-auto text-[#98A2B3] mb-2" />
-              <p className="text-sm font-semibold">لا توجد سجلات مطابقة للبحث</p>
-              <p className="text-xs mt-1">تأكد من كتابة الكلمة الصحيحة أو قم بتفريغ شريط البحث</p>
+              <p className="text-sm font-semibold">لا توجد سجلات مطابقة للبحث أو الجدول فارغ</p>
+              <p className="text-xs mt-1">يمكنك إضافة قيد جديد أو إضافة حقول مخصصة بالضغط على الأزرار أعلاه</p>
             </div>
           )}
 
@@ -650,7 +893,7 @@ export default function AccessHubPage() {
         </div>
       </div>
 
-      {/* 6. نافذة الإضافة (Add Modal) */}
+      {/* 6. نافذة إضافة قيد جديد (Add Record Modal) */}
       {isAddModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl border border-[#E4E7EC]">
@@ -658,7 +901,7 @@ export default function AccessHubPage() {
               <div className="flex items-center gap-2">
                 <Plus className="w-5 h-5 text-[#14372e]" />
                 <h3 className="font-bold text-sm text-[#1B1F24]">
-                  إضافة قيد جديد إلى جدول ({activeTable})
+                  إضافة قيد جديد إلى جدول ({activeTable || 'البيانات'})
                 </h3>
               </div>
               <button onClick={() => setIsAddModalOpen(false)} className="text-[#667085] hover:text-[#1B1F24]">
@@ -702,7 +945,7 @@ export default function AccessHubPage() {
         </div>
       )}
 
-      {/* 7. نافذة التعديل (Edit Modal) */}
+      {/* 7. نافذة تعديل قيد (Edit Record Modal) */}
       {isEditModalOpen && selectedRecord && (
         <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl border border-[#E4E7EC]">
@@ -750,6 +993,165 @@ export default function AccessHubPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* 8. نافذة إضافة حقل جديد (Add Column Modal) */}
+      {isAddColModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md flex flex-col shadow-2xl border border-[#E4E7EC]">
+            <div className="p-4 border-b border-[#E4E7EC] flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <PlusCircle className="w-5 h-5 text-emerald-700" />
+                <h3 className="font-bold text-sm text-[#1B1F24]">
+                  إضافة حقل جديد لجدول ({activeTable || 'الجدول الحالي'})
+                </h3>
+              </div>
+              <button onClick={() => setIsAddColModalOpen(false)} className="text-[#667085] hover:text-[#1B1F24]">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleAddColumn} className="p-5 space-y-4">
+              <p className="text-xs text-[#667085]">
+                سيتم إنشاء الحقل الجديد سحابياً وإضافته لهذا الجدول، وسيظهر فوراً في نماذج الإضافة والتعديل لكافة الموظفين.
+              </p>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-[#344054]">اسم الحقل / العمود الجديد:</label>
+                <input
+                  type="text"
+                  required
+                  autoFocus
+                  value={newColName}
+                  onChange={(e) => setNewColName(e.target.value)}
+                  placeholder="مثال: رقم الهاتف، ملاحظات، تاريخ التجديد..."
+                  className="w-full px-3.5 py-2.5 text-xs bg-[#F7F8FA] border border-[#E4E7EC] rounded-lg text-[#1B1F24] focus:outline-none focus:border-[#14372e]"
+                />
+              </div>
+
+              <div className="pt-3 border-t border-[#E4E7EC] flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsAddColModalOpen(false)}
+                  className="px-4 py-2 text-xs font-semibold text-[#475467] bg-[#F7F8FA] rounded-lg border border-[#E4E7EC]"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting || !newColName.trim()}
+                  className="px-5 py-2 text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition disabled:opacity-50"
+                >
+                  {isSubmitting ? 'جاري الإضافة...' : 'إضافة الحقل وتعميمه سحابياً'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 9. نافذة إدارة وحذف الحقول (Manage & Delete Columns Modal) */}
+      {isManageColsModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-lg max-h-[80vh] flex flex-col shadow-2xl border border-[#E4E7EC]">
+            <div className="p-4 border-b border-[#E4E7EC] flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Columns className="w-5 h-5 text-[#14372e]" />
+                <h3 className="font-bold text-sm text-[#1B1F24]">
+                  إدارة حقول جدول ({activeTable || 'الجدول الحالي'})
+                </h3>
+              </div>
+              <button onClick={() => setIsManageColsModalOpen(false)} className="text-[#667085] hover:text-[#1B1F24]">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-4 overflow-y-auto flex-1 space-y-2">
+              <p className="text-xs text-[#667085] mb-3">
+                يمكنك حذف أو إخفاء أي حقل غير مرغوب فيه من هذا الجدول، وسيتم تعميم الحذف سحابياً:
+              </p>
+
+              <div className="divide-y divide-[#E4E7EC] border border-[#E4E7EC] rounded-xl overflow-hidden">
+                {data?.columns.map((col, idx) => (
+                  <div key={col} className="p-3 flex items-center justify-between bg-white hover:bg-[#F9FAFB] transition">
+                    <div className="flex items-center gap-2.5">
+                      <span className="text-xs font-mono text-[#98A2B3] w-6">{idx + 1}</span>
+                      <span className="text-xs font-semibold text-[#1B1F24]">{col}</span>
+                    </div>
+
+                    <button
+                      onClick={() => setDeleteColConfirm(col)}
+                      className="text-xs text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 px-2.5 py-1 rounded-md transition flex items-center gap-1 font-semibold"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>حذف الحقل</span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-[#E4E7EC] flex justify-between items-center bg-[#F7F8FA]">
+              <button
+                onClick={() => {
+                  setIsManageColsModalOpen(false);
+                  setIsAddColModalOpen(true);
+                }}
+                className="text-xs text-emerald-800 font-bold hover:underline flex items-center gap-1"
+              >
+                <PlusCircle className="w-3.5 h-3.5 text-emerald-700" />
+                <span>+ إضافة حقل جديد لهذا الجدول</span>
+              </button>
+
+              <button
+                onClick={() => setIsManageColsModalOpen(false)}
+                className="px-4 py-2 text-xs font-semibold text-[#344054] bg-white border border-[#E4E7EC] rounded-lg"
+              >
+                إغلاق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 10. تأكيد حذف حقل (Delete Column Confirmation Dialog) */}
+      {deleteColConfirm && (
+        <div className="fixed inset-0 z-60 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-sm p-5 shadow-2xl border border-red-200 text-right space-y-4 animate-in fade-in zoom-in-95">
+            <div className="w-10 h-10 rounded-full bg-red-100 text-red-600 flex items-center justify-center mx-auto">
+              <Trash2 className="w-5 h-5" />
+            </div>
+
+            <div className="text-center space-y-1">
+              <h4 className="font-bold text-sm text-[#1B1F24]">تأكيد حذف الحقل</h4>
+              <p className="text-xs text-[#667085]">
+                هل أنت متأكد من حذف الحقل{' '}
+                <strong className="text-red-600 font-bold">"{deleteColConfirm}"</strong>؟
+              </p>
+              <p className="text-[11px] text-[#98A2B3]">
+                سيتم إخفاء هذا الحقل من الجدول السحابي ولن يظهر لجميع الموظفين.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeleteColConfirm(null)}
+                className="flex-1 py-2 text-xs font-semibold text-[#475467] bg-[#F7F8FA] rounded-lg border border-[#E4E7EC]"
+              >
+                إلغاء
+              </button>
+              <button
+                type="button"
+                disabled={isSubmitting}
+                onClick={() => handleDeleteColumn(deleteColConfirm)}
+                className="flex-1 py-2 text-xs font-bold text-white bg-red-600 hover:bg-red-700 rounded-lg transition"
+              >
+                {isSubmitting ? 'جاري الحذف...' : 'نعم، احذف الحقل'}
+              </button>
+            </div>
           </div>
         </div>
       )}
