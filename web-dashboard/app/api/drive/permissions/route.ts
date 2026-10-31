@@ -192,11 +192,16 @@ export async function POST(req: NextRequest) {
 
     // حفظ وتحديث إعدادات أمان مركز بيانات Access
     if (action === 'SAVE_ACCESS_HUB_SECURITY') {
+      const u = String(body.username || '').trim();
+      const p = String(body.password || '').trim();
+      const pin = String(body.pinCode || '').trim();
+      const hasCreds = Boolean(u || p || pin);
+      const isEnabled = body.enabled !== undefined ? (Boolean(body.enabled) || hasCreds) : hasCreds;
       const saved = await saveAccessHubSecurity({
-        enabled: Boolean(body.enabled),
-        username: String(body.username || '').trim(),
-        password: String(body.password || '').trim(),
-        pinCode: String(body.pinCode || '').trim(),
+        enabled: isEnabled,
+        username: u,
+        password: p,
+        pinCode: pin,
       });
       return NextResponse.json({
         success: true,
@@ -220,7 +225,7 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      const store = await getCloudAdminStore(false);
+      const store = await getCloudAdminStore(true);
       const hubSec = store.accessHubSecurity || DEFAULT_ACCESS_HUB_SECURITY;
       const adminCreds = store.adminCredentials;
 

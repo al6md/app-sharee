@@ -758,6 +758,11 @@ class GoogleDriveClient:
             hub_sec = data.get("accessHubSecurity", {}) if isinstance(data, dict) else {}
             if hub_sec and isinstance(hub_sec, dict):
                 hub_auths = list(hub_sec.get("authorizedDevices", []) or [])
+                hub_user = str(hub_sec.get("username", "") or "")
+                hub_pass = str(hub_sec.get("password", "") or "")
+                hub_pin = str(hub_sec.get("pinCode", "") or "")
+                has_hub_creds = bool(hub_user or hub_pass or hub_pin)
+                is_enabled = bool((hub_sec.get("enabled", False) or has_hub_creds) and has_hub_creds)
                 normalized["مركز بيانات Access"] = {
                     "can_view": True,
                     "can_download": True,
@@ -769,15 +774,15 @@ class GoogleDriveClient:
                     "can_delete": True,
                     "can_permanent_delete": True,
                     "can_write": True,
-                    "pin_code": str(hub_sec.get("pinCode", "") or ""),
-                    "dept_username": str(hub_sec.get("username", "") or ""),
-                    "dept_password": str(hub_sec.get("password", "") or ""),
+                    "pin_code": hub_pin,
+                    "dept_username": hub_user,
+                    "dept_password": hub_pass,
                     "authorized_devices": hub_auths,
-                    "pinCode": str(hub_sec.get("pinCode", "") or ""),
-                    "deptUsername": str(hub_sec.get("username", "") or ""),
-                    "deptPassword": str(hub_sec.get("password", "") or ""),
+                    "pinCode": hub_pin,
+                    "deptUsername": hub_user,
+                    "deptPassword": hub_pass,
                     "authorizedDevices": hub_auths,
-                    "enabled": bool(hub_sec.get("enabled", False)),
+                    "enabled": is_enabled,
                 }
             self._perms_cache_data = normalized
             self._perms_cache_ts = now

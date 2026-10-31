@@ -110,15 +110,18 @@ export default function AccessHubPage() {
   // التحقق الدوري من ترخيص هذا الجهاز لمركز بيانات Access
   const checkAccessSecurity = async () => {
     try {
-      const res = await fetch('/api/drive/permissions');
+      const res = await fetch('/api/drive/permissions?t=' + Date.now(), { cache: 'no-store' });
       const json = await res.json();
       if (json.success && json.accessHubSecurity) {
         setAccessHubSec(json.accessHubSecurity);
+        const sec = json.accessHubSecurity;
         const guid = typeof window !== 'undefined' ? localStorage.getItem('sharecoc_device_guid') || '' : '';
-        if (!json.accessHubSecurity.enabled) {
+        const hasCreds = Boolean(sec.username || sec.password || sec.pinCode);
+        const isProtected = Boolean(sec.enabled !== false && hasCreds);
+        if (!isProtected) {
           setIsUnlocked(true);
         } else {
-          const authed = Boolean(guid && Array.isArray(json.accessHubSecurity.authorizedDevices) && json.accessHubSecurity.authorizedDevices.includes(guid));
+          const authed = Boolean(guid && Array.isArray(sec.authorizedDevices) && sec.authorizedDevices.includes(guid));
           setIsUnlocked(authed);
         }
       } else {

@@ -302,11 +302,13 @@ export default function AdminControlPage() {
         }
 
         if (data.accessHubSecurity && !savingHubSec) {
-          setAccessHubSec(data.accessHubSecurity);
-          setHubSecEnabled(Boolean(data.accessHubSecurity.enabled));
-          setHubSecUser(data.accessHubSecurity.username || '');
-          setHubSecPass(data.accessHubSecurity.password || '');
-          setHubSecPin(data.accessHubSecurity.pinCode || '');
+          const sec = data.accessHubSecurity;
+          const hasCreds = Boolean(sec.username || sec.password || sec.pinCode);
+          setAccessHubSec(sec);
+          setHubSecEnabled(Boolean(sec.enabled || hasCreds));
+          setHubSecUser(sec.username || '');
+          setHubSecPass(sec.password || '');
+          setHubSecPin(sec.pinCode || '');
         }
 
         const folderMap = new Map<string, DepartmentItem>();
@@ -699,12 +701,13 @@ export default function AdminControlPage() {
     if (e) e.preventDefault();
     try {
       setSavingHubSec(true);
+      const isEnabled = Boolean(hubSecEnabled || hubSecUser.trim() || hubSecPass.trim() || hubSecPin.trim());
       const res = await fetch('/api/drive/permissions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'SAVE_ACCESS_HUB_SECURITY',
-          enabled: hubSecEnabled,
+          enabled: isEnabled,
           username: hubSecUser.trim(),
           password: hubSecPass.trim(),
           pinCode: hubSecPin.trim(),
@@ -2167,7 +2170,10 @@ export default function AdminControlPage() {
                       <input
                         type="text"
                         value={hubSecUser}
-                        onChange={(e) => setHubSecUser(e.target.value)}
+                        onChange={(e) => {
+                          setHubSecUser(e.target.value);
+                          if (e.target.value.trim()) setHubSecEnabled(true);
+                        }}
                         placeholder="مثال: access_user أو commercial_user"
                         className="w-full text-xs p-3 rounded-xl border border-slate-200 focus:outline-none focus:border-[#14372e] bg-slate-50/50"
                       />
@@ -2179,7 +2185,10 @@ export default function AdminControlPage() {
                       <input
                         type="text"
                         value={hubSecPass}
-                        onChange={(e) => setHubSecPass(e.target.value)}
+                        onChange={(e) => {
+                          setHubSecPass(e.target.value);
+                          if (e.target.value.trim()) setHubSecEnabled(true);
+                        }}
                         placeholder="أدخل كلمة المرور أو رمز المرور..."
                         className="w-full text-xs p-3 rounded-xl border border-slate-200 focus:outline-none focus:border-[#14372e] bg-slate-50/50 font-mono"
                       />
@@ -2191,7 +2200,10 @@ export default function AdminControlPage() {
                       <input
                         type="text"
                         value={hubSecPin}
-                        onChange={(e) => setHubSecPin(e.target.value)}
+                        onChange={(e) => {
+                          setHubSecPin(e.target.value);
+                          if (e.target.value.trim()) setHubSecEnabled(true);
+                        }}
                         placeholder="مثال: 5599"
                         className="w-full text-xs p-3 rounded-xl border border-slate-200 focus:outline-none focus:border-[#14372e] bg-slate-50/50 font-mono"
                       />

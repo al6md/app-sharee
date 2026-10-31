@@ -454,11 +454,15 @@ export async function getCloudAdminStore(forceRefresh: boolean = false): Promise
         : [];
 
     const rawAccessSec = rawData.accessHubSecurity || rawData.departments?.['مركز بيانات Access'];
+    const hubUser = String(rawAccessSec?.username || rawAccessSec?.deptUsername || '').trim();
+    const hubPass = String(rawAccessSec?.password || rawAccessSec?.deptPassword || rawAccessSec?.pinCode || '').trim();
+    const hubPin = String(rawAccessSec?.pinCode || '').trim();
+    const hasHubCreds = Boolean(hubUser || hubPass || hubPin);
     const accessHubSecurity: AccessHubSecurityConfig = {
-      enabled: rawAccessSec?.enabled !== undefined ? Boolean(rawAccessSec.enabled) : Boolean(rawAccessSec?.deptPassword || rawAccessSec?.pinCode || rawAccessSec?.password),
-      username: String(rawAccessSec?.username || rawAccessSec?.deptUsername || '').trim(),
-      password: String(rawAccessSec?.password || rawAccessSec?.deptPassword || rawAccessSec?.pinCode || '').trim(),
-      pinCode: String(rawAccessSec?.pinCode || '').trim(),
+      enabled: rawAccessSec?.enabled !== undefined ? (Boolean(rawAccessSec.enabled) || hasHubCreds) : hasHubCreds,
+      username: hubUser,
+      password: hubPass,
+      pinCode: hubPin,
       authorizedDevices: Array.isArray(rawAccessSec?.authorizedDevices)
         ? rawAccessSec.authorizedDevices.filter(Boolean)
         : [],
@@ -810,10 +814,11 @@ export async function saveAccessHubSecurity(
 ): Promise<AccessHubSecurityConfig> {
   const updated = await persistCloudAdminStore((current) => {
     const curSec = current.accessHubSecurity || { ...DEFAULT_ACCESS_HUB_SECURITY };
-    const enabled = secInput.enabled !== undefined ? Boolean(secInput.enabled) : curSec.enabled;
     const username = secInput.username !== undefined ? String(secInput.username).trim() : curSec.username;
     const password = secInput.password !== undefined ? String(secInput.password).trim() : curSec.password;
     const pinCode = secInput.pinCode !== undefined ? String(secInput.pinCode).trim() : curSec.pinCode;
+    const hasCredentials = Boolean(username || password || pinCode);
+    const enabled = secInput.enabled !== undefined ? (Boolean(secInput.enabled) || hasCredentials) : (curSec.enabled || hasCredentials);
     const authDevs = Array.isArray(secInput.authorizedDevices) ? secInput.authorizedDevices : curSec.authorizedDevices || [];
 
     const newSec: AccessHubSecurityConfig = {
