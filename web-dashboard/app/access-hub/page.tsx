@@ -1221,56 +1221,55 @@ export default function AccessHubPage() {
         )}
       </div>
 
-      {/* 5. شريط التصفح السفلي المتكيف مع الجوال وسطح المكتب (مع مسافة أمان لشريط الجوال السفلي) */}
-      <footer className="bg-white border-t border-[#E4E7EC] px-3 sm:px-4 py-2 sm:py-0 sm:h-[40px] flex flex-wrap sm:flex-nowrap items-center justify-between gap-2 text-xs text-[#667085] shrink-0 z-20 pb-20 md:pb-2">
-        <div className="flex items-center gap-1 font-mono text-[11px] sm:text-xs">
-          <span>عرض:</span>
+      {/* 5. شريط التصفح السفلي الرشيق والمدمج (Ultra-compact Pagination - 36px) */}
+      <footer className="h-[36px] md:h-[38px] bg-white border-t border-[#E4E7EC] px-2.5 sm:px-4 flex items-center justify-between text-[#667085] shrink-0 z-20 select-none">
+        {/* عداد السجلات بصيغة رشيقة ومختصرة */}
+        <div className="flex items-center gap-1 font-mono text-[10.5px] sm:text-xs shrink-0">
+          <span className="hidden sm:inline">عرض:</span>
           <strong className="text-[#14372e]">
             {data?.rows && data.rows.length > 0 ? ((page - 1) * limit + 1).toLocaleString('ar-IQ') : 0}
-          </strong>
-          <span>-</span>
-          <strong className="text-[#14372e]">
+            -
             {data?.rows ? Math.min(page * limit, data.total_matches).toLocaleString('ar-IQ') : 0}
           </strong>
-          <span>من</span>
+          <span className="text-[#98A2B3]">من</span>
           <strong className="text-[#14372e]">{data?.total_matches?.toLocaleString('ar-IQ') || 0}</strong>
         </div>
 
-        <div className="flex items-center gap-2 sm:gap-3">
-          <div className="flex items-center gap-1">
-            <select
-              value={limit}
-              onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }}
-              className="bg-[#F7F8FA] border border-[#D0D5DD] rounded-lg px-2 py-0.5 text-xs font-bold text-[#14372e] outline-none cursor-pointer"
-            >
-              <option value={25}>25 قيد</option>
-              <option value={50}>50 قيد</option>
-              <option value={100}>100 قيد</option>
-              <option value={200}>200 قيد</option>
-            </select>
-          </div>
+        {/* أزرار التنقل الرشيقة واختيار عدد السجلات في سطر واحد دون أي فراغ سفلي */}
+        <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+          <select
+            value={limit}
+            onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }}
+            className="bg-[#F7F8FA] border border-[#D0D5DD] rounded-md px-1.5 py-0.5 text-[10px] sm:text-xs font-bold text-[#14372e] outline-none cursor-pointer"
+            title="عدد السجلات لكل صفحة"
+          >
+            <option value={25}>25</option>
+            <option value={50}>50</option>
+            <option value={100}>100</option>
+            <option value={200}>200</option>
+          </select>
 
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-0.5 sm:gap-1">
             <button
               disabled={page <= 1}
               onClick={() => setPage((p) => Math.max(1, p - 1))}
-              className="px-2.5 py-1 rounded-lg border border-[#E4E7EC] bg-white hover:bg-[#F7F8FA] disabled:opacity-30 disabled:cursor-not-allowed font-semibold text-[#1B1F24] transition flex items-center gap-1 cursor-pointer"
+              className="px-2 py-0.5 rounded-md border border-[#E4E7EC] bg-white hover:bg-[#F7F8FA] disabled:opacity-30 disabled:cursor-not-allowed font-semibold text-[10.5px] sm:text-xs text-[#1B1F24] transition flex items-center gap-0.5 cursor-pointer shadow-2xs"
             >
-              <ChevronRight className="w-3.5 h-3.5" />
+              <ChevronRight className="w-3 h-3" />
               <span>السابق</span>
             </button>
 
-            <span className="px-2 font-mono font-bold text-[#14372e]">
+            <span className="px-1.5 font-mono font-bold text-[10.5px] sm:text-xs text-[#14372e]">
               {page} / {data?.total_pages || 1}
             </span>
 
             <button
               disabled={page >= (data?.total_pages || 1)}
               onClick={() => setPage((p) => p + 1)}
-              className="px-2.5 py-1 rounded-lg border border-[#E4E7EC] bg-white hover:bg-[#F7F8FA] disabled:opacity-30 disabled:cursor-not-allowed font-semibold text-[#1B1F24] transition flex items-center gap-1 cursor-pointer"
+              className="px-2 py-0.5 rounded-md border border-[#E4E7EC] bg-white hover:bg-[#F7F8FA] disabled:opacity-30 disabled:cursor-not-allowed font-semibold text-[10.5px] sm:text-xs text-[#1B1F24] transition flex items-center gap-0.5 cursor-pointer shadow-2xs"
             >
               <span>التالي</span>
-              <ChevronLeft className="w-3.5 h-3.5" />
+              <ChevronLeft className="w-3 h-3" />
             </button>
           </div>
         </div>
