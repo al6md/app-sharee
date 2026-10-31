@@ -46,6 +46,15 @@ def build_exe():
         shutil.copy2(str(setup_exe), str(web_public / "FileExchange_Latest.exe"))
         print(f"✅ تم تحديث كافة ملفات التحميل في منصة الويب بنجاح: {web_public}")
 
+    local_programs = Path(os.environ.get('LOCALAPPDATA', '')) / "Programs" / "ShareCOC"
+    if local_programs.exists():
+        try:
+            shutil.copy2(str(app_exe), str(local_programs / "share coc.exe"))
+            shutil.copy2(str(setup_exe), str(local_programs / "ShareCOC_Setup.exe"))
+            print(f"✅ تم تحديث ملفات التطبيق المثبت في البرامج المحلية: {local_programs}")
+        except Exception as e:
+            print(f"⚠️ تعذر التحديث لمجلد البرامج المحلية (قد يكون التطبيق قيد التشغيل): {e}")
+
     local_install = Path(r"C:\Users\tohiba\OneDrive\Desktop\ShareCOC")
     if local_install.exists():
         try:

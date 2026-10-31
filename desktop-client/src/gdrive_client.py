@@ -781,6 +781,7 @@ class GoogleDriveClient:
                 }
             self._perms_cache_data = normalized
             self._perms_cache_ts = now
+            self._has_fetched_cloud_perms = True
             self._cloud_devices_list = data.get("devices", []) if isinstance(data, dict) else []
             try:
                 lf = self._get_local_perms_file()

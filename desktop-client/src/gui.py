@@ -2511,14 +2511,17 @@ class FileExchangeMainWindow(QMainWindow):
         is_cloud_authed = my_guid in authed_devices
         is_locally_authed = self._is_access_hub_locally_unlocked()
 
-        # إذا حذف الأدمن الجهاز من لوحة التحكم، يتم سحب الاعتماد فورياً
-        if is_locally_authed and isinstance(authed_devices, list) and not is_cloud_authed:
-            self._remove_access_hub_local_unlock()
-            is_locally_authed = False
-
-        if is_cloud_authed and not is_locally_authed:
-            self._save_access_hub_local_unlock()
-            is_locally_authed = True
+        # إذا كان معتمداً سحابياً، نثبّته محلياً للأبد
+        if is_cloud_authed:
+            if not is_locally_authed:
+                self._save_access_hub_local_unlock()
+                is_locally_authed = True
+        elif is_locally_authed:
+            # سحب الاعتماد فقط إذا كنا متصلين بالسحابة وتم جلب البيانات الحية بنجاح من Google Drive
+            has_live_cloud = getattr(self.client, '_has_fetched_cloud_perms', False)
+            if has_live_cloud and isinstance(authed_devices, list):
+                self._remove_access_hub_local_unlock()
+                is_locally_authed = False
 
         if is_cloud_authed or is_locally_authed:
             return True
@@ -2703,14 +2706,17 @@ class FileExchangeMainWindow(QMainWindow):
         is_cloud_authed = my_guid in authed_devices
         is_locally_authed = self._is_access_hub_locally_unlocked()
 
-        # إذا حذف الأدمن الجهاز من لوحة التحكم، يتم سحب الاعتماد فورياً
-        if is_locally_authed and isinstance(authed_devices, list) and not is_cloud_authed:
-            self._remove_access_hub_local_unlock()
-            is_locally_authed = False
-
-        if is_cloud_authed and not is_locally_authed:
-            self._save_access_hub_local_unlock()
-            is_locally_authed = True
+        # إذا كان معتمداً سحابياً، نثبّته محلياً للأبد
+        if is_cloud_authed:
+            if not is_locally_authed:
+                self._save_access_hub_local_unlock()
+                is_locally_authed = True
+        elif is_locally_authed:
+            # سحب الاعتماد فقط إذا كنا متصلين بالسحابة وتم جلب البيانات الحية بنجاح من Google Drive
+            has_live_cloud = getattr(self.client, '_has_fetched_cloud_perms', False)
+            if has_live_cloud and isinstance(authed_devices, list):
+                self._remove_access_hub_local_unlock()
+                is_locally_authed = False
 
         if is_cloud_authed or is_locally_authed:
             return True
@@ -2825,17 +2831,18 @@ class FileExchangeMainWindow(QMainWindow):
                     is_cloud_authed = my_guid in authed_devices
                     is_locally_authed = target_dept in getattr(self, '_unlocked_pin_depts', set())
 
-                    # فحص الإلغاء/الحذف من لوحة الأدمن:
-                    # إذا كان القسم محمياً ومفتوحاً محلياً، لكن السحابة تظهر قائمة الأجهزة المعتمدة وبصمة الجهاز غير موجودة بها،
-                    # فهذا يعني أن الأدمن قد قام بحذف هذا الجهاز وسحب اعتماده؛ فيتم قفله فورياً وإلغاء تسجيله
-                    if is_locally_authed and isinstance(authed_devices, list) and not is_cloud_authed:
-                        self._remove_persistent_unlocked_dept(target_dept)
-                        is_locally_authed = False
-
                     # إذا كان معتمداً سحابياً، نثبّته في الذاكرة الدائمة المحلية للأبد
-                    if is_cloud_authed and not is_locally_authed:
-                        self._save_persistent_unlocked_dept(target_dept)
-                        is_locally_authed = True
+                    if is_cloud_authed:
+                        if not is_locally_authed:
+                            self._save_persistent_unlocked_dept(target_dept)
+                            is_locally_authed = True
+                    elif is_locally_authed:
+                        # سحب الاعتماد فقط إذا كنا متصلين بالسحابة وتم جلب البيانات الحية بنجاح من Google Drive
+                        # وتأكدنا أن السحابة استجابت ولم تجد هذا الجهاز في الأجهزة المعتمدة
+                        has_live_cloud = getattr(self.client, '_has_fetched_cloud_perms', False)
+                        if has_live_cloud and isinstance(authed_devices, list):
+                            self._remove_persistent_unlocked_dept(target_dept)
+                            is_locally_authed = False
 
                     is_already_authed = is_cloud_authed or is_locally_authed
 
