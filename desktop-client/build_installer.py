@@ -37,7 +37,7 @@ def build_exe():
     if not setup_exe.exists():
         raise RuntimeError(f"❌ تعذر العثور على معالج التثبيت: {setup_exe}")
 
-    print("[3/3] تحديث نسخ التحميل المباشر في لوحة الويب (web-dashboard/public)...")
+    print("[3/3] تحديث نسخ التحميل المباشر في لوحة الويب ومجلد التثبيت المحلي...")
     web_public = current_dir.parent / "web-dashboard" / "public"
     if web_public.exists():
         shutil.copy2(str(app_exe), str(web_public / "share coc.exe"))
@@ -45,6 +45,15 @@ def build_exe():
         shutil.copy2(str(setup_exe), str(web_public / "FileExchangeSetup.exe"))
         shutil.copy2(str(setup_exe), str(web_public / "FileExchange_Latest.exe"))
         print(f"✅ تم تحديث كافة ملفات التحميل في منصة الويب بنجاح: {web_public}")
+
+    local_install = Path(r"C:\Users\tohiba\OneDrive\Desktop\ShareCOC")
+    if local_install.exists():
+        try:
+            shutil.copy2(str(app_exe), str(local_install / "share coc.exe"))
+            shutil.copy2(str(setup_exe), str(local_install / "ShareCOC_Setup.exe"))
+            print(f"✅ تم تحديث ملفات التطبيق المثبت على سطح المكتب: {local_install}")
+        except Exception as e:
+            print(f"⚠️ تعذر التحديث المباشر لمجلد التثبيت (قد يكون التطبيق قيد التشغيل): {e}")
 
     size_mb = round(setup_exe.stat().st_size / (1024 * 1024), 2)
     print("=" * 65)

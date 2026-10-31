@@ -709,21 +709,22 @@ class AccessHubWidget(QWidget):
 
         # اختيار القسم / الملف (Sleek QComboBox)
         lbl_sec = QLabel("📁 القسم:")
-        lbl_sec.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+        lbl_sec.setFont(QFont("IBM Plex Sans Arabic", 10, QFont.Weight.Bold))
         lbl_sec.setStyleSheet("color: #344054; border: none; background: transparent;")
         nav_layout.addWidget(lbl_sec)
 
         self.combo_file = QComboBox()
-        self.combo_file.setFont(QFont("IBM Plex Sans Arabic", 9))
-        self.combo_file.setMinimumWidth(220)
+        self.combo_file.setFont(QFont("IBM Plex Sans Arabic", 10))
+        self.combo_file.setMinimumWidth(280)
         self.combo_file.setStyleSheet("""
             QComboBox {
                 background: #F8F9FA;
                 border: 1.5px solid #D0D5DD;
                 border-radius: 6px;
-                padding: 4px 10px;
+                padding: 5px 12px;
                 color: #14372e;
                 font-weight: bold;
+                font-size: 13px;
             }
             QComboBox:hover { border-color: #14372e; background: #FFFFFF; }
             QComboBox QAbstractItemView {
@@ -731,32 +732,12 @@ class AccessHubWidget(QWidget):
                 border: 1px solid #D0D5DD;
                 selection-background-color: #EDF5F2;
                 selection-color: #14372e;
-                padding: 4px;
+                padding: 6px;
+                font-size: 13px;
             }
         """)
         self.combo_file.currentIndexChanged.connect(self._on_file_combo_changed)
         nav_layout.addWidget(self.combo_file)
-
-        # فاصل
-        sep2 = QFrame()
-        sep2.setFrameShape(QFrame.Shape.VLine)
-        sep2.setStyleSheet("color: #E4E7EC; max-height: 22px;")
-        nav_layout.addWidget(sep2)
-
-        # اختيار الجداول التابعة للقسم (Pills)
-        lbl_tbl = QLabel("🏷️ الجدول:")
-        lbl_tbl.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
-        lbl_tbl.setStyleSheet("color: #344054; border: none; background: transparent;")
-        nav_layout.addWidget(lbl_tbl)
-
-        self.subtables_container = QWidget()
-        self.subtables_container.setStyleSheet("background: transparent; border: none;")
-        self.subtables_layout = QHBoxLayout(self.subtables_container)
-        self.subtables_layout.setContentsMargins(0, 0, 0, 0)
-        self.subtables_layout.setSpacing(4)
-        self.subtable_btn_group = QButtonGroup(self)
-        self.subtable_btn_group.setExclusive(True)
-        nav_layout.addWidget(self.subtables_container)
 
         nav_layout.addStretch()
 
@@ -766,8 +747,8 @@ class AccessHubWidget(QWidget):
         self.stat_badge.setStyleSheet("""
             background: #EDF5F2;
             color: #14372e;
-            padding: 4px 8px;
-            border-radius: 5px;
+            padding: 5px 12px;
+            border-radius: 6px;
             border: 1px solid #CBE3DA;
         """)
         nav_layout.addWidget(self.stat_badge)
@@ -779,8 +760,8 @@ class AccessHubWidget(QWidget):
             QPushButton {
                 background: #14372e;
                 color: #FFFFFF;
-                padding: 4px 12px;
-                border-radius: 5px;
+                padding: 6px 16px;
+                border-radius: 6px;
             }
             QPushButton:hover { background: #1b493d; }
         """)
@@ -788,6 +769,47 @@ class AccessHubWidget(QWidget):
         nav_layout.addWidget(self.btn_refresh)
 
         main_layout.addWidget(nav_frame)
+
+        # ========================================================
+        # 2. شريط الأصناف والجداول الفرعية الواسع والواضح (Height ~42px)
+        # ========================================================
+        tables_frame = QFrame()
+        tables_frame.setStyleSheet("""
+            QFrame {
+                background: #FFFFFF;
+                border: 1px solid #E4E7EC;
+                border-radius: 8px;
+            }
+        """)
+        tables_layout = QHBoxLayout(tables_frame)
+        tables_layout.setContentsMargins(10, 4, 10, 4)
+        tables_layout.setSpacing(10)
+
+        lbl_tbl = QLabel("🏷️ الأصناف والجداول:")
+        lbl_tbl.setFont(QFont("IBM Plex Sans Arabic", 10, QFont.Weight.Bold))
+        lbl_tbl.setStyleSheet("color: #14372e; border: none; background: transparent;")
+        tables_layout.addWidget(lbl_tbl)
+
+        # حاوية أزرار الأصناف ذات التمرير الأفقي لمنع أي انضغاط أو قص للكلمات
+        self.subtables_scroll = QScrollArea()
+        self.subtables_scroll.setFixedHeight(38)
+        self.subtables_scroll.setWidgetResizable(True)
+        self.subtables_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.subtables_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.subtables_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
+        self.subtables_container = QWidget()
+        self.subtables_container.setStyleSheet("background: transparent; border: none;")
+        self.subtables_layout = QHBoxLayout(self.subtables_container)
+        self.subtables_layout.setContentsMargins(0, 0, 0, 0)
+        self.subtables_layout.setSpacing(8)
+        self.subtable_btn_group = QButtonGroup(self)
+        self.subtable_btn_group.setExclusive(True)
+
+        self.subtables_scroll.setWidget(self.subtables_container)
+        tables_layout.addWidget(self.subtables_scroll, stretch=1)
+
+        main_layout.addWidget(tables_frame)
 
         # ========================================================
         # 2. شريط البحث والعمليات السريعة (Actions Bar - Height ~38px)
@@ -1039,17 +1061,19 @@ class AccessHubWidget(QWidget):
         return """
             QPushButton {
                 background: #F2F4F7;
-                color: #475467;
-                border: 1px solid #D0D5DD;
-                border-radius: 5px;
-                padding: 4px 10px;
-                font-weight: 600;
+                color: #344054;
+                border: 1.5px solid #D0D5DD;
+                border-radius: 7px;
+                padding: 6px 18px;
+                font-size: 13px;
+                font-weight: bold;
+                min-width: 85px;
             }
-            QPushButton:hover { background: #E4E7EC; color: #101828; }
+            QPushButton:hover { background: #E4E7EC; color: #101828; border-color: #98A2B3; }
             QPushButton:checked {
                 background: #14372e;
                 color: #FFFFFF;
-                border: 1px solid #14372e;
+                border: 1.5px solid #14372e;
                 font-weight: bold;
             }
         """
@@ -1105,7 +1129,7 @@ class AccessHubWidget(QWidget):
         self.active_table = active_tbl
         for tbl in data.get("available_tables", []):
             btn = QPushButton(tbl)
-            btn.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+            btn.setFont(QFont("IBM Plex Sans Arabic", 10, QFont.Weight.Bold))
             btn.setCheckable(True)
             btn.setChecked(tbl == active_tbl)
             btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -1113,6 +1137,7 @@ class AccessHubWidget(QWidget):
             btn.clicked.connect(lambda checked, t=tbl: self._on_subtable_clicked(t))
             self.subtable_btn_group.addButton(btn)
             self.subtables_layout.addWidget(btn)
+        self.subtables_layout.addStretch()
 
         # 3. تعبئة الجدول بالحقول والمعلومات الأصلية 100% من الملف بدون أي تغيير إطلاقاً
         cols = data.get("columns", [])
