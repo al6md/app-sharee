@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
+import { 
+  getAccessHubMutations, 
+  addAccessRecord, 
+  updateAccessRecord, 
+  deleteAccessRecord, 
+  applyMutations 
+} from '@/lib/accessCloudStore';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -13,7 +20,11 @@ function getIndex() {
   if (!fs.existsSync(indexPath)) {
     return { files: [], total_records: 0, last_sync: new Date().toISOString() };
   }
-  return JSON.parse(fs.readFileSync(indexPath, 'utf-8'));
+  try {
+    return JSON.parse(fs.readFileSync(indexPath, 'utf-8'));
+  } catch {
+    return { files: [], total_records: 0, last_sync: new Date().toISOString() };
+  }
 }
 
 function getFileContent(fileName: string) {
@@ -21,23 +32,14 @@ function getFileContent(fileName: string) {
   if (!fs.existsSync(filePath)) {
     return null;
   }
-  return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-}
-
-function saveFileContent(fileName: string, data: any) {
-  const filePath = path.join(DATA_DIR, `${fileName}.json`);
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 1), 'utf-8');
-  
-  // Update index timestamp
-  const indexPath = path.join(DATA_DIR, 'index.json');
-  if (fs.existsSync(indexPath)) {
-    const idx = JSON.parse(fs.readFileSync(indexPath, 'utf-8'));
-    idx.last_sync = new Date().toISOString();
-    fs.writeFileSync(indexPath, JSON.stringify(idx, null, 2), 'utf-8');
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+  } catch {
+    return null;
   }
 }
 
-// GET: الاستعلام عن الجداول والبيانات بالحفاظ التام 100% على ترتيب الحقول والمعلومات الأصلية
+// GET: الاستعلام عن الجداول والبيانات بالحفاظ التام 100% على ترتيب الحقول والمعلومات الأصلية + دمج التعديلات السحابية
 export async function GET(req: NextRequest) {
   try {
     const url = new URL(req.url);
@@ -49,26 +51,31 @@ export async function GET(req: NextRequest) {
     const checkSig = url.searchParams.get('sig');
 
     const index = getIndex();
-    const currentSig = index.last_sync || '1';
+    const { mutations } = await getAccessHubMutations();
+    const currentSig = mutations.last_sync || index.last_sync || '1';
 
-    // فحص التحديثات الحية
+    // فحص التحديثات الحية الفوري
     if (checkSig !== null && checkSig !== undefined && checkSig === currentSig) {
       return NextResponse.json({ success: true, changed: false, sig: currentSig });
     }
 
-    let rows: any[] = [];
+    let rawRows: any[] = [];
     let columns: string[] = [];
     let availableTables: string[] = [];
     let activeTable = requestedTable;
 
     if (requestedFile === 'all') {
       // 🌐 وضع الدمج الشامل (كافة الملفات مدمجة)
-      // استخراج كافة أسماء الجداول المشتركة من الفهرس
       const allFiles = index.files || [];
       const tablesSet = new Set<string>();
       allFiles.forEach((f: any) => {
         (f.tables || []).forEach((t: string) => tablesSet.add(t));
       });
+      // إضافة جداول السجلات السحابية الجديدة إن وجدت
+      (mutations.adds || []).forEach((a) => {
+        if (a._adh_table) tablesSet.add(a._adh_table);
+      });
+
       availableTables = Array.from(tablesSet);
 
       if (!activeTable || !tablesSet.has(activeTable)) {
@@ -92,16 +99,14 @@ export async function GET(req: NextRequest) {
           }
         }
 
-        // جمع السجلات بنفس ترتيب ورودها الأصلي
+        // جمع السجلات الأساسية
         const tableRows = content.tables[activeTable] || [];
-        for (const row of tableRows) {
-          if (search) {
-            const matches = Object.values(row).some(
-              (val) => val && String(val).toLowerCase().includes(search)
-            );
-            if (!matches) continue;
-          }
-          rows.push(row);
+        for (let idx = 0; idx < tableRows.length; idx++) {
+          const row = tableRows[idx];
+          if (!row._adh_file) row._adh_file = f.name;
+          if (!row._adh_table) row._adh_table = activeTable;
+          if (!row._adh_id) row._adh_id = `${f.name}_${activeTable}_${idx}`;
+          rawRows.push(row);
         }
       }
 
@@ -113,36 +118,67 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ success: false, error: 'الملف غير موجود' }, { status: 404 });
       }
 
-      availableTables = Object.keys(content.tables || {});
-      if (!activeTable || !content.tables[activeTable]) {
+      const fileTables = Object.keys(content.tables || {});
+      const fileTablesSet = new Set(fileTables);
+      // إضافة الجداول من السجلات المضافة لهذا الملف إن وجدت
+      (mutations.adds || []).forEach((a) => {
+        if (a._adh_file === requestedFile && a._adh_table) {
+          fileTablesSet.add(a._adh_table);
+        }
+      });
+
+      availableTables = Array.from(fileTablesSet);
+      if (!activeTable || !fileTablesSet.has(activeTable)) {
         activeTable = availableTables[0] || '';
       }
 
       // الأعمدة بنفس ترتيبها الأصلي 100% من ملف Access بدون حذف أي حقل
       columns = content.columns?.[activeTable] || [];
 
-      // السجلات بنفس ترتيب ورودها الأصلي في ملف Access
+      // السجلات الأساسية
       const tableRows = content.tables[activeTable] || [];
-      for (const row of tableRows) {
-        if (search) {
-          const matches = Object.values(row).some(
-            (val) => val && String(val).toLowerCase().includes(search)
-          );
-          if (!matches) continue;
-        }
-        rows.push(row);
+      for (let idx = 0; idx < tableRows.length; idx++) {
+        const row = tableRows[idx];
+        if (!row._adh_file) row._adh_file = requestedFile;
+        if (!row._adh_table) row._adh_table = activeTable;
+        if (!row._adh_id) row._adh_id = `${requestedFile}_${activeTable}_${idx}`;
+        rawRows.push(row);
       }
     }
 
-    const totalMatches = rows.length;
+    // تطبيق التعديلات والإضافات والمحذوفات السحابية
+    const mergedRows = applyMutations(requestedFile, activeTable, rawRows, mutations);
+
+    // التحقق من وجود أعمدة جديدة في السجلات المضافة لم تكن موجودة بالأصل
+    for (const addRec of mutations.adds || []) {
+      if ((requestedFile === 'all' || addRec._adh_file === requestedFile) && addRec._adh_table === activeTable) {
+        for (const k of Object.keys(addRec)) {
+          if (!k.startsWith('_adh_') && !columns.includes(k)) {
+            columns.push(k);
+          }
+        }
+      }
+    }
+
+    // تصفية البحث
+    let filteredRows = mergedRows;
+    if (search) {
+      filteredRows = mergedRows.filter((row) =>
+        Object.values(row).some((val) => val && String(val).toLowerCase().includes(search))
+      );
+    }
+
+    const totalMatches = filteredRows.length;
     const startIndex = (page - 1) * limit;
-    const paginatedRows = rows.slice(startIndex, startIndex + limit);
+    const paginatedRows = filteredRows.slice(startIndex, startIndex + limit);
+
+    const grandTotalRecords = (index.total_records || 0) + (mutations.adds?.length || 0) - (mutations.deletes?.length || 0);
 
     return NextResponse.json({
       success: true,
       sig: currentSig,
       files: index.files || [],
-      total_records: index.total_records || 0,
+      total_records: Math.max(0, grandTotalRecords),
       active_file: requestedFile,
       active_table: activeTable,
       available_tables: availableTables,
@@ -159,7 +195,7 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// POST: إضافة سجل جديد
+// POST: إضافة سجل جديد وتعميمه سحابياً 100% بدون الاعتماد على نظام الملفات المحلي المقفل على Vercel
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -169,94 +205,63 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'بيانات غير مكتملة' }, { status: 400 });
     }
 
-    const content = getFileContent(file);
-    if (!content || !content.tables[table]) {
-      return NextResponse.json({ success: false, error: 'الملف أو الجدول غير موجود' }, { status: 404 });
-    }
+    // إضافة القيد سحابياً عبر accessCloudStore
+    const newRecord = await addAccessRecord(file, table, record);
 
-    const newId = `${file}_${table}_${Date.now()}`;
-    const newRecord = {
-      ...record,
-      _adh_id: newId,
-      _adh_file: file,
-      _adh_table: table,
-      _adh_created_at: new Date().toISOString(),
-    };
-
-    content.tables[table].unshift(newRecord);
-    content.total_rows = (content.total_rows || 0) + 1;
-    saveFileContent(file, content);
-
-    return NextResponse.json({ success: true, record: newRecord });
+    return NextResponse.json({ 
+      success: true, 
+      message: 'تمت إضافة القيد وحفظه سحابياً بنجاح',
+      record: newRecord 
+    });
   } catch (err: any) {
+    console.error('Access Hub POST Error:', err);
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
 }
 
-// PUT: تعديل سجل موجود
+// PUT: تعديل سجل وتعميم التعديل سحابياً
 export async function PUT(req: NextRequest) {
   try {
     const body = await req.json();
-    const { file, table, id, updates } = body;
+    const { id, updates } = body;
 
-    if (!file || !table || !id || !updates) {
+    if (!id || !updates) {
       return NextResponse.json({ success: false, error: 'بيانات التعديل غير مكتملة' }, { status: 400 });
     }
 
-    const content = getFileContent(file);
-    if (!content || !content.tables[table]) {
-      return NextResponse.json({ success: false, error: 'الملف أو الجدول غير موجود' }, { status: 404 });
-    }
+    // تعديل القيد سحابياً عبر accessCloudStore
+    const updated = await updateAccessRecord(id, updates);
 
-    const tableRows = content.tables[table];
-    const rowIndex = tableRows.findIndex((r: any) => r._adh_id === id);
-
-    if (rowIndex === -1) {
-      return NextResponse.json({ success: false, error: 'السجل المطلوب غير موجود' }, { status: 404 });
-    }
-
-    tableRows[rowIndex] = {
-      ...tableRows[rowIndex],
-      ...updates,
-      _adh_updated_at: new Date().toISOString(),
-    };
-
-    saveFileContent(file, content);
-    return NextResponse.json({ success: true, record: tableRows[rowIndex] });
+    return NextResponse.json({ 
+      success: true, 
+      message: 'تم حفظ التعديل سحابياً بنجاح',
+      record: updated 
+    });
   } catch (err: any) {
+    console.error('Access Hub PUT Error:', err);
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
 }
 
-// DELETE: حذف سجل
+// DELETE: حذف سجل وتعميم الحذف سحابياً
 export async function DELETE(req: NextRequest) {
   try {
     const url = new URL(req.url);
-    const file = url.searchParams.get('file');
-    const table = url.searchParams.get('table');
     const id = url.searchParams.get('id');
 
-    if (!file || !table || !id) {
-      return NextResponse.json({ success: false, error: 'معرفات الحذف غير مكتملة' }, { status: 400 });
+    if (!id) {
+      return NextResponse.json({ success: false, error: 'معرف الحذف غير مكتمل' }, { status: 400 });
     }
 
-    const content = getFileContent(file);
-    if (!content || !content.tables[table]) {
-      return NextResponse.json({ success: false, error: 'الملف أو الجدول غير موجود' }, { status: 404 });
-    }
+    // حذف القيد سحابياً عبر accessCloudStore
+    await deleteAccessRecord(id);
 
-    const initialLen = content.tables[table].length;
-    content.tables[table] = content.tables[table].filter((r: any) => r._adh_id !== id);
-
-    if (content.tables[table].length === initialLen) {
-      return NextResponse.json({ success: false, error: 'لم يتم العثور على السجل' }, { status: 404 });
-    }
-
-    content.total_rows = Math.max(0, (content.total_rows || 0) - 1);
-    saveFileContent(file, content);
-
-    return NextResponse.json({ success: true, message: 'تم الحذف بنجاح' });
+    return NextResponse.json({ 
+      success: true, 
+      message: 'تم الحذف وتحديث السحابة بنجاح' 
+    });
   } catch (err: any) {
+    console.error('Access Hub DELETE Error:', err);
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
 }
