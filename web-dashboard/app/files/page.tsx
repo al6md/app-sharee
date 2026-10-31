@@ -13,6 +13,7 @@ import {
   Check, 
   FileSpreadsheet,
   Database,
+  Layers,
   Inbox,
   RefreshCw,
   FolderPlus,
@@ -3253,6 +3254,51 @@ export default function FilesPage() {
           <span>فتح مركز بيانات Access المدمج</span>
           <ArrowRight className="w-3.5 h-3.5 rotate-180" />
         </Link>
+      </div>
+
+      {/* 🏛️ شبكة أقسام وخانات ملفات Access المباشرة الظاهرة بوضوح */}
+      <div className="bg-white rounded-xl border border-[#E4E7EC] p-4 space-y-2.5 shadow-2xs">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-bold text-[#14372e] flex items-center gap-1.5">
+            <Layers className="w-4 h-4 text-[#c59b27]" />
+            <span>أقسام وخانات ملفات Access المدمجة (اضغط على أي ملف لفتح بياناته فوراً):</span>
+          </span>
+          <Link
+            href="/access-hub"
+            className="text-[11px] font-bold text-[#14372e] hover:underline flex items-center gap-1"
+          >
+            <span>عرض الدمج الشامل (88,987 قيد)</span>
+            <ChevronLeft className="w-3.5 h-3.5" />
+          </Link>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+          {[
+            { name: 'الاسم التجاري 2024', rows: '2,107 قيد' },
+            { name: 'الاسم التجاري 2025 - 2026', rows: '2,668 قيد' },
+            { name: 'الاسم التجاري 2023', rows: '1,953 قيد' },
+            { name: 'الاسم التجاري 2022', rows: '1,597 قيد' },
+            { name: 'اسماء التجار والدلالين من جهاز الاشتراكات', rows: '21,602 قيد' },
+            { name: 'الاسماء التجارية الكلية والمبتكرة لكل السنوات - جديد', rows: '14,375 قيد' },
+            { name: 'الاسماء التجارية من سنة 1984 لسنة 2021', rows: '44,685 قيد' },
+          ].map((sec) => (
+            <Link
+              key={sec.name}
+              href={`/access-hub?file=${encodeURIComponent(sec.name)}`}
+              className="p-2.5 rounded-lg border border-[#E4E7EC] hover:border-[#14372e] hover:bg-[#F7F8FA] transition flex items-center justify-between group bg-[#FAFAFC]"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <Database className="w-4 h-4 text-[#c59b27] shrink-0" />
+                <span className="text-xs font-bold text-[#1B1F24] truncate group-hover:text-[#14372e]">
+                  {sec.name}
+                </span>
+              </div>
+              <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded shrink-0 font-mono">
+                {sec.rows}
+              </span>
+            </Link>
+          ))}
+        </div>
       </div>
 
       {/* 4. شريط مسار المجلدات (Breadcrumb) والمجلدات الفرعية */}

@@ -66,6 +66,17 @@ export default function AccessHubPage() {
   const [lastSig, setLastSig] = useState<string>('');
   const [autoSyncMessage, setAutoSyncMessage] = useState<string | null>(null);
 
+  // قراءة معلمات الرابط في حال تم النقر على قسم محدد من الصفحة الرئيسية
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const sp = new URLSearchParams(window.location.search);
+      const f = sp.get('file');
+      const t = sp.get('table');
+      if (f) setActiveFile(f);
+      if (t) setActiveTable(t);
+    }
+  }, []);
+
   // Modals States
   const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState<boolean>(false);
@@ -304,8 +315,18 @@ export default function AccessHubPage() {
       </div>
 
       {/* 2. شريط الخانات الرئيسي (الدمج الشامل + الخانات بالأسماء الحقيقية للملفات) */}
-      <div className="bg-white border-b border-[#E4E7EC] px-6 pt-2 overflow-x-auto scrollbar-none sticky top-[73px] z-20">
-        <div className="flex items-center gap-2 min-w-max pb-2">
+      <div className="bg-white border-b border-[#E4E7EC] px-6 py-3.5 shadow-2xs">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs font-bold text-[#14372e] flex items-center gap-1.5">
+            <Layers className="w-4 h-4 text-[#c59b27]" />
+            <span>الخانات والأقسام المستقلة بحسب اسم كل ملف Access:</span>
+          </span>
+          <span className="text-[11px] text-[#667085]">
+            اضغط على أي خانة لعرض جداولها وبياناتها الأصلية بالكامل
+          </span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
           {/* الخانة الأولى: الدمج الشامل */}
           <button
             onClick={() => {
@@ -313,52 +334,81 @@ export default function AccessHubPage() {
               setActiveTable('');
               setPage(1);
             }}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition ${
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition border ${
               activeFile === 'all'
-                ? 'bg-[#14372e] text-white shadow-sm'
-                : 'bg-[#F7F8FA] text-[#475467] hover:bg-[#ECEFF3] border border-[#E4E7EC]'
+                ? 'bg-[#14372e] text-white border-[#14372e] shadow-sm'
+                : 'bg-[#F7F8FA] text-[#475467] hover:bg-[#ECEFF3] border-[#E4E7EC]'
             }`}
           >
             <Sparkles className="w-4 h-4 text-[#ecd58a]" />
             <span>🌐 الدمج الشامل (كافة الملفات)</span>
             <span
-              className={`text-[10px] px-2 py-0.5 rounded-full ${
+              className={`text-[10px] px-2 py-0.5 rounded-full font-mono ${
                 activeFile === 'all' ? 'bg-[#1a473b] text-[#ecd58a]' : 'bg-gray-200 text-gray-700'
               }`}
             >
-              {data?.total_records ? data.total_records.toLocaleString('ar-IQ') : '29,927'}
+              {data?.total_records ? data.total_records.toLocaleString('ar-IQ') : '88,987'}
             </span>
           </button>
 
-          {/* باقي الخانات: مشتقة ديناميكياً من الأسماء الحقيقية للملفات بدون أي اسم وهمي */}
-          {data?.files?.map((file) => {
-            const isActive = activeFile === file.name;
-            return (
-              <button
-                key={file.name}
-                onClick={() => {
-                  setActiveFile(file.name);
-                  setActiveTable(file.tables[0] || '');
-                  setPage(1);
-                }}
-                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition ${
-                  isActive
-                    ? 'bg-[#14372e] text-white shadow-sm'
-                    : 'bg-[#F7F8FA] text-[#475467] hover:bg-[#ECEFF3] border border-[#E4E7EC]'
-                }`}
-              >
-                <Layers className="w-4 h-4 text-[#c59b27]" />
-                <span>📁 {file.name}</span>
-                <span
-                  className={`text-[10px] px-2 py-0.5 rounded-full ${
-                    isActive ? 'bg-[#1a473b] text-[#ecd58a]' : 'bg-gray-200 text-gray-700'
+          {/* باقي الخانات: مشتقة ديناميكياً من الأسماء الحقيقية للملفات الـ 7 بالكامل */}
+          {data?.files && data.files.length > 0 ? (
+            data.files.map((file) => {
+              const isActive = activeFile === file.name;
+              return (
+                <button
+                  key={file.name}
+                  onClick={() => {
+                    setActiveFile(file.name);
+                    setActiveTable(file.tables[0] || '');
+                    setPage(1);
+                  }}
+                  className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition border ${
+                    isActive
+                      ? 'bg-[#14372e] text-white border-[#14372e] shadow-sm'
+                      : 'bg-white text-[#344054] hover:bg-[#F7F8FA] border-[#E4E7EC]'
                   }`}
                 >
-                  {file.total_rows.toLocaleString('ar-IQ')}
-                </span>
+                  <Layers className={`w-3.5 h-3.5 ${isActive ? 'text-[#ecd58a]' : 'text-[#c59b27]'}`} />
+                  <span>📁 {file.name}</span>
+                  <span
+                    className={`text-[10px] px-2 py-0.5 rounded-full font-mono ${
+                      isActive ? 'bg-[#1a473b] text-[#ecd58a]' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                    }`}
+                  >
+                    {file.total_rows.toLocaleString('ar-IQ')}
+                  </span>
+                </button>
+              );
+            })
+          ) : (
+            /* في حال كان التحميل جارياً، إظهار الخانات الافتراضية للسرعة البصرية */
+            [
+              'اسماء التجار والدلالين من جهاز الاشتراكات',
+              'الاسم التجاري 2025 - 2026',
+              'الاسم التجاري 2024',
+              'الاسم التجاري 2023',
+              'الاسم التجاري 2022',
+              'الاسماء التجارية الكلية والمبتكرة لكل السنوات - جديد',
+              'الاسماء التجارية من سنة 1984 لسنة 2021'
+            ].map((fname) => (
+              <button
+                key={fname}
+                onClick={() => {
+                  setActiveFile(fname);
+                  setPage(1);
+                }}
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition border ${
+                  activeFile === fname
+                    ? 'bg-[#14372e] text-white border-[#14372e]'
+                    : 'bg-white text-[#344054] hover:bg-[#F7F8FA] border-[#E4E7EC]'
+                }`}
+              >
+                <Layers className="w-3.5 h-3.5 text-[#c59b27]" />
+                <span>📁 {fname}</span>
               </button>
-            );
-          })}
+            ))
+          )}
         </div>
       </div>
 
