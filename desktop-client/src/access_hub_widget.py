@@ -84,6 +84,22 @@ TABLE_PRIORITY = {
     "الشطب": 11,
 }
 
+# المسميات والأيقونات الاحترافية لمنع أي بتر أو تشويه للكلمات عبر كافة الشاشات
+TABLE_DISPLAY_META = {
+    "التجار": ("👥", "التجار"),
+    "الشركات": ("🏢", "الشركات"),
+    "الدلالين": ("🤝", "الدلالين"),
+    "دلالين": ("🤝", "الدلالين"),
+    "التعديل": ("✏️", "التعديل"),
+    "المعامل": ("🏭", "المعامل"),
+    "الفنادق": ("🏨", "الفنادق"),
+    "المطاعم": ("🍽️", "المطاعم"),
+    "المقاهي": ("☕", "المقاهي"),
+    "الصيدليات": ("💊", "الصيدليات"),
+    "الساحات": ("🚗", "الساحات"),
+    "الشطب": ("🚫", "الشطب"),
+}
+
 def sort_tables_by_priority(tables):
     """ترتيب الجداول ترتيباً منطقياً معتمداً لغرفة التجارة يبدأ بالتجار ثم الشركات ثم الدلالين"""
     return sorted(tables, key=lambda t: (TABLE_PRIORITY.get(t, 50), t))
@@ -839,9 +855,28 @@ class AccessHubWidget(QWidget):
         # حاوية أزرار الأصناف بتوزيع شبكي مرن يتسع لكافة الأصناف بالكامل دون أي قص أو اختفاء
         self.subtables_scroll = QScrollArea()
         self.subtables_scroll.setWidgetResizable(True)
-        self.subtables_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.subtables_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.subtables_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.subtables_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        self.subtables_scroll.setStyleSheet("""
+            QScrollArea { border: none; background: transparent; }
+            QScrollBar:horizontal {
+                height: 5px;
+                background: #F2F4F7;
+                border-radius: 2px;
+                margin: 0px;
+            }
+            QScrollBar::handle:horizontal {
+                background: #CBE3DA;
+                border-radius: 2px;
+                min-width: 25px;
+            }
+            QScrollBar::handle:horizontal:hover {
+                background: #14372e;
+            }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                width: 0px;
+            }
+        """)
 
         self.subtables_container = QWidget()
         self.subtables_container.setStyleSheet("background: transparent; border: none;")
@@ -1101,10 +1136,11 @@ class AccessHubWidget(QWidget):
                 color: #344054;
                 border: 1.5px solid #D0D5DD;
                 border-radius: 6px;
-                padding: 4px 14px;
-                font-size: 13px;
+                padding: 5px 12px;
+                font-size: 12px;
                 font-weight: bold;
-                min-width: 75px;
+                min-width: 82px;
+                text-align: center;
             }
             QPushButton:hover { background: #EDF5F2; color: #14372e; border-color: #14372e; }
             QPushButton:checked {
@@ -1170,21 +1206,23 @@ class AccessHubWidget(QWidget):
 
         # ضبط الارتفاع بمرونة: سطر واحد إذا كانت 6 أو أقل، وسطرين متناسقين إذا كانت أكثر من 6 لضمان ظهور كافة الأصناف الـ 11
         if len(tables_list) <= 6:
-            self.subtables_scroll.setFixedHeight(36)
+            self.subtables_scroll.setFixedHeight(40)
             cols_per_row = max(1, len(tables_list))
         else:
-            self.subtables_scroll.setFixedHeight(74)
+            self.subtables_scroll.setFixedHeight(82)
             cols_per_row = max(5, (len(tables_list) + 1) // 2)
 
         for idx, tbl in enumerate(tables_list):
             r = idx // cols_per_row
             c = idx % cols_per_row
 
-            btn = QPushButton(tbl)
+            icon, display_title = TABLE_DISPLAY_META.get(tbl, ("🏷️", tbl))
+            btn = QPushButton(f"{icon} {display_title}")
             btn.setFont(QFont("IBM Plex Sans Arabic", 10, QFont.Weight.Bold))
             btn.setCheckable(True)
             btn.setChecked(tbl == active_tbl)
             btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            btn.setToolTip(f"عرض جدول {display_title} بالكامل")
             btn.setStyleSheet(self._subtable_btn_style())
             btn.clicked.connect(lambda checked, t=tbl: self._on_subtable_clicked(t))
             self.subtable_btn_group.addButton(btn)
