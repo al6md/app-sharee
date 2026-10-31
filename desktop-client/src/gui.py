@@ -35,6 +35,7 @@ from icon_provider import (
 )
 from office_handler import OfficeHandler
 from autostart import is_windows_autostart_enabled, set_windows_autostart
+from access_hub_widget import AccessHubWidget
 
 class StatusBridge(QObject):
     sync_updated = pyqtSignal(dict)
@@ -1095,6 +1096,14 @@ class FileExchangeMainWindow(QMainWindow):
         self.workspace_nav_group.addButton(self.nav_btn_settings)
         nav_layout.addWidget(self.nav_btn_settings)
 
+        self.nav_btn_access = QPushButton("🏛️ مركز بيانات Access")
+        self.nav_btn_access.setCheckable(True)
+        self.nav_btn_access.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.nav_btn_access.setStyleSheet(nav_btn_style)
+        self.nav_btn_access.clicked.connect(lambda: self._switch_workspace_page(3))
+        self.workspace_nav_group.addButton(self.nav_btn_access)
+        nav_layout.addWidget(self.nav_btn_access)
+
         header_layout.addWidget(nav_bar)
 
         # زر مزامنة فورية سريع في الترويسة
@@ -1707,6 +1716,8 @@ class FileExchangeMainWindow(QMainWindow):
         self.workspace_stack.addWidget(explorer_page)
         self.workspace_stack.addWidget(self._build_sync_center_page())
         self.workspace_stack.addWidget(self._build_system_settings_page())
+        self.access_hub_page = AccessHubWidget()
+        self.workspace_stack.addWidget(self.access_hub_page)
 
         main_layout.addWidget(self.workspace_stack, stretch=1)
 
@@ -1787,6 +1798,10 @@ class FileExchangeMainWindow(QMainWindow):
             self.nav_btn_sync.setChecked(True)
         elif index == 2 and hasattr(self, 'nav_btn_settings'):
             self.nav_btn_settings.setChecked(True)
+        elif index == 3 and hasattr(self, 'nav_btn_access'):
+            self.nav_btn_access.setChecked(True)
+            if hasattr(self, 'access_hub_page'):
+                self.access_hub_page.load_data()
 
     def _build_sync_center_page(self) -> QWidget:
         """بناء شاشة مركز المزامنة والتحويلات السحابية اللحظية (Page 1)"""

@@ -107,6 +107,15 @@ fun MainExplorerScreen(viewModel: DriveViewModel) {
                     }
                 },
                 actions = {
+                    IconButton(onClick = {
+                        val intent = android.content.Intent(
+                            android.content.Intent.ACTION_VIEW,
+                            android.net.Uri.parse("https://web-dashboard-pi-self.vercel.app/access-hub")
+                        )
+                        context.startActivity(intent)
+                    }) {
+                        Icon(Icons.Default.Storage, contentDescription = "مركز بيانات Access", tint = AccentGold)
+                    }
                     IconButton(onClick = { viewModel.loadFolderItems() }) {
                         Icon(Icons.Default.Refresh, contentDescription = "تحديث", tint = AccentGold)
                     }
