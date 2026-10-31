@@ -120,7 +120,7 @@ export default function AdminControlPage() {
   const [actionLoading, setActionLoading] = useState(false);
 
   // حالة مركز قواعد بيانات Access الموحدة
-  const [accessHubSubTab, setAccessHubSubTab] = useState<'SECTIONS' | 'FIELDS' | 'ROLES' | 'TRASH'>('SECTIONS');
+  const [accessHubSubTab, setAccessHubSubTab] = useState<'SECTIONS' | 'FIELDS' | 'SECURITY' | 'ROLES' | 'TRASH'>('SECTIONS');
   const [accessFiles, setAccessFiles] = useState<any[]>([]);
   const [accessAllFiles, setAccessAllFiles] = useState<any[]>([]);
   const [accessDeletedSections, setAccessDeletedSections] = useState<string[]>([]);
@@ -128,6 +128,20 @@ export default function AdminControlPage() {
   const [accessRoles, setAccessRoles] = useState<Record<string, any>>({});
   const [accessTotalRecords, setAccessTotalRecords] = useState<number>(88987);
   const [accessLoading, setAccessLoading] = useState<boolean>(false);
+
+  // إعدادات أمان مركز بيانات Access واعتماد الأجهزة
+  const [accessHubSec, setAccessHubSec] = useState<any>({
+    enabled: false,
+    username: '',
+    password: '',
+    pinCode: '',
+    authorizedDevices: [],
+  });
+  const [hubSecUser, setHubSecUser] = useState<string>('');
+  const [hubSecPass, setHubSecPass] = useState<string>('');
+  const [hubSecPin, setHubSecPin] = useState<string>('');
+  const [hubSecEnabled, setHubSecEnabled] = useState<boolean>(false);
+  const [savingHubSec, setSavingHubSec] = useState<boolean>(false);
 
   // اختيارات إدارة الحقول
   const [selectedAccessFile, setSelectedAccessFile] = useState<string>('');
@@ -285,6 +299,14 @@ export default function AdminControlPage() {
 
         if (Array.isArray(data.devices) && !actionLoading) {
           setDevices(data.devices);
+        }
+
+        if (data.accessHubSecurity && !savingHubSec) {
+          setAccessHubSec(data.accessHubSecurity);
+          setHubSecEnabled(Boolean(data.accessHubSecurity.enabled));
+          setHubSecUser(data.accessHubSecurity.username || '');
+          setHubSecPass(data.accessHubSecurity.password || '');
+          setHubSecPin(data.accessHubSecurity.pinCode || '');
         }
 
         const folderMap = new Map<string, DepartmentItem>();
@@ -669,6 +691,37 @@ export default function AdminControlPage() {
       alert(`خطأ: ${err.message}`);
     } finally {
       setActionLoading(false);
+    }
+  };
+
+  // حفظ وتطبيق إعدادات أمان مركز بيانات Access
+  const handleSaveAccessHubSecurity = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    try {
+      setSavingHubSec(true);
+      const res = await fetch('/api/drive/permissions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'SAVE_ACCESS_HUB_SECURITY',
+          enabled: hubSecEnabled,
+          username: hubSecUser.trim(),
+          password: hubSecPass.trim(),
+          pinCode: hubSecPin.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (data.success && data.accessHubSecurity) {
+        setAccessHubSec(data.accessHubSecurity);
+        setToastMessage({ text: '🔒 تم حفظ وتطبيق إعدادات أمان مركز بيانات Access بنجاح!', type: 'success' });
+        await loadAllData(false);
+      } else {
+        alert(data.error || 'فشل حفظ إعدادات الأمان');
+      }
+    } catch (err: any) {
+      alert(`خطأ: ${err.message}`);
+    } finally {
+      setSavingHubSec(false);
     }
   };
 
@@ -1781,6 +1834,7 @@ export default function AdminControlPage() {
             {[
               { id: 'SECTIONS', label: '📁 إدارة الأقسام والملفات', count: accessFiles.length },
               { id: 'FIELDS', label: '📋 إدارة الحقول والهياكل', count: accessColumnsList.length },
+              { id: 'SECURITY', label: '🔒 أمان المركز والأجهزة المعتمدة', count: accessHubSec?.authorizedDevices?.length || 0 },
               { id: 'ROLES', label: '👥 مصفوفة الصلاحيات والأجهزة', count: Object.keys(accessRoles).length },
               { id: 'TRASH', label: '🗑️ سلة المحذوفات الإدارية', count: accessTrashBin.length },
             ].map((sub) => (
@@ -2074,6 +2128,166 @@ export default function AdminControlPage() {
                     );
                   })}
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* محتوى أمان مركز بيانات Access واعتماد الأجهزة لمرة واحدة */}
+          {accessHubSubTab === 'SECURITY' && (
+            <div className="space-y-6">
+              {/* بطاقة ضبط بيانات تسجيل الدخول */}
+              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100">
+                  <div>
+                    <h4 className="font-bold text-base text-slate-900 flex items-center gap-2">
+                      <Lock className="w-5 h-5 text-[#14372e]" />
+                      <span>أمان وقفل مركز بيانات Access (Access Data Center Security)</span>
+                    </h4>
+                    <p className="text-xs text-slate-600 mt-1">
+                      حدد اسم مستخدم ورمز مرور لمركز بيانات Access. سيُطلب من أي جهاز جديد إدخال البيانات لمرة واحدة فقط لتثبيته واعتماده للأبد.
+                    </p>
+                  </div>
+                  <label className="flex items-center gap-3 cursor-pointer bg-slate-50 px-4 py-2.5 rounded-xl border border-slate-200">
+                    <span className="text-xs font-bold text-slate-800">تفعيل حماية مركز Access:</span>
+                    <input
+                      type="checkbox"
+                      checked={hubSecEnabled}
+                      onChange={(e) => setHubSecEnabled(e.target.checked)}
+                      className="w-4 h-4 text-[#14372e] rounded accent-[#14372e] cursor-pointer"
+                    />
+                  </label>
+                </div>
+
+                <form onSubmit={handleSaveAccessHubSecurity} className="mt-5 space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                        اسم مستخدم مركز Access:
+                      </label>
+                      <input
+                        type="text"
+                        value={hubSecUser}
+                        onChange={(e) => setHubSecUser(e.target.value)}
+                        placeholder="مثال: access_user أو commercial_user"
+                        className="w-full text-xs p-3 rounded-xl border border-slate-200 focus:outline-none focus:border-[#14372e] bg-slate-50/50"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                        رمز / كلمة مرور مركز Access:
+                      </label>
+                      <input
+                        type="text"
+                        value={hubSecPass}
+                        onChange={(e) => setHubSecPass(e.target.value)}
+                        placeholder="أدخل كلمة المرور أو رمز المرور..."
+                        className="w-full text-xs p-3 rounded-xl border border-slate-200 focus:outline-none focus:border-[#14372e] bg-slate-50/50 font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                        رمز PIN سريع (اختياري):
+                      </label>
+                      <input
+                        type="text"
+                        value={hubSecPin}
+                        onChange={(e) => setHubSecPin(e.target.value)}
+                        placeholder="مثال: 5599"
+                        className="w-full text-xs p-3 rounded-xl border border-slate-200 focus:outline-none focus:border-[#14372e] bg-slate-50/50 font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end pt-3">
+                    <button
+                      type="submit"
+                      disabled={savingHubSec}
+                      className="flex items-center gap-2 px-6 py-2.5 rounded-xl text-xs font-bold bg-[#14372e] text-white hover:bg-[#1c4b3f] transition shadow-sm cursor-pointer disabled:opacity-50"
+                    >
+                      {savingHubSec ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          <span>جاري الحفظ السحابي...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Save className="w-3.5 h-3.5" />
+                          <span>حفظ وتطبيق أمان مركز بيانات Access</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </form>
+              </div>
+
+              {/* بطاقة الأجهزة المعتمدة والمصرح لها بمركز Access */}
+              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs">
+                <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+                  <div>
+                    <h4 className="font-bold text-base text-slate-900 flex items-center gap-2">
+                      <Laptop className="w-5 h-5 text-[#14372e]" />
+                      <span>الأجهزة المعتمدة لمركز بيانات Access حالياً ({accessHubSec?.authorizedDevices?.length || 0})</span>
+                    </h4>
+                    <p className="text-xs text-slate-600 mt-1">
+                      هذه الحواسيب والأجهزة قامت بإدخال بيانات تسجيل الدخول لمرة واحدة وتملك صلاحية دائمة. عند حذف أي جهاز سيتم قفل مركز Access بوجهه فوراً.
+                    </p>
+                  </div>
+                </div>
+
+                {(!accessHubSec?.authorizedDevices || accessHubSec.authorizedDevices.length === 0) ? (
+                  <div className="text-center py-12 px-4">
+                    <div className="w-14 h-14 bg-emerald-50 rounded-2xl flex items-center justify-center mx-auto mb-3 text-2xl border border-emerald-100">
+                      💻
+                    </div>
+                    <p className="text-sm font-bold text-slate-800">لا توجد أجهزة معتمدة لمركز بيانات Access حتى الآن</p>
+                    <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
+                      بمجرد قيام أي موظف أو حاسوب بإدخال اسم المستخدم ورمز المرور لمركز بيانات Access من تطبيق الحاسوب أو الويب أو الأندرويد، سيتم تثبيت الجهاز هنا للأبد.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="mt-4 border border-slate-200 rounded-xl overflow-hidden">
+                    <table className="w-full text-right text-xs">
+                      <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold">
+                        <tr>
+                          <th className="p-3">اسم الجهاز</th>
+                          <th className="p-3">معرّف العتاد (Machine GUID)</th>
+                          <th className="p-3">نظام التشغيل</th>
+                          <th className="p-3">المستخدم المعتمد</th>
+                          <th className="p-3 text-center">الإجراء</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {accessHubSec.authorizedDevices.map((guid: string, idx: number) => {
+                          const dev = devices.find((d) => d.machineGuid === guid);
+                          const devName = dev?.name || `جهاز معتمد (${guid.substring(0, 8)})`;
+                          const devOs = dev?.os || 'نظام غير معروف';
+                          const devUser = dev?.user || 'موظف مصرح';
+                          const devId = dev?.id || guid;
+                          return (
+                            <tr key={idx} className="hover:bg-slate-50/80 transition">
+                              <td className="p-3 font-bold text-slate-900 flex items-center gap-2">
+                                <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>
+                                <span>💻 {devName}</span>
+                              </td>
+                              <td className="p-3 font-mono text-[11px] text-slate-500">{guid}</td>
+                              <td className="p-3 text-slate-600">{devOs}</td>
+                              <td className="p-3 text-slate-700">{devUser}</td>
+                              <td className="p-3 text-center">
+                                <button
+                                  onClick={() => handleDeleteDevice(devId, devName)}
+                                  className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-rose-50 text-rose-600 hover:bg-rose-100 transition cursor-pointer border border-rose-200"
+                                  title="سحب الاعتماد وقفل مركز بيانات Access فورياً بوجه هذا الجهاز"
+                                >
+                                  سحب الاعتماد وقفل المركز 🗑️
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -2835,6 +3049,18 @@ export default function AdminControlPage() {
                 <p className="text-sm text-slate-700 break-words">
                   القسم / الموظف: <strong className="text-slate-900">{dev.user}</strong>
                 </p>
+                <div className="flex flex-wrap items-center gap-1.5 py-1">
+                  {dev.department && (
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-200/80 text-slate-700">
+                      📁 {dev.department}
+                    </span>
+                  )}
+                  {((dev.authorizedDepts && dev.authorizedDepts.includes('مركز بيانات Access')) || (accessHubSec?.authorizedDevices && accessHubSec.authorizedDevices.includes(dev.machineGuid))) && (
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                      🏛️ مصرح له بمركز Access
+                    </span>
+                  )}
+                </div>
                 <p className="text-xs text-slate-500 font-mono">نظام التشغيل: {dev.os}</p>
 
                 <div className="pt-3 border-t border-slate-200/80 flex items-center justify-between gap-2">

@@ -40,10 +40,20 @@ data class AdminCredentialsConfig(
     @SerializedName("updatedAt") val updatedAt: String = ""
 )
 
+data class AccessHubSecurityConfig(
+    @SerializedName("enabled") val enabled: Boolean = false,
+    @SerializedName("username") val username: String? = null,
+    @SerializedName("password") val password: String? = null,
+    @SerializedName("pinCode") val pinCode: String? = null,
+    @SerializedName("authorizedDevices") val authorizedDevices: List<String> = emptyList(),
+    @SerializedName("updatedAt") val updatedAt: String? = null
+)
+
 data class CloudAdminStore(
     @SerializedName("version") val version: Int = 1,
     @SerializedName("updatedAt") val updatedAt: String = "",
     @SerializedName("adminCredentials") val adminCredentials: AdminCredentialsConfig = AdminCredentialsConfig(),
     @SerializedName("devices") val devices: MutableList<AuthorizedDeviceConfig> = mutableListOf(),
-    @SerializedName("departments") val departments: MutableMap<String, DepartmentPermissionConfig> = mutableMapOf()
+    @SerializedName("departments") val departments: MutableMap<String, DepartmentPermissionConfig> = mutableMapOf(),
+    @SerializedName("accessHubSecurity") var accessHubSecurity: AccessHubSecurityConfig? = null
 )

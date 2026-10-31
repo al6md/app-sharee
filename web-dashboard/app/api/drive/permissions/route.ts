@@ -6,6 +6,9 @@ import {
   saveCloudDevices,
   authorizeDeviceForDepartment,
   revokeOrDeleteDevice,
+  saveAccessHubSecurity,
+  authorizeDeviceForAccessHub,
+  DEFAULT_ACCESS_HUB_SECURITY,
   getDefaultDepartmentPermission,
   normalizeDepartmentPermission,
   DepartmentPermissionConfig,
@@ -23,6 +26,7 @@ export async function GET(req: NextRequest) {
         permissions: store.departments,
         adminCredentials: store.adminCredentials,
         devices: store.devices,
+        accessHubSecurity: store.accessHubSecurity || DEFAULT_ACCESS_HUB_SECURITY,
       },
       {
         headers: {
@@ -186,6 +190,98 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // حفظ وتحديث إعدادات أمان مركز بيانات Access
+    if (action === 'SAVE_ACCESS_HUB_SECURITY') {
+      const saved = await saveAccessHubSecurity({
+        enabled: Boolean(body.enabled),
+        username: String(body.username || '').trim(),
+        password: String(body.password || '').trim(),
+        pinCode: String(body.pinCode || '').trim(),
+      });
+      return NextResponse.json({
+        success: true,
+        accessHubSecurity: saved,
+      });
+    }
+
+    // تسجيل واعتماد جهاز جديد لمركز بيانات Access لمرة واحدة فقط
+    if (action === 'REGISTER_ACCESS_HUB_DEVICE') {
+      const userVal = String(body.username || '').trim();
+      const passVal = String(body.password || '').trim();
+      const guid = String(body.machineGuid || '').trim();
+      const devName = String(body.deviceName || '').trim() || 'جهاز بدون اسم';
+      const osInfo = String(body.os || 'Web Browser');
+      const userInfo = String(body.user || 'موظف الغرفة');
+
+      if (!guid) {
+        return NextResponse.json(
+          { success: false, error: 'معرّف الجهاز مطلوب' },
+          { status: 400 }
+        );
+      }
+
+      const store = await getCloudAdminStore(false);
+      const hubSec = store.accessHubSecurity || DEFAULT_ACCESS_HUB_SECURITY;
+      const adminCreds = store.adminCredentials;
+
+      const expectedUser = String(hubSec.username || '').trim();
+      const expectedPass = String(hubSec.password || hubSec.pinCode || '').trim();
+      const masterUser = String(adminCreds?.username || 'admin').trim();
+      const masterPass = String(adminCreds?.password || 'admin1234').trim();
+
+      let isValid = false;
+      if (expectedUser && expectedPass) {
+        isValid =
+          userVal.toLowerCase() === expectedUser.toLowerCase() &&
+          passVal === expectedPass;
+      } else if (expectedPass) {
+        isValid = passVal === expectedPass || (userVal && passVal === expectedPass);
+      } else if (!hubSec.enabled) {
+        isValid = true;
+      }
+
+      // حساب الأدمن الرئيسي كصلاحية طارئة
+      if (!isValid && masterUser && masterPass) {
+        if (userVal.toLowerCase() === masterUser.toLowerCase() && passVal === masterPass) {
+          isValid = true;
+        }
+      }
+
+      if (!isValid) {
+        return NextResponse.json(
+          { success: false, error: 'اسم المستخدم أو الرمز السري لمركز بيانات Access غير صحيح، يرجى مراجعة الإدارة.' },
+          { status: 401 }
+        );
+      }
+
+      const result = await authorizeDeviceForAccessHub({
+        machineGuid: guid,
+        name: devName,
+        os: osInfo,
+        user: userInfo,
+      });
+
+      return NextResponse.json({
+        success: true,
+        authorized: true,
+        message: `تم اعتماد وتسجيل جهاز "${devName}" بنجاح في مركز بيانات Access`,
+        device: result.device,
+        accessHubSecurity: result.accessHubSecurity,
+      });
+    }
+
+    // فحص ترخيص جهاز لمركز بيانات Access
+    if (action === 'CHECK_ACCESS_HUB_DEVICE') {
+      const guid = String(body.machineGuid || '').trim();
+      const store = await getCloudAdminStore(false);
+      const hubSec = store.accessHubSecurity || DEFAULT_ACCESS_HUB_SECURITY;
+      if (!hubSec.enabled) {
+        return NextResponse.json({ success: true, authorized: true, enabled: false });
+      }
+      const isAuthed = Boolean(guid && Array.isArray(hubSec.authorizedDevices) && hubSec.authorizedDevices.includes(guid));
+      return NextResponse.json({ success: true, authorized: isAuthed, enabled: true });
+    }
+
     // حذف جهاز وسحب اعتماده فورياً (حصرياً من لوحة تحكم الأدمن)
     if (action === 'DELETE_DEVICE') {
       const identifier = String(body.deviceId || body.machineGuid || '').trim();
@@ -195,9 +291,10 @@ export async function POST(req: NextRequest) {
       const res = await revokeOrDeleteDevice(identifier);
       return NextResponse.json({
         success: true,
-        message: 'تم حذف الجهاز وسحب اعتماده نهائياً من كافة الأقسام',
+        message: 'تم حذف الجهاز وسحب اعتماده نهائياً من كافة الأقسام ومركز Access',
         devices: res.devices,
         departments: res.departments,
+        accessHubSecurity: res.accessHubSecurity,
       });
     }
 

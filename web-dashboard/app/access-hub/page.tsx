@@ -97,6 +97,90 @@ export default function AccessHubPage() {
   const [viewingRecord, setViewingRecord] = useState<any | null>(null);
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
 
+  // أمان مركز بيانات Access وتسجيل الأجهزة لمرة واحدة
+  const [accessHubSec, setAccessHubSec] = useState<any>(null);
+  const [isSecChecking, setIsSecChecking] = useState<boolean>(true);
+  const [isUnlocked, setIsUnlocked] = useState<boolean>(false);
+  const [authInputUser, setAuthInputUser] = useState<string>('');
+  const [authInputPass, setAuthInputPass] = useState<string>('');
+  const [authInputDevName, setAuthInputDevName] = useState<string>('');
+  const [authError, setAuthError] = useState<string>('');
+  const [authLoading, setAuthLoading] = useState<boolean>(false);
+
+  // التحقق الدوري من ترخيص هذا الجهاز لمركز بيانات Access
+  const checkAccessSecurity = async () => {
+    try {
+      const res = await fetch('/api/drive/permissions');
+      const json = await res.json();
+      if (json.success && json.accessHubSecurity) {
+        setAccessHubSec(json.accessHubSecurity);
+        const guid = typeof window !== 'undefined' ? localStorage.getItem('sharecoc_device_guid') || '' : '';
+        if (!json.accessHubSecurity.enabled) {
+          setIsUnlocked(true);
+        } else {
+          const authed = Boolean(guid && Array.isArray(json.accessHubSecurity.authorizedDevices) && json.accessHubSecurity.authorizedDevices.includes(guid));
+          setIsUnlocked(authed);
+        }
+      } else {
+        setIsUnlocked(true);
+      }
+    } catch {
+      setIsUnlocked(true);
+    } finally {
+      setIsSecChecking(false);
+    }
+  };
+
+  useEffect(() => {
+    checkAccessSecurity();
+  }, []);
+
+  // معالجة تسجيل الدخول واعتماد الجهاز لمرة واحدة فقط للأبد
+  const handleVerifyAccessAuth = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    try {
+      setAuthLoading(true);
+      setAuthError('');
+      let guid = typeof window !== 'undefined' ? localStorage.getItem('sharecoc_device_guid') || '' : '';
+      if (!guid) {
+        guid = 'WEB-' + crypto.randomUUID();
+        if (typeof window !== 'undefined') localStorage.setItem('sharecoc_device_guid', guid);
+      }
+      const devName = authInputDevName.trim() || (typeof window !== 'undefined' ? localStorage.getItem('sharecoc_device_name') || '' : '') || 'متصفح ويب';
+
+      const res = await fetch('/api/drive/permissions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'REGISTER_ACCESS_HUB_DEVICE',
+          username: authInputUser.trim(),
+          password: authInputPass.trim(),
+          machineGuid: guid,
+          deviceName: devName,
+          os: typeof navigator !== 'undefined' ? navigator.userAgent : 'Web Browser',
+          user: devName,
+        }),
+      });
+      const data = await res.json();
+      if (data.success && data.authorized) {
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('sharecoc_device_guid', guid);
+          localStorage.setItem('sharecoc_device_name', devName);
+        }
+        setIsUnlocked(true);
+        if (data.accessHubSecurity) {
+          setAccessHubSec(data.accessHubSecurity);
+        }
+      } else {
+        setAuthError(data.error || 'بيانات الدخول لمركز بيانات Access غير صحيحة، يرجى مراجعة إدارة الغرفة.');
+      }
+    } catch (err: any) {
+      setAuthError(`خطأ في التحقق: ${err.message}`);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
   // Auto-detect mobile screen on mount
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -558,6 +642,112 @@ export default function AccessHubPage() {
       );
     });
   };
+
+  if (isSecChecking) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-[#F7F8FA]" dir="rtl">
+        <div className="flex flex-col items-center gap-3">
+          <RefreshCw className="w-8 h-8 text-[#14372e] animate-spin" />
+          <p className="text-xs font-bold text-slate-600">جاري التحقق من ترخيص الجهاز سحابياً...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isUnlocked) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-[#F7F8FA] p-4 text-right" dir="rtl">
+        <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl p-6 sm:p-8 max-w-md w-full animate-in zoom-in-95 duration-200">
+          <div className="text-center mb-6">
+            <div className="w-16 h-16 rounded-2xl bg-[#14372e] text-[#ecd58a] mx-auto flex items-center justify-center text-3xl shadow-lg shadow-[#14372e]/20 mb-3">
+              🏛️
+            </div>
+            <h2 className="text-lg font-black text-slate-900">أمان مركز بيانات Access</h2>
+            <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
+              هذا المركز محمي برمز مرور وحساب خاص من إدارة الغرفة. يرجى تسجيل الدخول لمرة واحدة لاعتماد هذا الجهاز للأبد:
+            </p>
+          </div>
+
+          {authError && (
+            <div className="p-3 mb-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{authError}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleVerifyAccessAuth} className="space-y-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                اسم مستخدم مركز Access:
+              </label>
+              <input
+                type="text"
+                required
+                value={authInputUser}
+                onChange={(e) => setAuthInputUser(e.target.value)}
+                placeholder="أدخل اسم المستخدم..."
+                className="w-full text-xs p-3 rounded-xl border border-slate-200 focus:outline-none focus:border-[#14372e] bg-slate-50/50"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                رمز / كلمة مرور مركز Access:
+              </label>
+              <input
+                type="password"
+                required
+                value={authInputPass}
+                onChange={(e) => setAuthInputPass(e.target.value)}
+                placeholder="أدخل رمز المرور أو كلمة السر..."
+                className="w-full text-xs p-3 rounded-xl border border-slate-200 focus:outline-none focus:border-[#14372e] bg-slate-50/50 font-mono"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                اسم هذا الجهاز (للتوثيق لدى الأدمن):
+              </label>
+              <input
+                type="text"
+                value={authInputDevName}
+                onChange={(e) => setAuthInputDevName(e.target.value)}
+                placeholder="مثال: حاسوب التراخيص - مكتب 3"
+                className="w-full text-xs p-3 rounded-xl border border-slate-200 focus:outline-none focus:border-[#14372e] bg-slate-50/50"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={authLoading}
+              className="w-full py-3 bg-[#14372e] hover:bg-[#1a473b] text-white rounded-xl text-xs font-bold transition shadow-md shadow-[#14372e]/20 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+            >
+              {authLoading ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin text-[#ecd58a]" />
+                  <span>جاري التحقق واعتماد الجهاز سحابياً...</span>
+                </>
+              ) : (
+                <>
+                  <ShieldCheck className="w-4 h-4 text-[#ecd58a]" />
+                  <span>اعتماد هذا الجهاز ودخول مركز Access</span>
+                </>
+              )}
+            </button>
+
+            <div className="pt-2 text-center">
+              <Link
+                href="/files"
+                className="text-xs font-bold text-slate-500 hover:text-slate-800 transition"
+              >
+                العودة إلى مستكشف المستندات
+              </Link>
+            </div>
+          </form>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-full bg-[#F7F8FA] overflow-hidden">

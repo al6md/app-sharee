@@ -74,15 +74,34 @@ export interface AuthorizedDeviceConfig {
   registeredAt?: string;
 }
 
+export interface AccessHubSecurityConfig {
+  enabled: boolean;
+  username?: string;
+  password?: string;
+  pinCode?: string;
+  authorizedDevices?: string[];
+  updatedAt?: string;
+}
+
 export interface CloudAdminStore {
   version: number;
   updatedAt: string;
   adminCredentials: AdminCredentialsConfig;
   devices: AuthorizedDeviceConfig[];
   departments: Record<string, DepartmentPermissionConfig>;
+  accessHubSecurity?: AccessHubSecurityConfig;
 }
 
 export const PERMISSIONS_CONFIG_FILENAME = '.sharecoc_permissions.json';
+
+export const DEFAULT_ACCESS_HUB_SECURITY: AccessHubSecurityConfig = {
+  enabled: false,
+  username: '',
+  password: '',
+  pinCode: '',
+  authorizedDevices: [],
+  updatedAt: new Date(0).toISOString(),
+};
 
 export const DEFAULT_ADMIN_CREDENTIALS: AdminCredentialsConfig = {
   username: 'admin',
@@ -434,12 +453,25 @@ export async function getCloudAdminStore(forceRefresh: boolean = false): Promise
           }))
         : [];
 
+    const rawAccessSec = rawData.accessHubSecurity || rawData.departments?.['مركز بيانات Access'];
+    const accessHubSecurity: AccessHubSecurityConfig = {
+      enabled: rawAccessSec?.enabled !== undefined ? Boolean(rawAccessSec.enabled) : Boolean(rawAccessSec?.deptPassword || rawAccessSec?.pinCode || rawAccessSec?.password),
+      username: String(rawAccessSec?.username || rawAccessSec?.deptUsername || '').trim(),
+      password: String(rawAccessSec?.password || rawAccessSec?.deptPassword || rawAccessSec?.pinCode || '').trim(),
+      pinCode: String(rawAccessSec?.pinCode || '').trim(),
+      authorizedDevices: Array.isArray(rawAccessSec?.authorizedDevices)
+        ? rawAccessSec.authorizedDevices.filter(Boolean)
+        : [],
+      updatedAt: rawAccessSec?.updatedAt || new Date().toISOString(),
+    };
+
     const store: CloudAdminStore = {
       version: 3,
       updatedAt: rawData.updatedAt || new Date().toISOString(),
       adminCredentials,
       devices,
       departments: normalizedDepts,
+      accessHubSecurity,
     };
 
     _adminStoreCache = { store, ts: Date.now(), fileId: configFile.id };
@@ -453,6 +485,7 @@ export async function getCloudAdminStore(forceRefresh: boolean = false): Promise
       adminCredentials: { ...DEFAULT_ADMIN_CREDENTIALS },
       devices: [],
       departments: {},
+      accessHubSecurity: { ...DEFAULT_ACCESS_HUB_SECURITY },
     };
   }
 }
@@ -471,6 +504,9 @@ async function persistCloudAdminStore(
       adminCredentials: { ...baseStore.adminCredentials },
       devices: [...baseStore.devices],
       departments: { ...baseStore.departments },
+      accessHubSecurity: baseStore.accessHubSecurity
+        ? { ...baseStore.accessHubSecurity }
+        : { ...DEFAULT_ACCESS_HUB_SECURITY },
     });
     updatedStore.version = 3;
     updatedStore.updatedAt = new Date().toISOString();
@@ -722,7 +758,7 @@ export async function authorizeDeviceForDepartment(deviceInfo: {
  */
 export async function revokeOrDeleteDevice(
   identifier: string // id or machineGuid
-): Promise<{ success: boolean; devices: AuthorizedDeviceConfig[]; departments: Record<string, DepartmentPermissionConfig> }> {
+): Promise<{ success: boolean; devices: AuthorizedDeviceConfig[]; departments: Record<string, DepartmentPermissionConfig>; accessHubSecurity?: AccessHubSecurityConfig }> {
   const cleanId = String(identifier || '').trim();
   if (!cleanId) throw new Error('معرف الجهاز مطلوب');
 
@@ -745,14 +781,176 @@ export async function revokeOrDeleteDevice(
       }
     }
 
+    // 3. إزالة بصمة الجهاز من أمان مركز بيانات Access
+    let accessHubSecurity = current.accessHubSecurity ? { ...current.accessHubSecurity } : undefined;
+    if (accessHubSecurity && Array.isArray(accessHubSecurity.authorizedDevices) && accessHubSecurity.authorizedDevices.includes(targetGuid)) {
+      accessHubSecurity = {
+        ...accessHubSecurity,
+        authorizedDevices: accessHubSecurity.authorizedDevices.filter((g) => g !== targetGuid),
+        updatedAt: new Date().toISOString(),
+      };
+    }
+
     return {
       ...current,
       devices,
       departments,
+      accessHubSecurity,
     };
   });
 
-  return { success: true, devices: updated.devices, departments: updated.departments };
+  return { success: true, devices: updated.devices, departments: updated.departments, accessHubSecurity: updated.accessHubSecurity };
+}
+
+/**
+ * حفظ إعدادات أمان مركز بيانات Access وتحديث كلمة المرور واسم المستخدم وقائمة الأجهزة
+ */
+export async function saveAccessHubSecurity(
+  secInput: Partial<AccessHubSecurityConfig>
+): Promise<AccessHubSecurityConfig> {
+  const updated = await persistCloudAdminStore((current) => {
+    const curSec = current.accessHubSecurity || { ...DEFAULT_ACCESS_HUB_SECURITY };
+    const enabled = secInput.enabled !== undefined ? Boolean(secInput.enabled) : curSec.enabled;
+    const username = secInput.username !== undefined ? String(secInput.username).trim() : curSec.username;
+    const password = secInput.password !== undefined ? String(secInput.password).trim() : curSec.password;
+    const pinCode = secInput.pinCode !== undefined ? String(secInput.pinCode).trim() : curSec.pinCode;
+    const authDevs = Array.isArray(secInput.authorizedDevices) ? secInput.authorizedDevices : curSec.authorizedDevices || [];
+
+    const newSec: AccessHubSecurityConfig = {
+      enabled,
+      username,
+      password,
+      pinCode,
+      authorizedDevices: authDevs,
+      updatedAt: new Date().toISOString(),
+    };
+
+    const departments = { ...(current.departments || {}) };
+    departments['مركز بيانات Access'] = {
+      departmentName: 'مركز بيانات Access',
+      canView: true,
+      canDownload: true,
+      canUpload: true,
+      canCreateFolder: true,
+      canEdit: true,
+      canRename: true,
+      canMove: true,
+      canDelete: true,
+      canPermanentDelete: true,
+      deptUsername: username,
+      deptPassword: password,
+      pinCode,
+      authorizedDevices: authDevs,
+      updatedAt: new Date().toISOString(),
+    };
+
+    return {
+      ...current,
+      departments,
+      accessHubSecurity: newSec,
+    };
+  });
+
+  return updated.accessHubSecurity || DEFAULT_ACCESS_HUB_SECURITY;
+}
+
+/**
+ * تسجيل واعتماد جهاز جديد لمركز بيانات Access لمرة واحدة فقط
+ */
+export async function authorizeDeviceForAccessHub(deviceInfo: {
+  machineGuid: string;
+  name: string;
+  os?: string;
+  user?: string;
+}): Promise<{ success: boolean; device: AuthorizedDeviceConfig; accessHubSecurity: AccessHubSecurityConfig }> {
+  const cleanGuid = String(deviceInfo.machineGuid || '').trim();
+  const cleanName = String(deviceInfo.name || '').trim() || 'جهاز موظف';
+  const cleanOs = String(deviceInfo.os || 'متصفح ويب');
+  const cleanUser = String(deviceInfo.user || 'موظف الغرفة');
+
+  if (!cleanGuid) throw new Error('معرف الجهاز مطلوب');
+
+  const updated = await persistCloudAdminStore((current) => {
+    const devices = [...(current.devices || [])];
+    const devIndex = devices.findIndex((d) => d.machineGuid === cleanGuid);
+
+    let devRecord: AuthorizedDeviceConfig;
+    if (devIndex >= 0) {
+      const existing = devices[devIndex];
+      const depts = new Set<string>(Array.isArray(existing.authorizedDepts) ? existing.authorizedDepts : []);
+      depts.add('مركز بيانات Access');
+      devRecord = {
+        ...existing,
+        name: cleanName || existing.name,
+        os: cleanOs || existing.os,
+        user: cleanUser || existing.user,
+        department: existing.department || 'مركز بيانات Access',
+        authorizedDepts: Array.from(depts),
+        isAuthorized: true,
+        lastSeen: 'متصل الآن',
+        status: 'متصل الآن',
+      };
+      devices[devIndex] = devRecord;
+    } else {
+      devRecord = {
+        id: `dev-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+        name: cleanName,
+        user: cleanUser,
+        os: cleanOs,
+        machineGuid: cleanGuid,
+        isAuthorized: true,
+        lastSeen: 'متصل الآن',
+        status: 'متصل الآن',
+        department: 'مركز بيانات Access',
+        authorizedDepts: ['مركز بيانات Access'],
+        registeredAt: new Date().toISOString(),
+      };
+      devices.push(devRecord);
+    }
+
+    const curSec = current.accessHubSecurity || { ...DEFAULT_ACCESS_HUB_SECURITY };
+    const curAuthed = new Set<string>(curSec.authorizedDevices || []);
+    curAuthed.add(cleanGuid);
+
+    const newSec: AccessHubSecurityConfig = {
+      ...curSec,
+      authorizedDevices: Array.from(curAuthed),
+      updatedAt: new Date().toISOString(),
+    };
+
+    const departments = { ...(current.departments || {}) };
+    if (!departments['مركز بيانات Access']) {
+      departments['مركز بيانات Access'] = getDefaultDepartmentPermission('مركز بيانات Access');
+    }
+    departments['مركز بيانات Access'] = {
+      ...departments['مركز بيانات Access'],
+      deptUsername: newSec.username,
+      deptPassword: newSec.password,
+      pinCode: newSec.pinCode,
+      authorizedDevices: Array.from(curAuthed),
+      updatedAt: new Date().toISOString(),
+    };
+
+    return {
+      ...current,
+      devices,
+      departments,
+      accessHubSecurity: newSec,
+    };
+  });
+
+  const matchingDev = updated.devices.find((d) => d.machineGuid === cleanGuid) || {
+    id: cleanGuid,
+    name: cleanName,
+    user: cleanUser,
+    os: cleanOs,
+    machineGuid: cleanGuid,
+    isAuthorized: true,
+    lastSeen: 'متصل الآن',
+    department: 'مركز بيانات Access',
+  };
+
+  return { success: true, device: matchingDev, accessHubSecurity: updated.accessHubSecurity || DEFAULT_ACCESS_HUB_SECURITY };
 }
 
 /**
@@ -889,6 +1087,7 @@ export async function getAllCloudFiles(forceRefresh: boolean = false) {
     permissions: adminStore.departments,
     adminCredentials: adminStore.adminCredentials,
     devices: adminStore.devices,
+    accessHubSecurity: adminStore.accessHubSecurity || DEFAULT_ACCESS_HUB_SECURITY,
   };
 
   _cloudFilesCache = { data: result, ts: Date.now() };

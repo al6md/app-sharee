@@ -753,6 +753,32 @@ class GoogleDriveClient:
                         "deptPassword": str(cfg.get("deptPassword", "") or cfg.get("dept_password", "") or ""),
                         "authorizedDevices": auth_devs,
                     }
+
+            # مزامنة أمان مركز بيانات Access المستقل
+            hub_sec = data.get("accessHubSecurity", {}) if isinstance(data, dict) else {}
+            if hub_sec and isinstance(hub_sec, dict):
+                hub_auths = list(hub_sec.get("authorizedDevices", []) or [])
+                normalized["مركز بيانات Access"] = {
+                    "can_view": True,
+                    "can_download": True,
+                    "can_upload": True,
+                    "can_create_folder": True,
+                    "can_edit": True,
+                    "can_rename": True,
+                    "can_move": True,
+                    "can_delete": True,
+                    "can_permanent_delete": True,
+                    "can_write": True,
+                    "pin_code": str(hub_sec.get("pinCode", "") or ""),
+                    "dept_username": str(hub_sec.get("username", "") or ""),
+                    "dept_password": str(hub_sec.get("password", "") or ""),
+                    "authorized_devices": hub_auths,
+                    "pinCode": str(hub_sec.get("pinCode", "") or ""),
+                    "deptUsername": str(hub_sec.get("username", "") or ""),
+                    "deptPassword": str(hub_sec.get("password", "") or ""),
+                    "authorizedDevices": hub_auths,
+                    "enabled": bool(hub_sec.get("enabled", False)),
+                }
             self._perms_cache_data = normalized
             self._perms_cache_ts = now
             self._cloud_devices_list = data.get("devices", []) if isinstance(data, dict) else []
@@ -802,6 +828,14 @@ class GoogleDriveClient:
             dept_cfg["authorizedDevices"] = auth_devs
             dept_cfg["authorized_devices"] = auth_devs
             dept_cfg["updatedAt"] = datetime.utcnow().isoformat() + "Z"
+
+            if clean_dept in ("مركز بيانات Access", "__ACCESS_HUB__"):
+                hub_sec = data.setdefault("accessHubSecurity", {})
+                hub_auths = list(hub_sec.get("authorizedDevices", []) or [])
+                if clean_guid not in hub_auths:
+                    hub_auths.append(clean_guid)
+                hub_sec["authorizedDevices"] = hub_auths
+                hub_sec["updatedAt"] = datetime.utcnow().isoformat() + "Z"
 
             # تسجيل أو تحديث الجهاز في لوحة الأدمن سحابياً
             devs_list = data.setdefault("devices", [])
