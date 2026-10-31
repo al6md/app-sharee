@@ -3,7 +3,8 @@ import Link from 'next/link';
 import { 
   Files, 
   Shield, 
-  Download
+  Download,
+  Database
 } from 'lucide-react';
 import PwaRegistrar from './PwaRegistrar';
 
@@ -104,6 +105,14 @@ export default function RootLayout({
               </Link>
 
               <Link 
+                href="/access-hub" 
+                className="flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-[#1B1F24] hover:bg-[#F7F8FA] font-semibold text-[14px] transition border border-transparent hover:border-[#E4E7EC]"
+              >
+                <Database className="w-5 h-5 text-[#c59b27]" />
+                <span>مركز بيانات Access</span>
+              </Link>
+
+              <Link 
                 href="/admin" 
                 className="flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-[#1B1F24] hover:bg-[#F7F8FA] font-semibold text-[14px] transition border border-transparent hover:border-[#E4E7EC]"
               >
@@ -142,18 +151,26 @@ export default function RootLayout({
         </main>
 
         {/* 4. شريط التنقل السفلي للهواتف المحمولة */}
-        <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-[#E4E7EC] z-40 px-6 py-2 flex items-center justify-around">
+        <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-[#E4E7EC] z-40 px-4 py-2 flex items-center justify-around">
           <Link 
             href="/files" 
-            className="flex flex-col items-center gap-1 text-[#14372e] font-semibold text-xs py-1 px-4 rounded-lg active:bg-[#F7F8FA] transition"
+            className="flex flex-col items-center gap-1 text-[#14372e] font-semibold text-xs py-1 px-2 rounded-lg active:bg-[#F7F8FA] transition"
           >
             <Files className="w-5 h-5 text-[#14372e]" />
             <span>المستندات</span>
           </Link>
 
           <Link 
+            href="/access-hub" 
+            className="flex flex-col items-center gap-1 text-[#14372e] font-semibold text-xs py-1 px-2 rounded-lg active:bg-[#F7F8FA] transition"
+          >
+            <Database className="w-5 h-5 text-[#c59b27]" />
+            <span>بيانات Access</span>
+          </Link>
+
+          <Link 
             href="/admin" 
-            className="flex flex-col items-center gap-1 text-[#667085] hover:text-[#1B1F24] font-semibold text-xs py-1 px-4 rounded-lg active:bg-[#F7F8FA] transition"
+            className="flex flex-col items-center gap-1 text-[#667085] hover:text-[#1B1F24] font-semibold text-xs py-1 px-2 rounded-lg active:bg-[#F7F8FA] transition"
           >
             <Shield className="w-5 h-5 text-[#c59b27]" />
             <span>لوحة الإدارة</span>

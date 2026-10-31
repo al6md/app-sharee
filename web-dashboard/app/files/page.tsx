@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   Folder, 
@@ -2880,6 +2881,16 @@ export default function FilesPage() {
 
         {/* أزرار الإجراءات الرئيسية */}
         <div className="flex items-center gap-2 flex-wrap">
+          {/* زر مركز بيانات Access الموحد البارز للوصول الفوري */}
+          <Link
+            href="/access-hub"
+            className="flex items-center gap-2 bg-[#14372e] hover:bg-[#1b473b] text-[#ecd58a] text-xs font-bold h-10 px-4 rounded-lg transition border border-[#c59b27] shadow-sm shrink-0"
+            title="الانتقال إلى مركز بيانات وقواعد بيانات Access المدمجة"
+          >
+            <Database className="w-4 h-4 text-[#ecd58a]" />
+            <span>🏛️ مركز بيانات Access الموحد (88,987 قيد)</span>
+          </Link>
+
           {canUploadFolder(activeBrowsePath) && (
             <>
               <button
@@ -3215,6 +3226,33 @@ export default function FilesPage() {
             </button>
           </div>
         </div>
+      </div>
+
+      {/* تنبيه ذكي بارز للانتقال المباشر إلى مركز بيانات Access الموحد */}
+      <div className="bg-gradient-to-r from-[#14372e] to-[#1e5245] text-white p-3.5 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs border border-[#c59b27]/30">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-lg bg-white/10 flex items-center justify-center text-[#ecd58a] shrink-0">
+            <Database className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="text-xs font-bold text-white flex items-center gap-2">
+              <span>🏛️ قسم قواعد بيانات Access الموحد متاح الآن سحابياً!</span>
+              <span className="bg-[#ecd58a] text-[#14372e] text-[10px] font-extrabold px-2 py-0.5 rounded-full">
+                88,987 قيد مدمج
+              </span>
+            </div>
+            <p className="text-[11px] text-white/80 mt-0.5">
+              تم دمج واستخراج كافة ملفات Access الـ 7 (من 1984 إلى 2026) مع محرك بحث فوري وتعديل وحذف مباشر لجميع الموظفين.
+            </p>
+          </div>
+        </div>
+        <Link
+          href="/access-hub"
+          className="inline-flex items-center justify-center gap-1.5 px-4 py-2 bg-[#ecd58a] hover:bg-[#ffe394] text-[#14372e] rounded-lg text-xs font-bold transition shrink-0 shadow-sm"
+        >
+          <span>فتح مركز بيانات Access المدمج</span>
+          <ArrowRight className="w-3.5 h-3.5 rotate-180" />
+        </Link>
       </div>
 
       {/* 4. شريط مسار المجلدات (Breadcrumb) والمجلدات الفرعية */}
