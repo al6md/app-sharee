@@ -408,10 +408,19 @@ export default function AccessHubPage() {
             </div>
           </div>
 
+          <Link
+            href="/admin?tab=access_hub"
+            className="flex items-center gap-1.5 px-3 py-2 bg-[#14372e] hover:bg-[#1a473b] text-white rounded-lg text-xs font-bold transition shadow-xs"
+            title="الانتقال إلى لوحة التحكم الإدارية لإدارة الحقول والأقسام والصلاحيات"
+          >
+            <Settings className="w-3.5 h-3.5 text-[#ecd58a]" />
+            <span>لوحة الإدارة والحقول</span>
+          </Link>
+
           <button
             onClick={() => fetchData()}
             disabled={loading}
-            className="p-2.5 rounded-lg border border-[#E4E7EC] bg-white hover:bg-[#F7F8FA] text-[#1B1F24] transition disabled:opacity-50"
+            className="p-2.5 rounded-lg border border-[#E4E7EC] bg-white hover:bg-[#F7F8FA] text-[#1B1F24] transition disabled:opacity-50 cursor-pointer"
             title="تحديث فوري"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-[#14372e]' : ''}`} />

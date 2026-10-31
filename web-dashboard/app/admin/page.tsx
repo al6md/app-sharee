@@ -197,6 +197,15 @@ export default function AdminControlPage() {
           if (sessionActive === 'true') {
             setIsAuthenticated(true);
           }
+
+          const urlParams = new URLSearchParams(window.location.search);
+          const tabParam = urlParams.get('tab');
+          if (tabParam === 'access' || tabParam === 'access_hub' || tabParam === 'fields') {
+            setActiveTab('ACCESS_HUB');
+            if (tabParam === 'fields') {
+              setAccessHubSubTab('FIELDS');
+            }
+          }
         }
 
         // جلب بيانات الاعتماد الحقيقية المحفوظة في السحابة
@@ -1448,8 +1457,25 @@ export default function AdminControlPage() {
         </div>
       </div>
 
-      {/* 2. بطاقات الإحصائيات الأربع المنظمة */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      {/* 2. بطاقات الإحصائيات المنظمة */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+        <div
+          onClick={() => setActiveTab('ACCESS_HUB')}
+          className="bg-amber-50/70 p-4 rounded-xl border-2 border-amber-300 flex items-center justify-between cursor-pointer hover:border-amber-500 hover:shadow-md transition col-span-2 sm:col-span-1"
+        >
+          <div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              <p className="text-[12px] font-bold text-amber-950">قواعد بيانات Access</p>
+            </div>
+            <p className="text-xl font-bold text-[#14372e] mt-1 font-mono">{accessTotalRecords.toLocaleString()} قيد</p>
+            <p className="text-[11px] font-semibold text-amber-800 underline mt-0.5">إدارة الحقول والأقسام ⚙️</p>
+          </div>
+          <div className="w-10 h-10 rounded-lg bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
+            <Database className="w-5 h-5" />
+          </div>
+        </div>
+
         <div
           onClick={() => setActiveTab('DEPTS')}
           className="bg-white p-4 rounded-xl border border-[#E4E7EC] flex items-center justify-between cursor-pointer hover:border-[#14372e] transition"
@@ -1522,19 +1548,21 @@ export default function AdminControlPage() {
       {/* 3. شريط التبويبات الرئيسي للوحة الأدمن */}
       <div className="flex items-center gap-2 border-b border-[#E4E7EC] pb-3 overflow-x-auto">
         {[
+          { id: 'ACCESS_HUB', label: '🏛️ مركز وقواعد بيانات Access (إدارة الحقول والأقسام)', count: accessTotalRecords, highlight: true },
           { id: 'DEPTS', label: 'إدارة الأقسام والمجلدات', count: departments.length },
-          { id: 'ACCESS_HUB', label: '🏛️ مركز قواعد بيانات Access', count: accessTotalRecords },
           { id: 'PERMS', label: 'مصفوفة الصلاحيات السحابية', count: permissions.length },
           { id: 'FILES', label: 'إدارة كافة المستندات', count: files.length },
           { id: 'DEVICES', label: 'الأجهزة المعتمدة', count: devices.length },
           { id: 'ACCOUNT', label: 'بيانات حساب الأدمن', count: null },
-        ].map((tab) => (
+        ].map((tab: any) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id as any)}
             className={`flex items-center gap-2 px-4 py-2 rounded-lg text-[13px] font-semibold transition whitespace-nowrap cursor-pointer border ${
               activeTab === tab.id
                 ? 'bg-[#14372e] text-white border-[#14372e]'
+                : tab.highlight
+                ? 'bg-amber-50/80 text-amber-950 border-amber-300 hover:bg-amber-100 font-bold'
                 : 'bg-white text-[#1B1F24] hover:bg-[#F7F8FA] border-[#E4E7EC]'
             }`}
           >
@@ -1542,7 +1570,7 @@ export default function AdminControlPage() {
             {tab.count !== null && (
               <span
                 className={`px-2 py-0.5 rounded-full text-[11px] font-semibold font-mono ${
-                  activeTab === tab.id ? 'bg-white/20 text-white' : 'bg-[#F7F8FA] text-[#667085]'
+                  activeTab === tab.id ? 'bg-white/20 text-white' : tab.highlight ? 'bg-amber-200 text-amber-900 font-bold' : 'bg-[#F7F8FA] text-[#667085]'
                 }`}
               >
                 {tab.count}
