@@ -48,6 +48,19 @@ class StatusBridge(QObject):
     depts_changed = pyqtSignal()
 
 
+def get_desktop_machine_guid():
+    """استخراج المعرف الثابت للحاسوب من سجل الويندوز أو اسم المضيف"""
+    try:
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography", 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY)
+        val, _ = winreg.QueryValueEx(key, "MachineGuid")
+        winreg.CloseKey(key)
+        return str(val).strip()
+    except Exception:
+        import socket
+        return socket.gethostname()
+
+
 # أقصى عمر للقطة السحابية (ثوانٍ) قبل تجديدها في الخلفية
 CLOUD_SNAPSHOT_MAX_AGE = 8
 
@@ -2372,19 +2385,72 @@ class FileExchangeMainWindow(QMainWindow):
             if perms_map:
                 rule = perms_map.get(target_dept)
                 if rule:
-                    # 1. فحص الرمز السري للقسم (PIN) إن وجد
+                    # 1. فحص بيانات الأمان للقسم (يوزر وباسورد أو رمز PIN واعتماد الحاسوب لمرة واحدة)
                     pin_code = str(rule.get('pinCode') or rule.get('pin_code') or '').strip()
-                    if pin_code and target_dept not in getattr(self, '_unlocked_pin_depts', set()):
-                        entered_pin, ok = QInputDialog.getText(
-                            self,
-                            f"🔒 قسم محمي برمز سري ({target_dept})",
-                            f"هذا القسم ({target_dept}) محمي برمز مرور خاص من الإدارة.\nيرجى إدخال الرمز السري للمتابعة:",
-                            QLineEdit.EchoMode.Password
-                        )
-                        if not ok or entered_pin.strip() != pin_code:
-                            if ok:
-                                QMessageBox.critical(self, "رمز خاطئ ❌", "الرمز السري الذي أدخلته غير صحيح.")
-                            return False
+                    dept_user = str(rule.get('deptUsername') or rule.get('dept_username') or '').strip()
+                    dept_pass = str(rule.get('deptPassword') or rule.get('dept_password') or pin_code).strip()
+                    authed_devices = rule.get('authorizedDevices') or rule.get('authorized_devices') or []
+
+                    my_guid = get_desktop_machine_guid()
+                    computer_name = os.environ.get('COMPUTERNAME', 'حاسوب-الموظف')
+
+                    is_protected = bool(dept_user or dept_pass or pin_code)
+                    is_already_authed = my_guid in authed_devices or target_dept in getattr(self, '_unlocked_pin_depts', set())
+
+                    if is_protected and not is_already_authed:
+                        if dept_user:
+                            dialog = QDialog(self)
+                            dialog.setWindowTitle(f"🔒 أمان دخول القسم ({target_dept})")
+                            dialog.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+                            dialog.setFixedWidth(380)
+                            vbox = QVBoxLayout(dialog)
+
+                            lbl_info = QLabel(f"هذا القسم ({target_dept}) محمي بحساب خاص من الإدارة.\nيرجى تسجيل الدخول لمرة واحدة لاعتماد هذا الحاسوب ({computer_name}):", dialog)
+                            lbl_info.setWordWrap(True)
+                            vbox.addWidget(lbl_info)
+
+                            vbox.addWidget(QLabel("اسم مستخدم القسم:", dialog))
+                            txt_u = QLineEdit(dialog)
+                            txt_u.setPlaceholderText("أدخل اسم المستخدم...")
+                            vbox.addWidget(txt_u)
+
+                            vbox.addWidget(QLabel("رمز / كلمة مرور القسم:", dialog))
+                            txt_p = QLineEdit(dialog)
+                            txt_p.setEchoMode(QLineEdit.EchoMode.Password)
+                            txt_p.setPlaceholderText("أدخل الرمز أو كلمة المرور...")
+                            vbox.addWidget(txt_p)
+
+                            btn_box = QHBoxLayout()
+                            btn_ok = QPushButton("اعتماد الحاسوب ودخول القسم", dialog)
+                            btn_cancel = QPushButton("إلغاء", dialog)
+                            btn_box.addWidget(btn_ok)
+                            btn_box.addWidget(btn_cancel)
+                            vbox.addLayout(btn_box)
+
+                            btn_ok.clicked.connect(dialog.accept)
+                            btn_cancel.clicked.connect(dialog.reject)
+
+                            if dialog.exec() != QDialog.DialogCode.Accepted:
+                                return False
+
+                            ent_u = txt_u.text().strip()
+                            ent_p = txt_p.text().strip()
+
+                            if ent_u.lower() != dept_user.lower() or ent_p != dept_pass:
+                                QMessageBox.critical(self, "خطأ في تسجيل الدخول ❌", "اسم المستخدم أو كلمة المرور غير صحيحة.")
+                                return False
+                        else:
+                            entered_pin, ok = QInputDialog.getText(
+                                self,
+                                f"🔒 قسم محمي برمز سري ({target_dept})",
+                                f"هذا القسم ({target_dept}) محمي برمز مرور خاص من الإدارة.\nيرجى إدخال الرمز السري للمتابعة:",
+                                QLineEdit.EchoMode.Password
+                            )
+                            if not ok or entered_pin.strip() != pin_code:
+                                if ok:
+                                    QMessageBox.critical(self, "رمز خاطئ ❌", "الرمز السري الذي أدخلته غير صحيح.")
+                                return False
+
                         self._unlocked_pin_depts.add(target_dept)
 
                     # 2. فحص الصلاحيات التسع التفصيلية

@@ -37,6 +37,8 @@ export interface AccessMutations {
   deletes: string[];
   added_columns?: Record<string, string[]>;
   deleted_columns?: Record<string, string[]>;
+  renamed_columns?: Record<string, Record<string, string>>;
+  column_orders?: Record<string, string[]>;
   deleted_sections?: string[];
   trash_bin?: TrashItem[];
   roles?: Record<string, AccessRole>;
@@ -49,6 +51,8 @@ const DEFAULT_MUTATIONS: AccessMutations = {
   deletes: [],
   added_columns: {},
   deleted_columns: {},
+  renamed_columns: {},
+  column_orders: {},
   deleted_sections: [],
   trash_bin: [],
   roles: {},
@@ -346,12 +350,113 @@ export async function deleteColumnFromTable(file: string, table: string, columnN
     mutations.deleted_columns[key] = [...currentDeleted, cleanCol];
   }
 
+  // إزالته أيضاً من ترتيب الأعمدة إن وجد
+  if (mutations.column_orders?.[key]) {
+    mutations.column_orders[key] = mutations.column_orders[key].filter((c) => c !== cleanCol);
+  }
+
   await saveAccessHubMutations(mutations);
   return mutations.deleted_columns[key];
 }
 
 /**
- * استخراج قائمة الأعمدة النهائية بدمج الأعمدة المضافة وتصفية المحذوفة
+ * تعديل اسم حقل سحابياً لجدول معين وتعميم التعديل على جميع المنصات
+ */
+export async function renameColumnInTable(
+  file: string,
+  table: string,
+  oldName: string,
+  newName: string
+): Promise<{ success: boolean; renamed_columns: Record<string, string> }> {
+  const cleanOld = oldName.trim();
+  const cleanNew = newName.trim();
+  if (!cleanOld || !cleanNew) throw new Error('الاسم الحالي والاسم الجديد للحقل مطلوبان');
+  if (cleanOld === cleanNew) return { success: true, renamed_columns: {} };
+
+  const { mutations } = await getAccessHubMutations(true);
+  if (!mutations.renamed_columns) mutations.renamed_columns = {};
+  if (!mutations.column_orders) mutations.column_orders = {};
+
+  const key = `${file}_${table}`;
+  if (!mutations.renamed_columns[key]) mutations.renamed_columns[key] = {};
+
+  // هل كان الحقل قد أُعيدت تسميته سابقاً؟
+  let originalKey = cleanOld;
+  for (const [orig, cur] of Object.entries(mutations.renamed_columns[key])) {
+    if (cur === cleanOld) {
+      originalKey = orig;
+      break;
+    }
+  }
+
+  mutations.renamed_columns[key][originalKey] = cleanNew;
+
+  // تحديث الحقل إن كان في قائمة الحقول المضافة حديثاً
+  if (mutations.added_columns?.[key]) {
+    mutations.added_columns[key] = mutations.added_columns[key].map((c) => (c === cleanOld ? cleanNew : c));
+  }
+
+  // تحديث الحقل إن كان في ترتيب الأعمدة المخصص
+  if (mutations.column_orders?.[key]) {
+    mutations.column_orders[key] = mutations.column_orders[key].map((c) => (c === cleanOld ? cleanNew : c));
+  }
+
+  await saveAccessHubMutations(mutations);
+  return { success: true, renamed_columns: mutations.renamed_columns[key] };
+}
+
+/**
+ * حفظ ترتيب مخصص للأعمدة لجدول معين سحابياً
+ */
+export async function reorderColumnsInTable(
+  file: string,
+  table: string,
+  orderedColumns: string[]
+): Promise<string[]> {
+  const { mutations } = await getAccessHubMutations(true);
+  if (!mutations.column_orders) mutations.column_orders = {};
+
+  const key = `${file}_${table}`;
+  mutations.column_orders[key] = [...orderedColumns];
+
+  await saveAccessHubMutations(mutations);
+  return mutations.column_orders[key];
+}
+
+/**
+ * نقل مكان حقل (إلى البداية، إلى النهاية، للأعلى، أو للأسفل)
+ */
+export async function moveColumnInTable(
+  file: string,
+  table: string,
+  columnName: string,
+  direction: 'start' | 'end' | 'up' | 'down',
+  allColumns: string[]
+): Promise<string[]> {
+  const cleanCol = columnName.trim();
+  const currentList = [...allColumns];
+  const idx = currentList.indexOf(cleanCol);
+  if (idx === -1) throw new Error(`الحقل "${cleanCol}" غير موجود في قائمة الحقول النشطة`);
+
+  currentList.splice(idx, 1);
+
+  if (direction === 'start') {
+    currentList.unshift(cleanCol);
+  } else if (direction === 'end') {
+    currentList.push(cleanCol);
+  } else if (direction === 'up') {
+    const newIdx = Math.max(0, idx - 1);
+    currentList.splice(newIdx, 0, cleanCol);
+  } else if (direction === 'down') {
+    const newIdx = Math.min(currentList.length, idx + 1);
+    currentList.splice(newIdx, 0, cleanCol);
+  }
+
+  return await reorderColumnsInTable(file, table, currentList);
+}
+
+/**
+ * استخراج قائمة الأعمدة النهائية بدمج الأعمدة المضافة وتصفية المحذوفة وتطبيق الأسماء المعدلة والترتيب المخصص
  */
 export function getCustomColumns(file: string, table: string, baseColumns: string[], mutations: AccessMutations): string[] {
   const key = `${file}_${table}`;
@@ -367,14 +472,34 @@ export function getCustomColumns(file: string, table: string, baseColumns: strin
     ...(mutations.added_columns?.[key] || [])
   ];
 
-  // 1. تصفية الحقول المحذوفة من الأعمدة الأساسية
-  const finalCols = baseColumns.filter((c) => !deletedSet.has(c));
+  const renamedMap: Record<string, string> = {
+    ...(mutations.renamed_columns?.[allKey] || {}),
+    ...(mutations.renamed_columns?.[key] || {})
+  };
+
+  // 1. تصفية الحقول المحذوفة وتبديل أسماء الحقول المعاد تسميتها
+  let finalCols = baseColumns
+    .filter((c) => !deletedSet.has(c))
+    .map((c) => renamedMap[c] || c);
 
   // 2. إضافة الحقول المضافة حديثاً إذا لم تكن موجودة بالفعل
   for (const col of addedList) {
-    if (!deletedSet.has(col) && !finalCols.includes(col)) {
-      finalCols.push(col);
+    const displayCol = renamedMap[col] || col;
+    if (!deletedSet.has(col) && !finalCols.includes(displayCol)) {
+      finalCols.push(displayCol);
     }
+  }
+
+  // 3. تطبيق الترتيب المخصص إن وجد (نقل للبداية أو النهاية أو ترتيب إداري)
+  const customOrder = mutations.column_orders?.[key] || mutations.column_orders?.[allKey];
+  if (customOrder && Array.isArray(customOrder) && customOrder.length > 0) {
+    const orderMap = new Map<string, number>();
+    customOrder.forEach((name, idx) => orderMap.set(name, idx));
+    finalCols.sort((a, b) => {
+      const idxA = orderMap.has(a) ? orderMap.get(a)! : 9999;
+      const idxB = orderMap.has(b) ? orderMap.get(b)! : 9999;
+      return idxA - idxB;
+    });
   }
 
   return finalCols;
@@ -392,6 +517,14 @@ export function applyMutations(
   const deletesSet = new Set(mutations.deletes || []);
   const updatesMap = mutations.updates || {};
 
+  const key = `${fileName}_${tableName}`;
+  const allKey = `all_${tableName}`;
+  const renamedMap: Record<string, string> = {
+    ...(mutations.renamed_columns?.[allKey] || {}),
+    ...(mutations.renamed_columns?.[key] || {})
+  };
+  const hasRenames = Object.keys(renamedMap).length > 0;
+
   // 1. تصفية وتحديث السجلات الأساسية
   const processedBase: any[] = [];
   for (let i = 0; i < baseRows.length; i++) {
@@ -400,11 +533,15 @@ export function applyMutations(
     if (deletesSet.has(id)) {
       continue;
     }
-    if (updatesMap[id]) {
-      processedBase.push({ ...row, ...updatesMap[id], _adh_id: id });
-    } else {
-      processedBase.push(row._adh_id ? row : { ...row, _adh_id: id });
+    let finalRow = updatesMap[id] ? { ...row, ...updatesMap[id], _adh_id: id } : (row._adh_id ? { ...row } : { ...row, _adh_id: id });
+    if (hasRenames) {
+      for (const [orig, renamed] of Object.entries(renamedMap)) {
+        if (finalRow[orig] !== undefined && finalRow[renamed] === undefined) {
+          finalRow[renamed] = finalRow[orig];
+        }
+      }
     }
+    processedBase.push(finalRow);
   }
 
   // 2. استخراج السجلات المضافة حديثاً الخاصة بهذا الملف والجدول
@@ -418,9 +555,16 @@ export function applyMutations(
     const matchesTable = !tableName || added._adh_table === tableName;
 
     if (matchesFile && matchesTable) {
-      let finalAdded = added;
+      let finalAdded = { ...added };
       if (updatesMap[added._adh_id]) {
-        finalAdded = { ...added, ...updatesMap[added._adh_id] };
+        finalAdded = { ...finalAdded, ...updatesMap[added._adh_id] };
+      }
+      if (hasRenames) {
+        for (const [orig, renamed] of Object.entries(renamedMap)) {
+          if (finalAdded[orig] !== undefined && finalAdded[renamed] === undefined) {
+            finalAdded[renamed] = finalAdded[orig];
+          }
+        }
       }
       relevantAdds.push(finalAdded);
     }

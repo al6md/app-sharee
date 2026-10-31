@@ -14,6 +14,9 @@ data class DepartmentPermissionConfig(
     @SerializedName("canDelete") val canDelete: Boolean = false,
     @SerializedName("canPermanentDelete") val canPermanentDelete: Boolean = false,
     @SerializedName("pinCode") val pinCode: String? = null,
+    @SerializedName("deptUsername") val deptUsername: String? = null,
+    @SerializedName("deptPassword") val deptPassword: String? = null,
+    @SerializedName("authorizedDevices") val authorizedDevices: List<String> = emptyList(),
     @SerializedName("updatedAt") val updatedAt: String? = null
 )
 
@@ -25,7 +28,10 @@ data class AuthorizedDeviceConfig(
     @SerializedName("machineGuid") val machineGuid: String,
     @SerializedName("isAuthorized") var isAuthorized: Boolean = true,
     @SerializedName("lastSeen") var lastSeen: String = "متصل الآن",
-    @SerializedName("status") var status: String? = "متصل الآن"
+    @SerializedName("status") var status: String? = "متصل الآن",
+    @SerializedName("department") val department: String? = null,
+    @SerializedName("authorizedDepts") val authorizedDepts: List<String> = emptyList(),
+    @SerializedName("registeredAt") val registeredAt: String? = null
 )
 
 data class AdminCredentialsConfig(

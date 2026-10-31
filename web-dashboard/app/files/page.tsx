@@ -83,6 +83,9 @@ interface DepartmentPermConfig {
   canDelete: boolean;
   canPermanentDelete: boolean;
   pinCode?: string;
+  deptUsername?: string;
+  deptPassword?: string;
+  authorizedDevices?: string[];
 }
 
 interface CloudFolderItem {
@@ -150,6 +153,37 @@ export default function FilesPage() {
   const [pinPromptInput, setPinPromptInput] = useState<string>('');
   const [pinPromptError, setPinPromptError] = useState<string>('');
 
+  // بيانات اعتماد وتفويض الجهاز لمرة واحدة
+  const [deviceGuid, setDeviceGuid] = useState<string>('');
+  const [deviceName, setDeviceName] = useState<string>('');
+  const [deptUserInput, setDeptUserInput] = useState<string>('');
+  const [deptPassInput, setDeptPassInput] = useState<string>('');
+  const [deptDeviceNameInput, setDeptDeviceNameInput] = useState<string>('');
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      let guid = localStorage.getItem('sharecoc_device_guid');
+      if (!guid) {
+        guid = 'WEB-' + crypto.randomUUID();
+        localStorage.setItem('sharecoc_device_guid', guid);
+      }
+      setDeviceGuid(guid);
+
+      let name = localStorage.getItem('sharecoc_device_name');
+      if (!name) {
+        const isMac = navigator.userAgent.includes('Mac');
+        const isWin = navigator.userAgent.includes('Windows');
+        const isAndroid = navigator.userAgent.includes('Android');
+        const isIOS = navigator.userAgent.includes('iPhone') || navigator.userAgent.includes('iPad');
+        const plat = isWin ? 'حاسوب Windows' : isMac ? 'جهاز Mac' : isAndroid ? 'هاتف Android' : isIOS ? 'هاتف iPhone' : 'متصفح ويب';
+        name = `${plat} (${new Date().toLocaleDateString('ar-IQ')})`;
+        localStorage.setItem('sharecoc_device_name', name);
+      }
+      setDeviceName(name);
+      setDeptDeviceNameInput(name);
+    }
+  }, []);
+
   const resolveDeptName = (folderOrDept?: string | null): string => {
     if (!folderOrDept || folderOrDept === '__ALL__' || folderOrDept === 'كافة الملفات') return '';
     return folderOrDept.replace(/\\/g, '/').split('/')[0].trim();
@@ -166,17 +200,32 @@ export default function FilesPage() {
     return perm[key] !== false;
   };
 
-  const isDeptPinProtected = (folderOrDept?: string | null): boolean => {
+  const isDeptProtected = (folderOrDept?: string | null): boolean => {
     const dept = resolveDeptName(folderOrDept);
     if (!dept) return false;
-    const pin = permissionsMap[dept]?.pinCode;
-    return Boolean(pin && String(pin).trim().length > 0);
+    const perm = permissionsMap[dept];
+    if (!perm) return false;
+    const hasPin = Boolean(perm.pinCode && String(perm.pinCode).trim().length > 0);
+    const hasUserPass = Boolean(
+      (perm.deptUsername && perm.deptUsername.trim().length > 0) ||
+      (perm.deptPassword && perm.deptPassword.trim().length > 0)
+    );
+    return hasPin || hasUserPass;
   };
+  const isDeptPinProtected = isDeptProtected;
 
   const isDeptUnlocked = (folderOrDept?: string | null): boolean => {
     const dept = resolveDeptName(folderOrDept);
     if (!dept) return true;
-    if (!isDeptPinProtected(dept)) return true;
+    if (!isDeptProtected(dept)) return true;
+
+    // التحقق السحابي الفوري: هل بصمة هذا الجهاز مسجلة ومعتمدة لدى القسم في لوحة الأدمن؟
+    const perm = permissionsMap[dept];
+    const currentGuid = deviceGuid || (typeof window !== 'undefined' ? localStorage.getItem('sharecoc_device_guid') || '' : '');
+    if (currentGuid && Array.isArray(perm?.authorizedDevices) && perm.authorizedDevices.includes(currentGuid)) {
+      return true;
+    }
+
     return unlockedDepts.includes(dept);
   };
 
@@ -194,6 +243,8 @@ export default function FilesPage() {
       setPinPromptDept(deptName);
       setPinPromptTargetFolder(targetFolder);
       setPinPromptInput('');
+      setDeptUserInput('');
+      setDeptPassInput('');
       setPinPromptError('');
       return;
     }
@@ -201,20 +252,61 @@ export default function FilesPage() {
     setCurrentFolder(targetFolder);
   };
 
-  const handleVerifyDeptPin = (e?: React.FormEvent) => {
+  const handleVerifyDeptAuth = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!pinPromptDept) return;
-    const expectedPin = String(permissionsMap[pinPromptDept]?.pinCode || '').trim();
-    if (pinPromptInput.trim() === expectedPin) {
-      setUnlockedDepts((prev) => (prev.includes(pinPromptDept) ? prev : [...prev, pinPromptDept]));
-      setSelectedDept(pinPromptDept);
-      setCurrentFolder(pinPromptTargetFolder);
-      setPinPromptDept(null);
-      setPinPromptTargetFolder(null);
-      setPinPromptInput('');
+
+    const currentGuid = deviceGuid || (typeof window !== 'undefined' ? localStorage.getItem('sharecoc_device_guid') || '' : '') || ('WEB-' + crypto.randomUUID());
+    const finalDeviceName = deptDeviceNameInput.trim() || deviceName || 'متصفح ويب';
+
+    try {
+      setActionLoading(true);
       setPinPromptError('');
-    } else {
-      setPinPromptError('رمز الحماية (PIN) غير صحيح، يرجى المحاولة مرة أخرى.');
+
+      const res = await fetch('/api/drive/permissions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'REGISTER_DEPARTMENT_DEVICE',
+          departmentName: pinPromptDept,
+          username: deptUserInput.trim(),
+          password: deptPassInput.trim() || pinPromptInput.trim(),
+          machineGuid: currentGuid,
+          deviceName: finalDeviceName,
+          os: typeof navigator !== 'undefined' ? navigator.userAgent : 'Web Browser',
+          user: finalDeviceName,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.success && data.authorized) {
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('sharecoc_device_guid', currentGuid);
+          localStorage.setItem('sharecoc_device_name', finalDeviceName);
+        }
+        setDeviceGuid(currentGuid);
+        setDeviceName(finalDeviceName);
+
+        if (data.departments) {
+          setPermissionsMap(data.departments);
+        }
+
+        setUnlockedDepts((prev) => (prev.includes(pinPromptDept) ? prev : [...prev, pinPromptDept]));
+        setSelectedDept(pinPromptDept);
+        setCurrentFolder(pinPromptTargetFolder);
+        setPinPromptDept(null);
+        setPinPromptTargetFolder(null);
+        setDeptUserInput('');
+        setDeptPassInput('');
+        setPinPromptInput('');
+        setPinPromptError('');
+      } else {
+        setPinPromptError(data.error || 'بيانات الدخول لهذا القسم غير صحيحة، يرجى مراجعة إدارة الغرفة.');
+      }
+    } catch (err: any) {
+      setPinPromptError(`خطأ في التحقق: ${err.message}`);
+    } finally {
+      setActionLoading(false);
     }
   };
 
@@ -4210,47 +4302,89 @@ export default function FilesPage() {
         </div>
       )}
 
-      {/* نافذة التحقق من الرمز السري للقسم المحمي (Department PIN Prompt Modal) */}
+      {/* نافذة التحقق من أمان القسم واعتماد الجهاز لمرة واحدة (Department Handshake & Device Registration Modal) */}
       {pinPromptDept && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" dir="rtl">
           <div className="bg-white rounded-2xl p-6 max-w-md w-full space-y-4 shadow-xl border border-[#E4E7EC]">
             <div className="flex items-center justify-between border-b border-[#E4E7EC] pb-3">
               <h3 className="font-bold text-[16px] text-[#1B1F24] flex items-center gap-2">
-                <Lock className="w-4 h-4 text-[#c59b27]" />
-                <span>قسم محمي برمز سري (PIN)</span>
+                <Lock className="w-5 h-5 text-[#c59b27]" />
+                <span>أمان وتفويض دخول القسم</span>
               </h3>
               <button
                 onClick={() => {
                   setPinPromptDept(null);
                   setPinPromptTargetFolder(null);
                   setPinPromptInput('');
+                  setDeptUserInput('');
+                  setDeptPassInput('');
                   setPinPromptError('');
                 }}
-                className="text-[#667085] hover:text-[#1B1F24]"
+                className="text-[#667085] hover:text-[#1B1F24] cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <p className="text-[13px] text-[#667085] leading-relaxed">
-              القسم <strong className="text-[#1B1F24]">({pinPromptDept})</strong> محمي برمز سري من قِبل الإدارة. يرجى إدخال الرمز السري لفتح القسم واستعراض مستنداته:
+              القسم <strong className="text-[#1B1F24]">({pinPromptDept})</strong> محمي ببيانات تسجيل خاصة. يرجى إدخال معلومات الدخول لفتح القسم واعتماد اسم جهازك في لوحة تحكم الإدارة لمرة واحدة فقط:
             </p>
 
-            <form onSubmit={handleVerifyDeptPin} className="space-y-3">
-              <input
-                type="password"
-                value={pinPromptInput}
-                onChange={(e) => {
-                  setPinPromptInput(e.target.value);
-                  setPinPromptError('');
-                }}
-                placeholder="أدخل الرمز السري للقسم..."
-                className="w-full px-4 py-2.5 text-[14px] bg-[#F7F8FA] border border-[#E4E7EC] rounded-lg focus:outline-none focus:border-[#14372e] text-center font-mono font-bold tracking-widest"
-                autoFocus
-              />
+            <form onSubmit={handleVerifyDeptAuth} className="space-y-3">
+              {/* اسم المستخدم للقسم إن وجد */}
+              {permissionsMap[pinPromptDept]?.deptUsername && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">اسم مستخدم القسم:</label>
+                  <input
+                    type="text"
+                    value={deptUserInput}
+                    onChange={(e) => {
+                      setDeptUserInput(e.target.value);
+                      setPinPromptError('');
+                    }}
+                    placeholder={`مثال: ${permissionsMap[pinPromptDept]?.deptUsername || 'اسم المستخدم'}`}
+                    className="w-full px-3.5 py-2 text-[13px] bg-[#F7F8FA] border border-[#E4E7EC] rounded-lg focus:outline-none focus:border-[#14372e] font-semibold"
+                    autoFocus
+                  />
+                </div>
+              )}
+
+              {/* الرمز السري أو كلمة المرور للقسم */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">الرمز السري / كلمة مرور القسم:</label>
+                <input
+                  type="password"
+                  value={deptPassInput}
+                  onChange={(e) => {
+                    setDeptPassInput(e.target.value);
+                    setPinPromptInput(e.target.value);
+                    setPinPromptError('');
+                  }}
+                  placeholder="أدخل الرمز أو كلمة المرور..."
+                  className="w-full px-3.5 py-2.5 text-[14px] bg-[#F7F8FA] border border-[#E4E7EC] rounded-lg focus:outline-none focus:border-[#14372e] text-center font-mono font-bold tracking-widest"
+                  autoFocus={!permissionsMap[pinPromptDept]?.deptUsername}
+                />
+              </div>
+
+              {/* اسم الجهاز المراد تخزينه في الأدمن */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  اسم هذا الجهاز (يخزن في لوحة الأدمن):
+                </label>
+                <input
+                  type="text"
+                  value={deptDeviceNameInput}
+                  onChange={(e) => setDeptDeviceNameInput(e.target.value)}
+                  placeholder="مثال: حاسوب التجاري 1، هاتف المدير..."
+                  className="w-full px-3.5 py-2 text-[13px] bg-[#F7F8FA] border border-[#E4E7EC] rounded-lg focus:outline-none focus:border-[#14372e] font-medium"
+                />
+                <p className="text-[11px] text-[#667085] mt-1">
+                  💡 سيتم حفظ هذا الجهاز في لوحة تحكم الإدارة لمرة واحدة فقط ولن يُطلب منك تسجيل الدخول مرة أخرى ما لم يقم الأدمن بحذفه.
+                </p>
+              </div>
 
               {pinPromptError && (
-                <p className="text-[12px] text-[#F04438] font-semibold text-center">
+                <p className="text-[12px] text-[#F04438] font-semibold text-center bg-rose-50 p-2 rounded-lg border border-rose-200">
                   {pinPromptError}
                 </p>
               )}
@@ -4262,17 +4396,20 @@ export default function FilesPage() {
                     setPinPromptDept(null);
                     setPinPromptTargetFolder(null);
                     setPinPromptInput('');
+                    setDeptUserInput('');
+                    setDeptPassInput('');
                     setPinPromptError('');
                   }}
-                  className="px-4 py-2 text-[13px] font-semibold text-[#667085] hover:bg-[#F7F8FA] rounded-lg transition"
+                  className="px-4 py-2 text-[13px] font-semibold text-[#667085] hover:bg-[#F7F8FA] rounded-lg transition cursor-pointer"
                 >
                   إلغاء
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 text-[13px] font-semibold bg-[#14372e] text-white rounded-lg hover:bg-[#1b493d] transition"
+                  disabled={actionLoading}
+                  className="px-5 py-2.5 text-[13px] font-bold bg-[#14372e] text-white rounded-lg hover:bg-[#1b493d] transition disabled:opacity-50 cursor-pointer shadow-xs"
                 >
-                  فتح القسم
+                  {actionLoading ? 'جاري الاعتماد...' : 'اعتماد الجهاز وفتح القسم'}
                 </button>
               </div>
             </form>

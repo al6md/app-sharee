@@ -9,6 +9,9 @@ import {
   applyMutations,
   addColumnToTable,
   deleteColumnFromTable,
+  renameColumnInTable,
+  reorderColumnsInTable,
+  moveColumnInTable,
   getCustomColumns,
   deleteAccessSection,
   restoreAccessSection,
@@ -423,6 +426,48 @@ export async function POST(req: NextRequest) {
         success: true,
         message: `تم حذف الحقل "${columnName}" سحابياً بنجاح`,
         deleted_columns: deleted,
+      });
+    }
+
+    // 5.1 تعديل اسم الحقل
+    if (body.action === 'RENAME_COLUMN') {
+      const { file, table, oldName, newName } = body;
+      if (!file || !table || !oldName || !newName) {
+        return NextResponse.json({ success: false, error: 'الاسم الحالي والاسم الجديد للحقل مطلوبان' }, { status: 400 });
+      }
+      const res = await renameColumnInTable(file, table, oldName, newName);
+      return NextResponse.json({
+        success: true,
+        message: `تم تعديل اسم الحقل من "${oldName}" إلى "${newName}" بنجاح وتعميمه سحابياً`,
+        renamed_columns: res.renamed_columns,
+      });
+    }
+
+    // 5.2 نقل مكان الحقل (إلى البداية، النهاية، للأعلى، أو للأسفل)
+    if (body.action === 'MOVE_COLUMN') {
+      const { file, table, columnName, direction, allColumns } = body;
+      if (!file || !table || !columnName || !direction || !Array.isArray(allColumns)) {
+        return NextResponse.json({ success: false, error: 'بيانات نقل الحقل غير مكتملة' }, { status: 400 });
+      }
+      const newOrder = await moveColumnInTable(file, table, columnName, direction, allColumns);
+      return NextResponse.json({
+        success: true,
+        message: `تم نقل مكان الحقل "${columnName}" بنجاح`,
+        column_order: newOrder,
+      });
+    }
+
+    // 5.3 حفظ ترتيب كامل للأعمدة
+    if (body.action === 'REORDER_COLUMNS') {
+      const { file, table, columnOrder } = body;
+      if (!file || !table || !Array.isArray(columnOrder)) {
+        return NextResponse.json({ success: false, error: 'بيانات ترتيب الأعمدة غير مكتملة' }, { status: 400 });
+      }
+      const newOrder = await reorderColumnsInTable(file, table, columnOrder);
+      return NextResponse.json({
+        success: true,
+        message: 'تم حفظ وتعميم الترتيب الجديد للحقول سحابياً بنجاح',
+        column_order: newOrder,
       });
     }
 

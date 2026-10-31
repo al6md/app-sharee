@@ -48,6 +48,9 @@ export interface DepartmentPermissionConfig {
   canDelete: boolean;
   canPermanentDelete: boolean;
   pinCode?: string;
+  deptUsername?: string;
+  deptPassword?: string;
+  authorizedDevices?: string[];
   updatedAt?: string;
 }
 
@@ -66,6 +69,9 @@ export interface AuthorizedDeviceConfig {
   isAuthorized: boolean;
   lastSeen: string;
   status?: string;
+  department?: string;
+  authorizedDepts?: string[];
+  registeredAt?: string;
 }
 
 export interface CloudAdminStore {
@@ -164,6 +170,9 @@ export function normalizeDepartmentPermission(
     canPermanentDelete:
       raw.canPermanentDelete !== undefined ? Boolean(raw.canPermanentDelete) : (legacyDelete ?? def.canPermanentDelete),
     pinCode: typeof raw.pinCode === 'string' ? raw.pinCode : '',
+    deptUsername: typeof raw.deptUsername === 'string' ? raw.deptUsername.trim() : (typeof raw.username === 'string' ? raw.username.trim() : ''),
+    deptPassword: typeof raw.deptPassword === 'string' ? raw.deptPassword.trim() : (typeof raw.password === 'string' ? raw.password.trim() : ''),
+    authorizedDevices: Array.isArray(raw.authorizedDevices) ? raw.authorizedDevices.filter(Boolean) : [],
     updatedAt: raw.updatedAt || new Date().toISOString(),
   };
 }
@@ -458,6 +467,11 @@ export async function getCloudAdminStore(forceRefresh: boolean = false): Promise
             isAuthorized: dev.isAuthorized !== undefined ? Boolean(dev.isAuthorized) : true,
             lastSeen: String(dev.lastSeen || 'نشط'),
             status: dev.isAuthorized === false ? 'موقوف' : String(dev.status || 'متصل الآن'),
+            department: dev.department ? String(dev.department) : undefined,
+            authorizedDepts: Array.isArray(dev.authorizedDepts)
+              ? dev.authorizedDepts
+              : (dev.department ? [String(dev.department)] : []),
+            registeredAt: dev.registeredAt ? String(dev.registeredAt) : undefined,
           }))
         : [...DEFAULT_AUTHORIZED_DEVICES];
 
@@ -651,6 +665,135 @@ export async function saveCloudDevices(
     devices: Array.isArray(devicesInput) ? devicesInput : current.devices,
   }));
   return updated.devices;
+}
+
+/**
+ * اعتماد وتسجيل جهاز لقسم معين سحابياً (يخزن اسم الجهاز ونظامه في لوحة الأدمن)
+ */
+export async function authorizeDeviceForDepartment(deviceInfo: {
+  machineGuid: string;
+  name: string;
+  os?: string;
+  user?: string;
+  departmentName: string;
+}): Promise<{ success: boolean; device: AuthorizedDeviceConfig; departments: Record<string, DepartmentPermissionConfig> }> {
+  const cleanGuid = String(deviceInfo.machineGuid || '').trim();
+  const cleanName = String(deviceInfo.name || '').trim() || 'جهاز غير مسمى';
+  const cleanDept = String(deviceInfo.departmentName || '').trim();
+  const cleanOs = String(deviceInfo.os || 'متصفح ويب');
+  const cleanUser = String(deviceInfo.user || 'موظف الغرفة');
+
+  if (!cleanGuid) throw new Error('معرف الجهاز GUID مطلوب');
+  if (!cleanDept) throw new Error('اسم القسم مطلوب');
+
+  const updated = await persistCloudAdminStore((current) => {
+    const devices = [...(current.devices || [])];
+    const devIndex = devices.findIndex((d) => d.machineGuid === cleanGuid);
+
+    let devRecord: AuthorizedDeviceConfig;
+    if (devIndex >= 0) {
+      const existing = devices[devIndex];
+      const depts = new Set<string>(Array.isArray(existing.authorizedDepts) ? existing.authorizedDepts : []);
+      depts.add(cleanDept);
+      devRecord = {
+        ...existing,
+        name: cleanName || existing.name,
+        os: cleanOs || existing.os,
+        user: cleanUser || existing.user,
+        department: cleanDept,
+        authorizedDepts: Array.from(depts),
+        isAuthorized: true,
+        lastSeen: 'متصل الآن',
+        status: 'متصل الآن',
+      };
+      devices[devIndex] = devRecord;
+    } else {
+      devRecord = {
+        id: `dev-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+        name: cleanName,
+        user: cleanUser,
+        os: cleanOs,
+        machineGuid: cleanGuid,
+        isAuthorized: true,
+        lastSeen: 'متصل الآن',
+        status: 'متصل الآن',
+        department: cleanDept,
+        authorizedDepts: [cleanDept],
+        registeredAt: new Date().toISOString(),
+      };
+      devices.push(devRecord);
+    }
+
+    // تحديث القسم لإضافة معرف الجهاز إلى قائمته
+    const departments = { ...(current.departments || {}) };
+    if (!departments[cleanDept]) {
+      departments[cleanDept] = getDefaultDepartmentPermission(cleanDept);
+    }
+    const currentAuthed = new Set<string>(departments[cleanDept].authorizedDevices || []);
+    currentAuthed.add(cleanGuid);
+    departments[cleanDept] = {
+      ...departments[cleanDept],
+      authorizedDevices: Array.from(currentAuthed),
+      updatedAt: new Date().toISOString(),
+    };
+
+    return {
+      ...current,
+      devices,
+      departments,
+    };
+  });
+
+  const matchingDev = updated.devices.find((d) => d.machineGuid === cleanGuid) || {
+    id: cleanGuid,
+    name: cleanName,
+    user: cleanUser,
+    os: cleanOs,
+    machineGuid: cleanGuid,
+    isAuthorized: true,
+    lastSeen: 'متصل الآن',
+    department: cleanDept,
+  };
+
+  return { success: true, device: matchingDev, departments: updated.departments };
+}
+
+/**
+ * حذف جهاز وسحب اعتماده نهائياً من كافة الأقسام (حصرياً من لوحة تحكم الأدمن)
+ */
+export async function revokeOrDeleteDevice(
+  identifier: string // id or machineGuid
+): Promise<{ success: boolean; devices: AuthorizedDeviceConfig[]; departments: Record<string, DepartmentPermissionConfig> }> {
+  const cleanId = String(identifier || '').trim();
+  if (!cleanId) throw new Error('معرف الجهاز مطلوب');
+
+  const updated = await persistCloudAdminStore((current) => {
+    const targetDev = current.devices.find((d) => d.id === cleanId || d.machineGuid === cleanId);
+    const targetGuid = targetDev?.machineGuid || cleanId;
+
+    // 1. حذف الجهاز من قائمة الأجهزة
+    const devices = (current.devices || []).filter((d) => d.id !== cleanId && d.machineGuid !== cleanId);
+
+    // 2. إزالة بصمة الجهاز من جميع الأقسام المعتمدة
+    const departments = { ...(current.departments || {}) };
+    for (const [dName, dCfg] of Object.entries(departments)) {
+      if (Array.isArray(dCfg.authorizedDevices) && dCfg.authorizedDevices.includes(targetGuid)) {
+        departments[dName] = {
+          ...dCfg,
+          authorizedDevices: dCfg.authorizedDevices.filter((g) => g !== targetGuid),
+          updatedAt: new Date().toISOString(),
+        };
+      }
+    }
+
+    return {
+      ...current,
+      devices,
+      departments,
+    };
+  });
+
+  return { success: true, devices: updated.devices, departments: updated.departments };
 }
 
 /**

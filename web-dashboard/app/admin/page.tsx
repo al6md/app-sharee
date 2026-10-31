@@ -29,6 +29,10 @@ import {
   Database,
   Columns,
   Users,
+  ArrowUp,
+  ArrowDown,
+  ChevronsRight,
+  ChevronsLeft,
 } from 'lucide-react';
 
 interface DepartmentItem {
@@ -52,6 +56,9 @@ interface PermissionRule {
   canDelete: boolean;
   canPermanentDelete: boolean;
   pinCode?: string;
+  deptUsername?: string;
+  deptPassword?: string;
+  authorizedDevices?: string[];
 }
 
 interface DeviceRecord {
@@ -63,6 +70,9 @@ interface DeviceRecord {
   isAuthorized: boolean;
   lastSeen: string;
   status?: string;
+  department?: string;
+  authorizedDepts?: string[];
+  registeredAt?: string;
 }
 
 interface FileRecord {
@@ -125,6 +135,8 @@ export default function AdminControlPage() {
   const [accessTablesList, setAccessTablesList] = useState<string[]>([]);
   const [accessColumnsList, setAccessColumnsList] = useState<string[]>([]);
   const [newColNameInput, setNewColNameInput] = useState<string>('');
+  const [columnToRename, setColumnToRename] = useState<string | null>(null);
+  const [renameInputVal, setRenameInputVal] = useState<string>('');
 
   // نموذج إضافة جهاز Access Hub
   const [newRoleGuid, setNewRoleGuid] = useState<string>('');
@@ -135,6 +147,8 @@ export default function AdminControlPage() {
   const [departments, setDepartments] = useState<DepartmentItem[]>([]);
   const [showAddDeptModal, setShowAddDeptModal] = useState(false);
   const [newDeptName, setNewDeptName] = useState('');
+  const [newDeptUsername, setNewDeptUsername] = useState('');
+  const [newDeptPassword, setNewDeptPassword] = useState('');
   const [showRenameDeptModal, setShowRenameDeptModal] = useState(false);
   const [deptToRename, setDeptToRename] = useState<DepartmentItem | null>(null);
   const [newDeptRenameValue, setNewDeptRenameValue] = useState('');
@@ -144,6 +158,8 @@ export default function AdminControlPage() {
   const [savingPerms, setSavingPerms] = useState(false);
   const [selectedPermDept, setSelectedPermDept] = useState<PermissionRule | null>(null);
   const [pinInput, setPinInput] = useState('');
+  const [deptUsernameInput, setDeptUsernameInput] = useState('');
+  const [deptPasswordInput, setDeptPasswordInput] = useState('');
   const lastPermSaveRef = useRef<number>(0);
   const isSavingPermsRef = useRef<boolean>(false);
 
@@ -531,6 +547,85 @@ export default function AdminControlPage() {
     }
   };
 
+  // تعديل اسم الحقل
+  const handleRenameAccessColumn = async (oldName: string, newName: string) => {
+    const cleanOld = oldName.trim();
+    const cleanNew = newName.trim();
+    if (!cleanNew) {
+      alert('يرجى إدخال الاسم الجديد للحقل');
+      return;
+    }
+    if (cleanOld === cleanNew) {
+      setColumnToRename(null);
+      return;
+    }
+    try {
+      setActionLoading(true);
+      const res = await fetch('/api/access-hub', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'RENAME_COLUMN',
+          file: selectedAccessFile,
+          table: selectedAccessTable,
+          oldName: cleanOld,
+          newName: cleanNew,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setToastMessage({ text: `✅ تم تعديل اسم الحقل إلى "${cleanNew}" بنجاح`, type: 'success' });
+        setColumnToRename(null);
+        setRenameInputVal('');
+        await fetchColumnsForTable(selectedAccessFile, selectedAccessTable);
+      } else {
+        alert(data.error || 'فشل تعديل اسم الحقل');
+      }
+    } catch (err: any) {
+      alert(`خطأ: ${err.message}`);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // نقل مكان الحقل (إلى البداية، النهاية، الأعلى، أو الأسفل)
+  const handleMoveAccessColumn = async (colName: string, direction: 'start' | 'end' | 'up' | 'down') => {
+    try {
+      setActionLoading(true);
+      const res = await fetch('/api/access-hub', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'MOVE_COLUMN',
+          file: selectedAccessFile,
+          table: selectedAccessTable,
+          columnName: colName,
+          direction,
+          allColumns: accessColumnsList,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        const dirLabel =
+          direction === 'start'
+            ? 'البداية'
+            : direction === 'end'
+            ? 'النهاية'
+            : direction === 'up'
+            ? 'الترتيب السابق'
+            : 'الترتيب التالي';
+        setToastMessage({ text: `✅ تم نقل الحقل "${colName}" إلى ${dirLabel} بنجاح`, type: 'success' });
+        await fetchColumnsForTable(selectedAccessFile, selectedAccessTable);
+      } else {
+        alert(data.error || 'فشل نقل الحقل');
+      }
+    } catch (err: any) {
+      alert(`خطأ: ${err.message}`);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   // استعادة قيد من سلة المهملات
   const handleRestoreTrashRecord = async (id: string) => {
     try {
@@ -804,6 +899,36 @@ export default function AdminControlPage() {
 
       setShowAddDeptModal(false);
       setNewDeptName('');
+
+      // حفظ بيانات أمان القسم إن تم تحديدها
+      if (newDeptUsername.trim() || newDeptPassword.trim()) {
+        await fetch('/api/drive/permissions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            departmentName: deptName,
+            permission: {
+              departmentName: deptName,
+              canView: true,
+              canDownload: true,
+              canUpload: true,
+              canCreateFolder: true,
+              canEdit: true,
+              canRename: true,
+              canMove: true,
+              canDelete: true,
+              canPermanentDelete: true,
+              deptUsername: newDeptUsername.trim(),
+              deptPassword: newDeptPassword.trim(),
+              pinCode: newDeptPassword.trim(),
+              authorizedDevices: [],
+            },
+          }),
+        });
+        setNewDeptUsername('');
+        setNewDeptPassword('');
+      }
+
       await loadAllData(false);
       notifyLocalDesktopSync();
 
@@ -1210,11 +1335,32 @@ export default function AdminControlPage() {
     await persistDevicesToCloud(updated, `💻 تمت إضافة واعتماد الجهاز "${newDev.name}" في السحابة!`);
   };
 
-  // حذف جهاز
+  // حذف جهاز وسحب اعتماده نهائياً
   const handleDeleteDevice = async (deviceId: string, deviceName: string) => {
-    if (!confirm(`هل أنت متأكد من حذف الجهاز "${deviceName}" من قائمة الأجهزة المصرح لها؟`)) return;
-    const updated = devices.filter((d) => d.id !== deviceId);
-    await persistDevicesToCloud(updated, `🗑️ تم حذف الجهاز "${deviceName}" من السحابة.`);
+    if (!confirm(`⚠️ تحذير إداري:\nهل أنت متأكد من حذف الجهاز "${deviceName}" من قائمة الأجهزة المصرح لها؟\nسيتم سحب صلاحيته فورياً وقفل أي أقسام كان يدخل إليها ومطالبته بإعادة تسجيل الدخول.`)) return;
+    try {
+      setActionLoading(true);
+      const res = await fetch('/api/drive/permissions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'DELETE_DEVICE',
+          deviceId,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setDevices(data.devices || []);
+        setToastMessage({ text: `🗑️ تم حذف الجهاز "${deviceName}" وسحب اعتماده فورياً من كافة الأقسام!`, type: 'success' });
+        await loadAllData(false);
+      } else {
+        alert(data.error || 'فشل حذف الجهاز');
+      }
+    } catch (err: any) {
+      alert(`خطأ: ${err.message}`);
+    } finally {
+      setActionLoading(false);
+    }
   };
 
   // تصفية الملفات في تبويب الملفات
@@ -1806,26 +1952,127 @@ export default function AdminControlPage() {
                 </h5>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-                  {accessColumnsList.map((col: string, idx: number) => (
-                    <div
-                      key={idx}
-                      className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between gap-2 hover:bg-slate-100/80 transition"
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="w-5 h-5 rounded-full bg-slate-200 text-slate-600 text-[10px] font-mono flex items-center justify-center shrink-0">
-                          {idx + 1}
-                        </span>
-                        <span className="text-xs font-bold text-slate-800 truncate" title={col}>{col}</span>
-                      </div>
-                      <button
-                        onClick={() => handleDeleteAccessColumn(col)}
-                        title="حذف هذا الحقل"
-                        className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer shrink-0"
+                  {accessColumnsList.map((col: string, idx: number) => {
+                    const isEditing = columnToRename === col;
+                    const isFirst = idx === 0;
+                    const isLast = idx === accessColumnsList.length - 1;
+                    return (
+                      <div
+                        key={idx}
+                        className={`p-3.5 bg-slate-50 rounded-2xl border transition flex flex-col justify-between gap-2.5 ${
+                          isEditing ? 'border-[#14372e] ring-2 ring-[#14372e]/10 bg-white' : 'border-slate-200 hover:border-slate-300'
+                        }`}
                       >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  ))}
+                        {/* الجزء العلوي: التسلسل والاسم */}
+                        <div className="flex items-center justify-between gap-2 min-w-0">
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                            <span className="w-5 h-5 rounded-full bg-slate-200 text-slate-700 text-[10px] font-mono font-bold flex items-center justify-center shrink-0">
+                              {idx + 1}
+                            </span>
+                            {isEditing ? (
+                              <div className="flex items-center gap-1 flex-1 min-w-0">
+                                <input
+                                  type="text"
+                                  value={renameInputVal}
+                                  onChange={(e) => setRenameInputVal(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') handleRenameAccessColumn(col, renameInputVal);
+                                    if (e.key === 'Escape') { setColumnToRename(null); setRenameInputVal(''); }
+                                  }}
+                                  className="w-full bg-white border border-[#14372e] rounded-lg px-2 py-1 text-xs font-bold text-slate-900 outline-none"
+                                  autoFocus
+                                />
+                                <button
+                                  onClick={() => handleRenameAccessColumn(col, renameInputVal)}
+                                  disabled={actionLoading}
+                                  title="تأكيد التعديل"
+                                  className="p-1.5 bg-[#14372e] text-white rounded-lg hover:bg-[#1a473b] cursor-pointer shrink-0"
+                                >
+                                  <Check className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => { setColumnToRename(null); setRenameInputVal(''); }}
+                                  title="إلغاء"
+                                  className="p-1.5 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 cursor-pointer shrink-0"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            ) : (
+                              <span className="text-xs font-bold text-slate-900 truncate" title={col}>
+                                {col}
+                              </span>
+                            )}
+                          </div>
+                          {!isEditing && (
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                onClick={() => {
+                                  setColumnToRename(col);
+                                  setRenameInputVal(col);
+                                }}
+                                title="تعديل اسم الحقل"
+                                className="p-1 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50 transition cursor-pointer"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteAccessColumn(col)}
+                                title="حذف هذا الحقل"
+                                className="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* الجزء السفلي: أزرار الترتيب والنقل (البداية / النهاية / أعلى / أسفل) */}
+                        {!isEditing && (
+                          <div className="flex items-center justify-between gap-1 pt-2 border-t border-slate-200/60 text-[10px] text-slate-600">
+                            <button
+                              onClick={() => handleMoveAccessColumn(col, 'start')}
+                              disabled={isFirst || actionLoading}
+                              title="نقل إلى البداية (أول عمود)"
+                              className="px-2 py-1 bg-white border border-slate-200 rounded-md font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed transition flex items-center gap-0.5 cursor-pointer"
+                            >
+                              <ChevronsRight className="w-3 h-3 text-[#14372e]" />
+                              <span>البداية</span>
+                            </button>
+
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={() => handleMoveAccessColumn(col, 'up')}
+                                disabled={isFirst || actionLoading}
+                                title="تحريك للأمام (سابق)"
+                                className="p-1 bg-white border border-slate-200 rounded-md text-slate-700 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed transition cursor-pointer"
+                              >
+                                <ArrowUp className="w-3 h-3" />
+                              </button>
+                              <button
+                                onClick={() => handleMoveAccessColumn(col, 'down')}
+                                disabled={isLast || actionLoading}
+                                title="تحريك للخلف (تالٍ)"
+                                className="p-1 bg-white border border-slate-200 rounded-md text-slate-700 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed transition cursor-pointer"
+                              >
+                                <ArrowDown className="w-3 h-3" />
+                              </button>
+                            </div>
+
+                            <button
+                              onClick={() => handleMoveAccessColumn(col, 'end')}
+                              disabled={isLast || actionLoading}
+                              title="نقل إلى النهاية (آخر عمود)"
+                              className="px-2 py-1 bg-white border border-slate-200 rounded-md font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed transition flex items-center gap-0.5 cursor-pointer"
+                            >
+                              <span>النهاية</span>
+                              <ChevronsLeft className="w-3 h-3 text-[#c59b27]" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             </div>
@@ -2063,6 +2310,8 @@ export default function AdminControlPage() {
                         if (found) {
                           setSelectedPermDept(found);
                           setPinInput(found.pinCode || '');
+                          setDeptUsernameInput(found.deptUsername || '');
+                          setDeptPasswordInput(found.deptPassword || found.pinCode || '');
                         } else {
                           setActiveTab('PERMS');
                         }
@@ -2247,6 +2496,8 @@ export default function AdminControlPage() {
                             onClick={() => {
                               setSelectedPermDept(perm);
                               setPinInput(perm.pinCode || '');
+                              setDeptUsernameInput(perm.deptUsername || '');
+                              setDeptPasswordInput(perm.deptPassword || perm.pinCode || '');
                             }}
                             className="px-3 py-1.5 text-xs font-bold rounded-lg bg-[#14372e] text-white hover:bg-[#1b4b3f] transition flex items-center gap-1 cursor-pointer"
                           >
@@ -2671,14 +2922,51 @@ export default function AdminControlPage() {
               سيتم إنشاء مجلد جديد في Google Drive ومزامنته فوراً مع أجهزة الموظفين في الغرفة.
             </p>
 
-            <input
-              type="text"
-              placeholder="اسم القسم (مثال: الشؤون القانونية)..."
-              value={newDeptName}
-              onChange={(e) => setNewDeptName(e.target.value)}
-              className="w-full px-4 py-3 text-sm font-bold bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14372e]"
-              autoFocus
-            />
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">اسم القسم الجديد:</label>
+                <input
+                  type="text"
+                  placeholder="اسم القسم (مثال: الشؤون القانونية)..."
+                  value={newDeptName}
+                  onChange={(e) => setNewDeptName(e.target.value)}
+                  className="w-full px-4 py-2.5 text-sm font-bold bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14372e]"
+                  autoFocus
+                />
+              </div>
+
+              <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl space-y-2">
+                <p className="text-[11px] font-bold text-amber-950 flex items-center gap-1">
+                  <Key className="w-3.5 h-3.5 text-amber-700" />
+                  <span>أمان وتسجيل الدخول لهذا القسم (اختياري):</span>
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-700 mb-0.5">اسم مستخدم القسم:</label>
+                    <input
+                      type="text"
+                      placeholder="مثال: legal_user"
+                      value={newDeptUsername}
+                      onChange={(e) => setNewDeptUsername(e.target.value)}
+                      className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-[#14372e]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-700 mb-0.5">رمز / باسورد القسم:</label>
+                    <input
+                      type="text"
+                      placeholder="مثال: Legal1234"
+                      value={newDeptPassword}
+                      onChange={(e) => setNewDeptPassword(e.target.value)}
+                      className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-[#14372e]"
+                    />
+                  </div>
+                </div>
+                <p className="text-[10px] text-slate-500">
+                  💡 عند دخول أي حاسوب لهذا القسم أول مرة، سيطلب منه هذا اليوزر والرمز ثم يعتمد اسم جهازه تلقائياً في لوحة الإدارة لمرة واحدة فقط.
+                </p>
+              </div>
+            </div>
 
             <div className="flex items-center justify-end gap-2 pt-2 border-t">
               <button
@@ -2952,44 +3240,71 @@ export default function AdminControlPage() {
               })}
             </div>
 
-            {/* رمز القفل الاختياري للقسم (PIN) */}
-            <div className="p-4 rounded-2xl bg-amber-50/60 border border-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            {/* بيانات الأمان وتسجيل الدخول للقسم (اليوزر والرمز والأجهزة المعتمدة) */}
+            <div className="p-4 rounded-2xl bg-amber-50/70 border border-amber-200 space-y-3">
               <div>
                 <h4 className="text-sm font-bold text-amber-950 flex items-center gap-1.5">
                   <Key className="w-4 h-4 text-amber-700" />
-                  <span>رمز حماية القسم الاختياري (Department PIN)</span>
+                  <span>بيانات الأمان وتسجيل الدخول للقسم (Department Credentials)</span>
                 </h4>
                 <p className="text-xs text-amber-800 mt-0.5">
-                  اتركه فارغاً للوصول المباشر، أو ضع رمزاً سرياً يُطلب عند محاولة فتح القسم في الويب أو تطبيق الحاسوب.
+                  حدد اسم مستخدم ورمز دخول خاص بهذا القسم. عند دخول أي موظف أو حاسوب أول مرة، يدخل هذه البيانات ويتم تسجيل جهازه في لوحة الإدارة لمرة واحدة فقط دون تكرار.
                 </p>
               </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={pinInput}
-                  onChange={(e) => setPinInput(e.target.value)}
-                  placeholder="بدون رمز PIN"
-                  className="px-3.5 py-2 text-sm bg-white border border-amber-300 rounded-xl w-40 font-mono font-bold text-center focus:outline-none focus:ring-2 focus:ring-amber-600"
-                />
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">اسم مستخدم القسم (Username):</label>
+                  <input
+                    type="text"
+                    value={deptUsernameInput}
+                    onChange={(e) => setDeptUsernameInput(e.target.value)}
+                    placeholder="مثال: commercial_user"
+                    className="w-full px-3 py-2 text-xs font-bold bg-white border border-amber-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14372e]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">رمز / كلمة مرور القسم (Password):</label>
+                  <input
+                    type="text"
+                    value={deptPasswordInput}
+                    onChange={(e) => {
+                      setDeptPasswordInput(e.target.value);
+                      setPinInput(e.target.value);
+                    }}
+                    placeholder="مثال: Comm@2026"
+                    className="w-full px-3 py-2 text-xs font-bold bg-white border border-amber-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14372e]"
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 border-t border-amber-200/60">
+                <span className="text-[11px] font-semibold text-amber-900">
+                  {selectedPermDept.authorizedDevices && selectedPermDept.authorizedDevices.length > 0
+                    ? `💻 إجمالي الأجهزة المعتمدة حالياً لدخول هذا القسم: ${selectedPermDept.authorizedDevices.length} جهاز`
+                    : 'ℹ️ لا توجد أجهزة معتمدة بعد لهذا القسم (سيتم تسجيل أي جهاز يدخل أول مرة)'}
+                </span>
                 <button
                   type="button"
                   onClick={async () => {
                     const updated: PermissionRule = {
                       ...selectedPermDept,
-                      pinCode: pinInput.trim(),
+                      deptUsername: deptUsernameInput.trim(),
+                      deptPassword: deptPasswordInput.trim(),
+                      pinCode: deptPasswordInput.trim() || pinInput.trim(),
                     };
                     setSelectedPermDept(updated);
                     setPermissions((prev) => prev.map((p) => (p.folderId === updated.folderId ? updated : p)));
                     await persistPermissionRule(
                       updated,
-                      pinInput.trim()
-                        ? `🔑 تم تفعيل وحفظ رمز PIN لقسم "${updated.folderName}" في السحابة!`
-                        : `🔓 تمت إزالة رمز PIN لقسم "${updated.folderName}"!`
+                      deptPasswordInput.trim() || deptUsernameInput.trim()
+                        ? `🔑 تم حفظ بيانات تسجيل الدخول وتحديث الأمان لقسم "${updated.folderName}" بنجاح!`
+                        : `🔓 تمت إزالة قيود الأمان لقسم "${updated.folderName}"!`
                     );
                   }}
-                  className="px-4 py-2 text-xs font-bold bg-amber-700 text-white rounded-xl hover:bg-amber-800 transition cursor-pointer"
+                  className="px-4 py-2 text-xs font-bold bg-[#14372e] text-white rounded-xl hover:bg-[#1a473b] transition cursor-pointer shrink-0"
                 >
-                  حفظ الرمز
+                  حفظ بيانات أمان القسم
                 </button>
               </div>
             </div>
