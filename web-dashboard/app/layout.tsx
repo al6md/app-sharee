@@ -119,13 +119,6 @@ export default function RootLayout({
                 <Shield className="w-5 h-5 text-[#c59b27]" />
                 <span>لوحة تحكم الإدارة</span>
               </Link>
-
-              <Link 
-                href="/admin?tab=access_hub" 
-                className="flex items-center gap-2.5 mr-4 px-3 py-1.5 rounded-lg text-xs font-semibold text-amber-900 bg-amber-50/80 hover:bg-amber-100 transition border border-amber-200"
-              >
-                <span>⚙️ إدارة حقول وقواعد Access</span>
-              </Link>
             </nav>
           </div>
 
