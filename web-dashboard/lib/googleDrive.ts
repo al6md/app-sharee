@@ -90,48 +90,7 @@ export const DEFAULT_ADMIN_CREDENTIALS: AdminCredentialsConfig = {
   updatedAt: new Date(0).toISOString(),
 };
 
-export const DEFAULT_AUTHORIZED_DEVICES: AuthorizedDeviceConfig[] = [
-  {
-    id: 'dev-1',
-    name: 'COC-SECRETARY-PC',
-    user: 'أمانة السر والإدارة العامة',
-    os: 'Windows 11 Pro',
-    machineGuid: 'COC-KARBALA-SEC-001',
-    isAuthorized: true,
-    lastSeen: 'متصل ومفعّل',
-    status: 'متصل الآن',
-  },
-  {
-    id: 'dev-2',
-    name: 'COC-REGISTRY-01',
-    user: 'قسم السجل التجاري',
-    os: 'Windows 10 Enterprise',
-    machineGuid: 'COC-KARBALA-REG-002',
-    isAuthorized: true,
-    lastSeen: 'متصل ومفعّل',
-    status: 'متصل الآن',
-  },
-  {
-    id: 'dev-3',
-    name: 'COC-SUBSCRIPTION-01',
-    user: 'قسم الاشتراكات والهويات',
-    os: 'Windows 11 Pro',
-    machineGuid: 'COC-KARBALA-SUB-003',
-    isAuthorized: true,
-    lastSeen: 'متصل ومفعّل',
-    status: 'متصل الآن',
-  },
-  {
-    id: 'dev-4',
-    name: 'COC-GENERAL-LAPTOP',
-    user: 'القسم العام والمتابعة',
-    os: 'Windows 11 Home',
-    machineGuid: 'COC-KARBALA-GEN-004',
-    isAuthorized: true,
-    lastSeen: 'متصل ومفعّل',
-    status: 'متصل الآن',
-  },
-];
+export const DEFAULT_AUTHORIZED_DEVICES: AuthorizedDeviceConfig[] = [];
 
 export function getDefaultDepartmentPermission(departmentName: string): DepartmentPermissionConfig {
   return {
@@ -387,7 +346,7 @@ export async function getCloudAdminStore(forceRefresh: boolean = false): Promise
         version: 3,
         updatedAt: new Date().toISOString(),
         adminCredentials: { ...DEFAULT_ADMIN_CREDENTIALS },
-        devices: [...DEFAULT_AUTHORIZED_DEVICES],
+        devices: [],
         departments: {},
       };
       _adminStoreCache = { store: emptyStore, ts: Date.now() };
@@ -455,9 +414,9 @@ export async function getCloudAdminStore(forceRefresh: boolean = false): Promise
       updatedAt: (rawCreds && rawCreds.updatedAt) || rawData.updatedAt || DEFAULT_ADMIN_CREDENTIALS.updatedAt,
     };
 
-    const rawDevices = rawData.devices || rawData.__authorized_devices__;
+    const rawDevices = rawData.devices !== undefined ? rawData.devices : rawData.__authorized_devices__;
     const devices: AuthorizedDeviceConfig[] =
-      Array.isArray(rawDevices) && rawDevices.length > 0
+      Array.isArray(rawDevices)
         ? rawDevices.map((dev: any, idx: number) => ({
             id: String(dev.id || `dev-${idx + 1}`),
             name: String(dev.name || `COC-DEVICE-${idx + 1}`),
@@ -473,7 +432,7 @@ export async function getCloudAdminStore(forceRefresh: boolean = false): Promise
               : (dev.department ? [String(dev.department)] : []),
             registeredAt: dev.registeredAt ? String(dev.registeredAt) : undefined,
           }))
-        : [...DEFAULT_AUTHORIZED_DEVICES];
+        : [];
 
     const store: CloudAdminStore = {
       version: 3,
@@ -492,7 +451,7 @@ export async function getCloudAdminStore(forceRefresh: boolean = false): Promise
       version: 3,
       updatedAt: new Date().toISOString(),
       adminCredentials: { ...DEFAULT_ADMIN_CREDENTIALS },
-      devices: [...DEFAULT_AUTHORIZED_DEVICES],
+      devices: [],
       departments: {},
     };
   }

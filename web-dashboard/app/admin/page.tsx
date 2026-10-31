@@ -2801,6 +2801,15 @@ export default function AdminControlPage() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pt-2">
+            {devices.length === 0 && (
+              <div className="col-span-full p-12 text-center bg-slate-50 border border-dashed border-slate-300 rounded-2xl space-y-3">
+                <Laptop className="w-10 h-10 text-slate-400 mx-auto" />
+                <h4 className="font-bold text-slate-800 text-sm">لا توجد أجهزة معتمدة مسجلة حالياً</h4>
+                <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
+                  تم إفراغ القائمة بنجاح. سيتم تسجيل واعتماد أي حاسوب أو هاتف يفتحه موظف ويدخل بيانات القسم لأول مرة تلقائياً هنا، أو يمكنك إضافة جهاز معتمد يدوياً.
+                </p>
+              </div>
+            )}
             {devices.map((dev) => (
               <div
                 key={dev.id}
