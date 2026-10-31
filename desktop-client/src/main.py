@@ -10,19 +10,20 @@ import subprocess
 import threading
 from pathlib import Path
 
-# ضمان ترميز UTF-8 آمن للمخرجات حتى في وضع PyInstaller بدون نافذة طرفية (console=False)
+# ضمان تسجيل آمن للمخرجات وحمايتها من أخطاء السي بي في وضع PyInstaller (console=False)
 try:
     _log_dir = Path(os.environ.get("APPDATA", Path.home())) / "FileExchange"
     _log_dir.mkdir(parents=True, exist_ok=True)
     _log_file = _log_dir / "share_coc.log"
-    if sys.stdout is None:
-        sys.stdout = open(_log_file, "a", encoding="utf-8", errors="replace", buffering=1)
-    elif hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    if sys.stderr is None:
-        sys.stderr = sys.stdout
-    elif hasattr(sys.stderr, "reconfigure"):
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    if getattr(sys, 'frozen', False) or sys.stdout is None:
+        _f = open(_log_file, "a", encoding="utf-8", errors="replace", buffering=1)
+        sys.stdout = _f
+        sys.stderr = _f
+    else:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        if hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 except Exception:
     pass
 
@@ -195,21 +196,21 @@ def ensure_desktop_shortcut():
 
 
 def _activate_running_instance(retries=2, delay=0.15):
-    """محاولة إيقاظ وإظهار النسخة العاملة حالياً عبر Win32 Named Event أو الجسر المحلي المباشر بسرعة فائقة"""
-    # 1. إيقاظ فوري عبر حدث ويندوز المسمى (< 1ms)
+    """محاولة إيقاظ وإظهار النسخة العاملة حالياً والتحقق من وجود نافذة حقيقية"""
+    # 1. فحص وجود نافذة Win32 حقيقية وتنشيطها
     try:
         import ctypes
-        kernel32 = ctypes.windll.kernel32
-        EVENT_MODIFY_STATE = 0x0002
-        h_ev = kernel32.OpenEventW(EVENT_MODIFY_STATE, False, "Global\\KarbalaChamberShareCOCShowEvent")
-        if h_ev:
-            kernel32.SetEvent(h_ev)
-            kernel32.CloseHandle(h_ev)
-            return True
+        user32 = ctypes.windll.user32
+        for title in ("Share COC – غرفة تجارة كربلاء المقدسة", "Share COC"):
+            hwnd = user32.FindWindowW(None, title)
+            if hwnd:
+                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                user32.SetForegroundWindow(hwnd)
+                return True
     except Exception:
         pass
 
-    # 2. إيقاظ عبر مقبس الجسر المحلي مع تجاوز بروكسي النظام تماماً
+    # 2. إيقاظ عبر مقبس الجسر المحلي مع تجاوز بروكسي النظام
     import urllib.request
     try:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -219,18 +220,25 @@ def _activate_running_instance(retries=2, delay=0.15):
     except Exception:
         pass
 
-    # 3. إيقاظ عبر مقبض نافذة Win32
+    # 3. إيقاظ عبر حدث ويندوز المسمى فقط إذا كان هناك مقبض فعلي
     try:
         import ctypes
-        user32 = ctypes.windll.user32
-        for title in ("Share COC", "Share COC – غرفة تجارة كربلاء المقدسة"):
-            hwnd = user32.FindWindowW(None, title)
-            if hwnd:
-                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
-                user32.SetForegroundWindow(hwnd)
-                return True
+        kernel32 = ctypes.windll.kernel32
+        EVENT_MODIFY_STATE = 0x0002
+        h_ev = kernel32.OpenEventW(EVENT_MODIFY_STATE, False, "Global\\KarbalaChamberShareCOCShowEvent")
+        if h_ev:
+            kernel32.SetEvent(h_ev)
+            kernel32.CloseHandle(h_ev)
+            # ننتظر قليلاً للتأكد هل ظهرت نافذة
+            time.sleep(0.2)
+            user32 = ctypes.windll.user32
+            for title in ("Share COC – غرفة تجارة كربلاء المقدسة", "Share COC"):
+                if user32.FindWindowW(None, title):
+                    return True
     except Exception:
         pass
+
+    return False
 
     return False
 
@@ -496,4 +504,17 @@ def main():
 if __name__ == "__main__":
     import multiprocessing
     multiprocessing.freeze_support()
-    main()
+    try:
+        main()
+    except Exception as e:
+        import traceback
+        err_msg = traceback.format_exc()
+        try:
+            with open(_log_file, "a", encoding="utf-8") as f:
+                f.write(f"\n[FATAL CRASH]: {err_msg}\n")
+        except Exception:
+            pass
+        from PyQt6.QtWidgets import QMessageBox, QApplication
+        _err_app = QApplication.instance() or QApplication(sys.argv)
+        QMessageBox.critical(None, "خطأ في تشغيل التطبيق", f"تعذر بدء تشغيل Share COC:\n\n{err_msg}")
+        sys.exit(1)
