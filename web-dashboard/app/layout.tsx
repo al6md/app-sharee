@@ -151,7 +151,7 @@ export default function RootLayout({
         </main>
 
         {/* 4. شريط التنقل السفلي للهواتف المحمولة */}
-        <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-[#E4E7EC] z-40 px-4 py-2 flex items-center justify-around">
+        <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-[#E4E7EC] z-40 h-[56px] px-4 py-1 flex items-center justify-around">
           <Link 
             href="/files" 
             className="flex flex-col items-center gap-1 text-[#14372e] font-semibold text-xs py-1 px-2 rounded-lg active:bg-[#F7F8FA] transition"

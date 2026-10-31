@@ -919,7 +919,7 @@ export default function AccessHubPage() {
       </div>
 
       {/* 4. منطقة عرض البيانات: البطاقات الذكية (Cards) أو الجدول المركزي (Table) */}
-      <div className="flex-1 overflow-auto min-h-0 bg-[#F7F8FA] relative">
+      <div className="flex-1 overflow-auto min-h-0 bg-[#F7F8FA] relative pb-28 md:pb-4">
         {loading ? (
           <div className="h-full flex flex-col items-center justify-center text-center gap-3 p-12">
             <RefreshCw className="w-8 h-8 text-[#14372e] animate-spin" />
@@ -1221,8 +1221,8 @@ export default function AccessHubPage() {
         )}
       </div>
 
-      {/* 5. شريط التصفح السفلي الرشيق والمدمج (Ultra-compact Pagination - 36px) */}
-      <footer className="h-[36px] md:h-[38px] bg-white border-t border-[#E4E7EC] px-2.5 sm:px-4 flex items-center justify-between text-[#667085] shrink-0 z-20 select-none">
+      {/* 5. شريط التصفح السفلي الرشيق والمدمج (Ultra-compact Pagination - 36px) مثبت فوق شريط الجوال مباشرة */}
+      <footer className="h-[36px] md:h-[38px] fixed bottom-[56px] left-0 right-0 z-30 md:relative md:bottom-auto md:z-20 bg-white border-t border-[#E4E7EC] px-2.5 sm:px-4 flex items-center justify-between text-[#667085] shadow-xs select-none">
         {/* عداد السجلات بصيغة رشيقة ومختصرة */}
         <div className="flex items-center gap-1 font-mono text-[10.5px] sm:text-xs shrink-0">
           <span className="hidden sm:inline">عرض:</span>
