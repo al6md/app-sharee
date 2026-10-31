@@ -51,6 +51,16 @@ def build_exe():
         try:
             shutil.copy2(str(app_exe), str(local_install / "share coc.exe"))
             shutil.copy2(str(setup_exe), str(local_install / "ShareCOC_Setup.exe"))
+            
+            # نسخ بيانات Access Hub محلياً لتسريع الوصول الفوري
+            hub_src = current_dir.parent / "web-dashboard" / "data" / "access-hub"
+            hub_dst = local_install / "data" / "access-hub"
+            if hub_src.exists():
+                hub_dst.mkdir(parents=True, exist_ok=True)
+                for f in hub_src.glob("*.json"):
+                    shutil.copy2(str(f), str(hub_dst / f.name))
+                print(f"✅ تم نسخ بيانات Access Hub محلياً لتسريع التطبيق: {hub_dst}")
+                
             print(f"✅ تم تحديث ملفات التطبيق المثبت على سطح المكتب: {local_install}")
         except Exception as e:
             print(f"⚠️ تعذر التحديث المباشر لمجلد التثبيت (قد يكون التطبيق قيد التشغيل): {e}")

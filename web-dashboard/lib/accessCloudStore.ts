@@ -15,12 +15,31 @@ export interface AccessRecord {
   [key: string]: any;
 }
 
+export interface TrashItem {
+  id: string;
+  file: string;
+  table: string;
+  record: any;
+  deleted_at: string;
+  deleted_by: string;
+}
+
+export interface AccessRole {
+  guid: string;
+  name: string;
+  role: 'admin' | 'data_entry' | 'viewer';
+  lastSeen?: string;
+}
+
 export interface AccessMutations {
   adds: AccessRecord[];
   updates: Record<string, Record<string, any>>;
   deletes: string[];
   added_columns?: Record<string, string[]>;
   deleted_columns?: Record<string, string[]>;
+  deleted_sections?: string[];
+  trash_bin?: TrashItem[];
+  roles?: Record<string, AccessRole>;
   last_sync: string;
 }
 
@@ -30,6 +49,9 @@ const DEFAULT_MUTATIONS: AccessMutations = {
   deletes: [],
   added_columns: {},
   deleted_columns: {},
+  deleted_sections: [],
+  trash_bin: [],
+  roles: {},
   last_sync: new Date().toISOString(),
 };
 
@@ -406,4 +428,107 @@ export function applyMutations(
 
   // السجلات المضافة تكون دائماً في الأعلى (أحدث السجلات أولاً)
   return [...relevantAdds, ...processedBase];
+}
+
+/**
+ * حذف أو أرشفة قسم/ملف من قواعد بيانات Access
+ */
+export async function deleteAccessSection(fileName: string): Promise<string[]> {
+  const cleanName = fileName.trim();
+  if (!cleanName) throw new Error('اسم القسم مطلوب');
+
+  const { mutations } = await getAccessHubMutations(true);
+  if (!mutations.deleted_sections) mutations.deleted_sections = [];
+
+  if (!mutations.deleted_sections.includes(cleanName)) {
+    mutations.deleted_sections.push(cleanName);
+  }
+
+  await saveAccessHubMutations(mutations);
+  return mutations.deleted_sections;
+}
+
+/**
+ * استعادة قسم/ملف تم حذفه أو أرشفتها سابقاً
+ */
+export async function restoreAccessSection(fileName: string): Promise<string[]> {
+  const cleanName = fileName.trim();
+  const { mutations } = await getAccessHubMutations(true);
+  if (!mutations.deleted_sections) mutations.deleted_sections = [];
+
+  mutations.deleted_sections = mutations.deleted_sections.filter((s) => s !== cleanName);
+  await saveAccessHubMutations(mutations);
+  return mutations.deleted_sections;
+}
+
+/**
+ * حذف قيد أمنياً وإيداعه في سلة المحذوفات الإدارية مع سجل التدقيق
+ */
+export async function deleteRecordToTrash(
+  id: string,
+  file: string,
+  table: string,
+  record: any,
+  deletedBy: string = 'الإدارة'
+): Promise<boolean> {
+  const { mutations } = await getAccessHubMutations(true);
+
+  if (!mutations.trash_bin) mutations.trash_bin = [];
+  if (!mutations.deletes.includes(id)) {
+    mutations.deletes.push(id);
+  }
+
+  // إضافة إلى سلة المحذوفات
+  mutations.trash_bin.unshift({
+    id,
+    file,
+    table,
+    record: record || {},
+    deleted_at: new Date().toISOString(),
+    deleted_by: deletedBy,
+  });
+
+  // إزالة من قائمة الإضافات الحديثة إن وجد
+  mutations.adds = mutations.adds.filter((r) => r._adh_id !== id);
+
+  await saveAccessHubMutations(mutations);
+  return true;
+}
+
+/**
+ * استعادة قيد من سلة المحذوفات
+ */
+export async function restoreRecordFromTrash(id: string): Promise<boolean> {
+  const { mutations } = await getAccessHubMutations(true);
+
+  mutations.deletes = mutations.deletes.filter((d) => d !== id);
+  if (mutations.trash_bin) {
+    mutations.trash_bin = mutations.trash_bin.filter((item) => item.id !== id);
+  }
+
+  await saveAccessHubMutations(mutations);
+  return true;
+}
+
+/**
+ * حفظ أو تحديث صلاحيات جهاز ومستخدم Access Hub
+ */
+export async function setAccessHubRole(
+  guid: string,
+  name: string,
+  role: 'admin' | 'data_entry' | 'viewer'
+): Promise<AccessRole> {
+  const { mutations } = await getAccessHubMutations(true);
+  if (!mutations.roles) mutations.roles = {};
+
+  const record: AccessRole = {
+    guid,
+    name: name || 'مستخدم غير مسمى',
+    role,
+    lastSeen: new Date().toISOString(),
+  };
+
+  mutations.roles[guid] = record;
+  await saveAccessHubMutations(mutations);
+  return record;
 }

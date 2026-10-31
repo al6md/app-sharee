@@ -15,7 +15,7 @@ from pathlib import Path
 from datetime import datetime
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
     QLineEdit, QTableWidget, QTableWidgetItem, QHeaderView,
     QButtonGroup, QFrame, QDialog, QMessageBox, QFileDialog,
     QScrollArea, QAbstractItemView, QProgressDialog, QComboBox,
@@ -30,7 +30,63 @@ LOCAL_API_URL = "http://localhost:3000/api/access-hub"
 # مسار مجلد البيانات المحلي كنسخة احتياطية سريعة
 LOCAL_DATA_DIR = Path(__file__).parent.parent.parent / "web-dashboard" / "data" / "access-hub"
 
+# كاش الذاكرة اللحظي للبيانات - In-Memory Ultra-Fast RAM Cache
+_FILE_RAM_CACHE = {}  # path_str -> (mtime, parsed_json_dict)
+
+def get_local_data_dir() -> Path:
+    """تحديد المسار المحلي الفعلي لبيانات Access Hub"""
+    candidates = [
+        Path(sys.executable).parent / "data" / "access-hub",
+        Path(r"C:\Users\tohiba\OneDrive\Desktop\ShareCOC\data\access-hub"),
+        Path(__file__).resolve().parent.parent.parent / "web-dashboard" / "data" / "access-hub",
+        Path(r"c:\Users\tohiba\OneDrive\Desktop\شييييير\web-dashboard\data\access-hub"),
+        Path(os.environ.get("APPDATA", "")) / "ShareCOC" / "access-hub",
+    ]
+    for c in candidates:
+        if c.exists() and (c / "index.json").exists():
+            return c
+    return candidates[0]
+
+def get_cached_json_file(file_path: Path):
+    """قراءة وفك ملف الـ JSON بسرعة الرام اللحظية (0 ميلي ثانية) بعد أول قراءة"""
+    if not file_path.exists():
+        return None
+    path_str = str(file_path.resolve())
+    try:
+        cur_mtime = file_path.stat().st_mtime
+    except Exception:
+        cur_mtime = 0
+
+    cached = _FILE_RAM_CACHE.get(path_str)
+    if cached and cached[0] == cur_mtime:
+        return cached[1]
+
+    with open(file_path, "r", encoding="utf-8") as jf:
+        data = json.load(jf)
+    _FILE_RAM_CACHE[path_str] = (cur_mtime, data)
+    return data
+
 DATE_KEYWORDS = ['date', 'تاريخ', 'affiliation', 'expiration', 'year', 'سنة', 'مواليد']
+
+# مصفوفة الأولوية المنطقية لترتيب جداول غرفة التجارة لضمان ظهور التجار والشركات والدلالين أولاً
+TABLE_PRIORITY = {
+    "التجار": 1,
+    "الشركات": 2,
+    "الدلالين": 3,
+    "دلالين": 3,
+    "التعديل": 4,
+    "المعامل": 5,
+    "الفنادق": 6,
+    "المطاعم": 7,
+    "المقاهي": 8,
+    "الصيدليات": 9,
+    "الساحات": 10,
+    "الشطب": 11,
+}
+
+def sort_tables_by_priority(tables):
+    """ترتيب الجداول ترتيباً منطقياً معتمداً لغرفة التجارة يبدأ بالتجار ثم الشركات ثم الدلالين"""
+    return sorted(tables, key=lambda t: (TABLE_PRIORITY.get(t, 50), t))
 
 
 def parse_date_value(val):
@@ -86,6 +142,18 @@ class DataLoaderThread(QThread):
         self.sort_col = sort_col
 
     def run(self):
+        # 1. القراءة الفورية فائقة السرعة من الذاكرة والقرص المحلي أولاً (Instant 0ms)
+        local_dir = get_local_data_dir()
+        if local_dir.exists() and (local_dir / "index.json").exists():
+            try:
+                result = self._load_from_local_disk(local_dir)
+                if result:
+                    self.data_loaded.emit(result)
+                    return
+            except Exception as e:
+                pass
+
+        # 2. في حال عدم توفر البيانات محلياً، الاستعلام من السحابة السريعة
         params = {
             "file": self.file_name,
             "table": self.table_name,
@@ -95,43 +163,23 @@ class DataLoaderThread(QThread):
             "sort_dir": self.sort_dir,
             "sort_col": self.sort_col
         }
-
-        # 1. فحص الخادم المحلي السريع
         try:
-            r = requests.get(LOCAL_API_URL, params=params, timeout=2)
-            if r.status_code == 200:
-                self.data_loaded.emit(r.json())
-                return
-        except Exception:
-            pass
-
-        # 2. قراءة البيانات محلياً من ملفات الـ JSON في القرص إذا توفرت
-        if LOCAL_DATA_DIR.exists():
-            try:
-                result = self._load_from_local_disk()
-                if result:
-                    self.data_loaded.emit(result)
-                    return
-            except Exception:
-                pass
-
-        # 3. الاتصال بالسحابة المباشرة Vercel
-        try:
-            r = requests.get(CLOUD_API_URL, params=params, timeout=12)
+            r = requests.get(CLOUD_API_URL, params=params, timeout=10)
             if r.status_code == 200:
                 self.data_loaded.emit(r.json())
                 return
             else:
                 self.error_occurred.emit(f"خطأ في الخادم السحابي: {r.status_code}")
         except Exception as e:
-            self.error_occurred.emit(f"تعذر الاتصال بالسحابة: {e}")
+            self.error_occurred.emit(f"تعذر استرجاع البيانات: {e}")
 
-    def _load_from_local_disk(self):
-        idx_path = LOCAL_DATA_DIR / "index.json"
-        if not idx_path.exists():
+    def _load_from_local_disk(self, local_dir=None):
+        if local_dir is None:
+            local_dir = get_local_data_dir()
+        idx_path = local_dir / "index.json"
+        idx = get_cached_json_file(idx_path)
+        if not idx:
             return None
-        with open(idx_path, "r", encoding="utf-8") as f:
-            idx = json.load(f)
 
         req_file = self.file_name
         req_table = self.table_name
@@ -139,13 +187,11 @@ class DataLoaderThread(QThread):
 
         # قراءة الطفرات السحابية المخزنة محلياً إن وجدت
         mutations = {"adds": [], "updates": {}, "deletes": [], "added_columns": {}, "deleted_columns": {}}
-        mut_path = LOCAL_DATA_DIR / "mutations.json"
+        mut_path = local_dir / "mutations.json"
         if mut_path.exists():
-            try:
-                with open(mut_path, "r", encoding="utf-8") as mf:
-                    mutations = json.load(mf)
-            except Exception:
-                pass
+            cached_mut = get_cached_json_file(mut_path)
+            if cached_mut:
+                mutations = cached_mut
 
         rows = []
         columns = []
@@ -159,7 +205,7 @@ class DataLoaderThread(QThread):
             for a in mutations.get("adds", []):
                 if a.get("_adh_table"):
                     tables_set.add(a["_adh_table"])
-            available_tables = list(tables_set)
+            available_tables = sort_tables_by_priority(list(tables_set))
             if not req_table or req_table not in tables_set:
                 req_table = available_tables[0] if available_tables else "التجار"
 
@@ -167,11 +213,10 @@ class DataLoaderThread(QThread):
             cols_seen = set()
 
             for f in idx.get("files", []):
-                fpath = LOCAL_DATA_DIR / f"{f['name']}.json"
-                if not fpath.exists():
+                fpath = local_dir / f"{f['name']}.json"
+                data = get_cached_json_file(fpath)
+                if not data:
                     continue
-                with open(fpath, "r", encoding="utf-8") as jf:
-                    data = json.load(jf)
 
                 orig_cols = data.get("columns", {}).get(req_table, [])
                 for c in orig_cols:
@@ -187,13 +232,12 @@ class DataLoaderThread(QThread):
 
             columns = cols_order
         else:
-            fpath = LOCAL_DATA_DIR / f"{req_file}.json"
-            if not fpath.exists():
+            fpath = local_dir / f"{req_file}.json"
+            data = get_cached_json_file(fpath)
+            if not data:
                 return None
-            with open(fpath, "r", encoding="utf-8") as jf:
-                data = json.load(jf)
 
-            available_tables = list(data.get("tables", {}).keys())
+            available_tables = sort_tables_by_priority(list(data.get("tables", {}).keys()))
             if not req_table or req_table not in data.get("tables", {}):
                 req_table = available_tables[0] if available_tables else ""
 
@@ -771,7 +815,7 @@ class AccessHubWidget(QWidget):
         main_layout.addWidget(nav_frame)
 
         # ========================================================
-        # 2. شريط الأصناف والجداول الفرعية الواسع والواضح (Height ~42px)
+        # 2. شريط الأصناف والجداول الفرعية الواسع والواضح (توزيع شبكي ذكي)
         # ========================================================
         tables_frame = QFrame()
         tables_frame.setStyleSheet("""
@@ -782,27 +826,29 @@ class AccessHubWidget(QWidget):
             }
         """)
         tables_layout = QHBoxLayout(tables_frame)
-        tables_layout.setContentsMargins(10, 4, 10, 4)
-        tables_layout.setSpacing(10)
+        tables_layout.setContentsMargins(12, 6, 12, 6)
+        tables_layout.setSpacing(12)
 
-        lbl_tbl = QLabel("🏷️ الأصناف والجداول:")
-        lbl_tbl.setFont(QFont("IBM Plex Sans Arabic", 10, QFont.Weight.Bold))
-        lbl_tbl.setStyleSheet("color: #14372e; border: none; background: transparent;")
-        tables_layout.addWidget(lbl_tbl)
+        self.lbl_tbl = QLabel("🏷️ الأصناف والجداول:")
+        self.lbl_tbl.setFont(QFont("IBM Plex Sans Arabic", 10, QFont.Weight.Bold))
+        self.lbl_tbl.setMinimumWidth(155)
+        self.lbl_tbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.lbl_tbl.setStyleSheet("color: #14372e; border: none; background: transparent; padding-right: 4px;")
+        tables_layout.addWidget(self.lbl_tbl)
 
-        # حاوية أزرار الأصناف ذات التمرير الأفقي لمنع أي انضغاط أو قص للكلمات
+        # حاوية أزرار الأصناف بتوزيع شبكي مرن يتسع لكافة الأصناف بالكامل دون أي قص أو اختفاء
         self.subtables_scroll = QScrollArea()
-        self.subtables_scroll.setFixedHeight(38)
         self.subtables_scroll.setWidgetResizable(True)
-        self.subtables_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.subtables_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.subtables_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.subtables_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
 
         self.subtables_container = QWidget()
         self.subtables_container.setStyleSheet("background: transparent; border: none;")
-        self.subtables_layout = QHBoxLayout(self.subtables_container)
-        self.subtables_layout.setContentsMargins(0, 0, 0, 0)
-        self.subtables_layout.setSpacing(8)
+        self.subtables_grid = QGridLayout(self.subtables_container)
+        self.subtables_grid.setContentsMargins(0, 0, 0, 0)
+        self.subtables_grid.setHorizontalSpacing(8)
+        self.subtables_grid.setVerticalSpacing(6)
         self.subtable_btn_group = QButtonGroup(self)
         self.subtable_btn_group.setExclusive(True)
 
@@ -842,10 +888,17 @@ class AccessHubWidget(QWidget):
             }
             QLineEdit:focus { border: 1.5px solid #14372e; background: #FFFFFF; }
         """)
-        self.search_input.textChanged.connect(self._on_search_changed)
+        # مؤقت تأخير البحث لمنع أي ثقل أثناء الكتابة (Debounce 250ms)
+        self.search_timer = QTimer(self)
+        self.search_timer.setSingleShot(True)
+        self.search_timer.setInterval(250)
+        self.search_timer.timeout.connect(self._execute_search)
+
+        self.search_input.textChanged.connect(self._on_search_text_changed)
+        self.search_input.returnPressed.connect(self._execute_search)
         action_layout.addWidget(self.search_input, stretch=1)
 
-        # أزرار الإجراءات الأساسية
+        # أزرار الإجراءات الأساسية (تم سحب زر الحذف لحماية البيانات وحصر الحذف في لوحة الأدمن)
         self.btn_add = QPushButton("➕ إضافة قيد")
         self.btn_add.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
         self.btn_add.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -877,22 +930,6 @@ class AccessHubWidget(QWidget):
         self.btn_edit.clicked.connect(self._on_edit_clicked)
         action_layout.addWidget(self.btn_edit)
 
-        self.btn_delete = QPushButton("🗑️ حذف")
-        self.btn_delete.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
-        self.btn_delete.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.btn_delete.setStyleSheet("""
-            QPushButton {
-                background: #FEF3F2;
-                color: #B42318;
-                border: 1px solid #FECDCA;
-                border-radius: 6px;
-                padding: 6px 12px;
-            }
-            QPushButton:hover { background: #FEE4E2; }
-        """)
-        self.btn_delete.clicked.connect(self._on_delete_clicked)
-        action_layout.addWidget(self.btn_delete)
-
         self.btn_export = QPushButton("📥 تصدير Excel")
         self.btn_export.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
         self.btn_export.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -910,7 +947,7 @@ class AccessHubWidget(QWidget):
         action_layout.addWidget(self.btn_export)
 
         # قائمة أدوات الحقول والفرز المتقدمة (Menu Button)
-        self.btn_tools = QPushButton("⚙️ خيارات الحقول ▾")
+        self.btn_tools = QPushButton("⚙️ خيارات متقدمة ▾")
         self.btn_tools.setFont(QFont("IBM Plex Sans Arabic", 9))
         self.btn_tools.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.btn_tools.setStyleSheet("""
@@ -1060,16 +1097,16 @@ class AccessHubWidget(QWidget):
     def _subtable_btn_style(self):
         return """
             QPushButton {
-                background: #F2F4F7;
+                background: #F8F9FA;
                 color: #344054;
                 border: 1.5px solid #D0D5DD;
-                border-radius: 7px;
-                padding: 6px 18px;
+                border-radius: 6px;
+                padding: 4px 14px;
                 font-size: 13px;
                 font-weight: bold;
-                min-width: 85px;
+                min-width: 75px;
             }
-            QPushButton:hover { background: #E4E7EC; color: #101828; border-color: #98A2B3; }
+            QPushButton:hover { background: #EDF5F2; color: #14372e; border-color: #14372e; }
             QPushButton:checked {
                 background: #14372e;
                 color: #FFFFFF;
@@ -1119,15 +1156,30 @@ class AccessHubWidget(QWidget):
                     break
             self.combo_file.blockSignals(False)
 
-        # 2. تحديث أزرار الجداول التابعة لهذا القسم
-        while self.subtables_layout.count():
-            item = self.subtables_layout.takeAt(0)
+        # 2. تحديث أزرار الجداول التابعة لهذا القسم وترتيبها المنطقي وعرضها الكامل دون أي قص
+        while self.subtables_grid.count():
+            item = self.subtables_grid.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
+        tables_list = sort_tables_by_priority(data.get("available_tables", []))
         active_tbl = data.get("active_table", self.active_table)
         self.active_table = active_tbl
-        for tbl in data.get("available_tables", []):
+
+        self.lbl_tbl.setText(f"🏷️ الأصناف ({len(tables_list)}):")
+
+        # ضبط الارتفاع بمرونة: سطر واحد إذا كانت 6 أو أقل، وسطرين متناسقين إذا كانت أكثر من 6 لضمان ظهور كافة الأصناف الـ 11
+        if len(tables_list) <= 6:
+            self.subtables_scroll.setFixedHeight(36)
+            cols_per_row = max(1, len(tables_list))
+        else:
+            self.subtables_scroll.setFixedHeight(74)
+            cols_per_row = max(5, (len(tables_list) + 1) // 2)
+
+        for idx, tbl in enumerate(tables_list):
+            r = idx // cols_per_row
+            c = idx % cols_per_row
+
             btn = QPushButton(tbl)
             btn.setFont(QFont("IBM Plex Sans Arabic", 10, QFont.Weight.Bold))
             btn.setCheckable(True)
@@ -1136,60 +1188,65 @@ class AccessHubWidget(QWidget):
             btn.setStyleSheet(self._subtable_btn_style())
             btn.clicked.connect(lambda checked, t=tbl: self._on_subtable_clicked(t))
             self.subtable_btn_group.addButton(btn)
-            self.subtables_layout.addWidget(btn)
-        self.subtables_layout.addStretch()
+            self.subtables_grid.addWidget(btn, r, c)
 
-        # 3. تعبئة الجدول بالحقول والمعلومات الأصلية 100% من الملف بدون أي تغيير إطلاقاً
+        # 3. تعبئة الجدول بالحقول والمعلومات الأصلية 100% من الملف بدون أي تغيير إطلاقاً (مع تسريع الرسم الفائق)
         cols = data.get("columns", [])
         rows = data.get("rows", [])
 
-        display_cols = []
-        if self.active_file == "all":
-            display_cols.append("الملف المصدر")
-
-        for c in cols:
-            header_txt = c
-            if c == data.get("sort_col"):
-                if self.sort_dir == "desc":
-                    header_txt = f"{c} ⬇️"
-                elif self.sort_dir == "asc":
-                    header_txt = f"{c} ⬆️"
-            display_cols.append(header_txt)
-
-        self.table_widget.setColumnCount(len(display_cols))
-        self.table_widget.setHorizontalHeaderLabels(display_cols)
-        self.table_widget.setRowCount(len(rows))
-
-        for r_idx, row in enumerate(rows):
-            c_offset = 0
+        self.table_widget.setUpdatesEnabled(False)
+        self.table_widget.blockSignals(True)
+        try:
+            display_cols = []
             if self.active_file == "all":
-                src_item = QTableWidgetItem(str(row.get("_adh_file", "")))
-                src_item.setForeground(QColor("#14372e"))
-                src_item.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
-                src_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                self.table_widget.setItem(r_idx, 0, src_item)
-                c_offset = 1
+                display_cols.append("الملف المصدر")
 
-            for c_idx, col in enumerate(cols):
-                val = row.get(col, "")
-                val_str = "" if val is None else str(val).strip()
-                item = QTableWidgetItem(val_str)
-                # محاذاة واضحة ومناسبة لنوع القيمة
-                col_lower = col.lower()
-                if col_lower in ('id', 'ت', 'stampno', 'renewalno') or any(k in col_lower for k in DATE_KEYWORDS):
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                else:
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                self.table_widget.setItem(r_idx, c_idx + c_offset, item)
+            for c in cols:
+                header_txt = c
+                if c == data.get("sort_col"):
+                    if self.sort_dir == "desc":
+                        header_txt = f"{c} ⬇️"
+                    elif self.sort_dir == "asc":
+                        header_txt = f"{c} ⬆️"
+                display_cols.append(header_txt)
 
-        # ضبط عرض الأعمدة تلقائياً لضمان عدم ظهور النقاط (...)
-        self.table_widget.resizeColumnsToContents()
-        for c in range(self.table_widget.columnCount()):
-            col_w = self.table_widget.columnWidth(c)
-            if col_w < 110:
-                self.table_widget.setColumnWidth(c, 110)
-            elif col_w > 400:
-                self.table_widget.setColumnWidth(c, 400)
+            self.table_widget.setColumnCount(len(display_cols))
+            self.table_widget.setHorizontalHeaderLabels(display_cols)
+            self.table_widget.setRowCount(len(rows))
+
+            for r_idx, row in enumerate(rows):
+                c_offset = 0
+                if self.active_file == "all":
+                    src_item = QTableWidgetItem(str(row.get("_adh_file", "")))
+                    src_item.setForeground(QColor("#14372e"))
+                    src_item.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+                    src_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    self.table_widget.setItem(r_idx, 0, src_item)
+                    c_offset = 1
+
+                for c_idx, col in enumerate(cols):
+                    val = row.get(col, "")
+                    val_str = "" if val is None else str(val).strip()
+                    item = QTableWidgetItem(val_str)
+                    # محاذاة واضحة ومناسبة لنوع القيمة
+                    col_lower = col.lower()
+                    if col_lower in ('id', 'ت', 'stampno', 'renewalno') or any(k in col_lower for k in DATE_KEYWORDS):
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    else:
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                    self.table_widget.setItem(r_idx, c_idx + c_offset, item)
+
+            # ضبط عرض الأعمدة تلقائياً لضمان عدم ظهور النقاط (...)
+            self.table_widget.resizeColumnsToContents()
+            for c in range(self.table_widget.columnCount()):
+                col_w = self.table_widget.columnWidth(c)
+                if col_w < 110:
+                    self.table_widget.setColumnWidth(c, 110)
+                elif col_w > 400:
+                    self.table_widget.setColumnWidth(c, 400)
+        finally:
+            self.table_widget.blockSignals(False)
+            self.table_widget.setUpdatesEnabled(True)
 
         # 4. تحديث معلومات الترقيم
         cur_p = data.get("page", 1)
@@ -1230,9 +1287,15 @@ class AccessHubWidget(QWidget):
         self.current_page = 1
         self.load_data()
 
-    def _on_search_changed(self):
+    def _on_search_text_changed(self):
+        self.search_timer.start(250)
+
+    def _execute_search(self):
         self.current_page = 1
         self.load_data()
+
+    def _on_search_changed(self):
+        self._execute_search()
 
     def _prev_page(self):
         if self.current_page > 1:
@@ -1298,7 +1361,6 @@ class AccessHubWidget(QWidget):
         """)
 
         act_add_col = menu.addAction("➕ إضافة حقل جديد لهذا القسم")
-        act_del_col = menu.addAction("🗑️ حذف حقل من هذا القسم")
         menu.addSeparator()
         act_sort_desc = menu.addAction("⬇️ فرز زمني (من الأحدث للأقدم)")
         act_sort_asc = menu.addAction("⬆️ فرز زمني (من الأقدم للأحدث)")
@@ -1308,8 +1370,6 @@ class AccessHubWidget(QWidget):
         action = menu.exec(pos)
         if action == act_add_col:
             self._on_add_column_clicked()
-        elif action == act_del_col:
-            self._on_del_column_clicked()
         elif action == act_sort_desc:
             self.sort_dir = "desc"
             self.sort_col = "date_auto"
@@ -1324,7 +1384,7 @@ class AccessHubWidget(QWidget):
             self._reset_sort()
 
     def _show_context_menu(self, pos):
-        """قائمة الزر الأيمن المخصصة للجدول"""
+        """قائمة الزر الأيمن المخصصة للجدول (تم سحب خيار الحذف لنظام الأدمن)"""
         item = self.table_widget.itemAt(pos)
         if not item or not self.current_data or not self.current_data.get("rows"):
             return
@@ -1358,7 +1418,6 @@ class AccessHubWidget(QWidget):
         act_details = menu.addAction("🔍 عرض تفاصيل القيد بالكامل")
         menu.addSeparator()
         act_edit = menu.addAction("✏️ تعديل هذا القيد")
-        act_delete = menu.addAction("🗑️ حذف هذا القيد")
         menu.addSeparator()
         act_copy = menu.addAction("📋 نسخ بيانات السجل")
 
@@ -1367,8 +1426,6 @@ class AccessHubWidget(QWidget):
             self._show_record_details(row_idx)
         elif action == act_edit:
             self._on_edit_clicked()
-        elif action == act_delete:
-            self._on_delete_clicked()
         elif action == act_copy:
             self._copy_record_to_clipboard(row_idx)
 
@@ -1495,32 +1552,11 @@ class AccessHubWidget(QWidget):
                 QMessageBox.critical(self, "خطأ", f"تعذر الاتصال بالسحابة: {e}")
 
     def _on_delete_clicked(self):
-        row_idx = self.table_widget.currentRow()
-        if row_idx < 0 or not self.current_data or not self.current_data.get("rows"):
-            QMessageBox.information(self, "تنبيه", "يرجى تحديد السجل المراد حذفه أولاً.")
-            return
-
-        row_data = self.current_data["rows"][row_idx]
-        confirm = QMessageBox.question(
-            self, "تأكيد الحذف",
-            f"هل أنت متأكد من حذف هذا السجل نهائياً؟\nالملف: {row_data.get('_adh_file')}\nالجدول: {row_data.get('_adh_table')}",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        QMessageBox.information(
+            self, "إشعار أمني - غرفة تجارة كربلاء",
+            "تم حظر وتجريد تطبيق سطح المكتب من صلاحية الحذف المباشر لحماية سجلات التجار والدلالين من الحذف العرضي.\n\n"
+            "يمكن إجراء عمليات الحذف وإدارة الأقسام والحقول حصرياً عبر لوحة الإدارة المركزية (Admin Dashboard) للمشرفين المصرح لهم."
         )
-        if confirm == QMessageBox.StandardButton.Yes:
-            try:
-                params = {
-                    "file": row_data["_adh_file"],
-                    "table": row_data["_adh_table"],
-                    "id": row_data["_adh_id"]
-                }
-                r = requests.delete(CLOUD_API_URL, params=params, timeout=10)
-                if r.status_code == 200:
-                    QMessageBox.information(self, "نجاح", "تم حذف السجل بنجاح ومزامنته سحابياً.")
-                    self.load_data()
-                else:
-                    QMessageBox.warning(self, "تنبيه", f"فشل الحذف: {r.text}")
-            except Exception as e:
-                QMessageBox.critical(self, "خطأ", f"تعذر الاتصال بالسحابة: {e}")
 
     def _on_export_clicked(self):
         if not self.current_data or not self.current_data.get("rows"):

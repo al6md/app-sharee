@@ -26,6 +26,9 @@ import {
   LogOut,
   User,
   RotateCcw,
+  Database,
+  Columns,
+  Users,
 } from 'lucide-react';
 
 interface DepartmentItem {
@@ -102,9 +105,31 @@ export default function AdminControlPage() {
   const [credSuccess, setCredSuccess] = useState<string>('');
 
   // التبويب النشط في لوحة الأدمن
-  const [activeTab, setActiveTab] = useState<'DEPTS' | 'PERMS' | 'FILES' | 'DEVICES' | 'ACCOUNT'>('DEPTS');
+  const [activeTab, setActiveTab] = useState<'DEPTS' | 'ACCESS_HUB' | 'PERMS' | 'FILES' | 'DEVICES' | 'ACCOUNT'>('DEPTS');
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
+
+  // حالة مركز قواعد بيانات Access الموحدة
+  const [accessHubSubTab, setAccessHubSubTab] = useState<'SECTIONS' | 'FIELDS' | 'ROLES' | 'TRASH'>('SECTIONS');
+  const [accessFiles, setAccessFiles] = useState<any[]>([]);
+  const [accessAllFiles, setAccessAllFiles] = useState<any[]>([]);
+  const [accessDeletedSections, setAccessDeletedSections] = useState<string[]>([]);
+  const [accessTrashBin, setAccessTrashBin] = useState<any[]>([]);
+  const [accessRoles, setAccessRoles] = useState<Record<string, any>>({});
+  const [accessTotalRecords, setAccessTotalRecords] = useState<number>(88987);
+  const [accessLoading, setAccessLoading] = useState<boolean>(false);
+
+  // اختيارات إدارة الحقول
+  const [selectedAccessFile, setSelectedAccessFile] = useState<string>('');
+  const [selectedAccessTable, setSelectedAccessTable] = useState<string>('');
+  const [accessTablesList, setAccessTablesList] = useState<string[]>([]);
+  const [accessColumnsList, setAccessColumnsList] = useState<string[]>([]);
+  const [newColNameInput, setNewColNameInput] = useState<string>('');
+
+  // نموذج إضافة جهاز Access Hub
+  const [newRoleGuid, setNewRoleGuid] = useState<string>('');
+  const [newRoleName, setNewRoleName] = useState<string>('');
+  const [newRoleType, setNewRoleType] = useState<'admin' | 'data_entry' | 'viewer'>('data_entry');
 
   // بيانات الأقسام
   const [departments, setDepartments] = useState<DepartmentItem[]>([]);
@@ -326,11 +351,222 @@ export default function AdminControlPage() {
   useEffect(() => {
     if (!isAuthenticated) return;
     loadAllData(false);
+    loadAccessHubData();
     const interval = setInterval(() => {
       loadAllData(true);
     }, 15000);
     return () => clearInterval(interval);
   }, [isAuthenticated]);
+
+  // جلب بيانات مركز قواعد بيانات Access
+  const loadAccessHubData = async () => {
+    try {
+      setAccessLoading(true);
+      const res = await fetch('/api/access-hub?file=all&limit=1', { cache: 'no-store' });
+      const data = await res.json();
+      if (data.success) {
+        setAccessFiles(data.files || []);
+        setAccessAllFiles(data.all_files || data.files || []);
+        setAccessDeletedSections(data.deleted_sections || []);
+        setAccessTrashBin(data.trash_bin || []);
+        setAccessRoles(data.roles || {});
+        setAccessTotalRecords(data.total_records || 88987);
+
+        // ضبط القسم والجدول المختار افتراضياً
+        const activeFiles = data.files || [];
+        if (activeFiles.length > 0 && !selectedAccessFile) {
+          const firstFile = activeFiles[0];
+          setSelectedAccessFile(firstFile.name);
+          setAccessTablesList(firstFile.tables || []);
+          if (firstFile.tables && firstFile.tables.length > 0) {
+            const firstTable = firstFile.tables[0];
+            setSelectedAccessTable(firstTable);
+            fetchColumnsForTable(firstFile.name, firstTable);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load Access Hub data in admin:', err);
+    } finally {
+      setAccessLoading(false);
+    }
+  };
+
+  // جلب أعمدة جدول معين
+  const fetchColumnsForTable = async (fileName: string, tableName: string) => {
+    if (!fileName || !tableName) return;
+    try {
+      const res = await fetch(`/api/access-hub?file=${encodeURIComponent(fileName)}&table=${encodeURIComponent(tableName)}&limit=1`, { cache: 'no-store' });
+      const data = await res.json();
+      if (data.success) {
+        setAccessColumnsList(data.columns || []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch columns:', err);
+    }
+  };
+
+  // حذف أو أرشفة قسم
+  const handleDeleteSection = async (fileName: string) => {
+    if (!confirm(`⚠️ تحذير أمني:\nهل أنت متأكد من حذف وأرشفة القسم "${fileName}"؟\nسيتم إخفاؤه فوراً عن كافة الموظفين وتطبيقات سطح المكتب.`)) {
+      return;
+    }
+    try {
+      setActionLoading(true);
+      const res = await fetch('/api/access-hub', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'DELETE_SECTION', fileName }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setToastMessage({ text: `✅ تم حذف وأرشفة القسم "${fileName}" بنجاح`, type: 'success' });
+        await loadAccessHubData();
+      } else {
+        alert(data.error || 'فشل حذف القسم');
+      }
+    } catch (err: any) {
+      alert(`خطأ: ${err.message}`);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // استعادة قسم مؤرشف
+  const handleRestoreSection = async (fileName: string) => {
+    try {
+      setActionLoading(true);
+      const res = await fetch('/api/access-hub', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'RESTORE_SECTION', fileName }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setToastMessage({ text: `✅ تمت استعادة القسم "${fileName}" وإتاحته للجميع`, type: 'success' });
+        await loadAccessHubData();
+      }
+    } catch (err: any) {
+      alert(`خطأ: ${err.message}`);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // إضافة حقل جديد
+  const handleAddAccessColumn = async () => {
+    const colName = newColNameInput.trim();
+    if (!colName) {
+      alert('يرجى كتابة اسم الحقل أولاً');
+      return;
+    }
+    if (!selectedAccessFile || !selectedAccessTable) {
+      alert('يرجى تحديد القسم والجدول أولاً');
+      return;
+    }
+    try {
+      setActionLoading(true);
+      const res = await fetch('/api/access-hub', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'ADD_COLUMN',
+          file: selectedAccessFile,
+          table: selectedAccessTable,
+          columnName: colName,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setToastMessage({ text: `✅ تمت إضافة الحقل "${colName}" سحابياً وتعميمه`, type: 'success' });
+        setNewColNameInput('');
+        await fetchColumnsForTable(selectedAccessFile, selectedAccessTable);
+      } else {
+        alert(data.error || 'فشلت إضافة الحقل');
+      }
+    } catch (err: any) {
+      alert(`خطأ: ${err.message}`);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // حذف حقل
+  const handleDeleteAccessColumn = async (colName: string) => {
+    if (!confirm(`⚠️ تحذير أمني:\nهل أنت متأكد من حذف الحقل "${colName}" من جدول (${selectedAccessTable})؟\nسيتم إخفاؤه وحذفه من العرض لجميع المستخدمين.`)) {
+      return;
+    }
+    try {
+      setActionLoading(true);
+      const res = await fetch('/api/access-hub', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'DELETE_COLUMN',
+          file: selectedAccessFile,
+          table: selectedAccessTable,
+          columnName: colName,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setToastMessage({ text: `✅ تم حذف الحقل "${colName}" بنجاح`, type: 'success' });
+        await fetchColumnsForTable(selectedAccessFile, selectedAccessTable);
+      } else {
+        alert(data.error || 'فشل حذف الحقل');
+      }
+    } catch (err: any) {
+      alert(`خطأ: ${err.message}`);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // استعادة قيد من سلة المهملات
+  const handleRestoreTrashRecord = async (id: string) => {
+    try {
+      setActionLoading(true);
+      const res = await fetch('/api/access-hub', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'RESTORE_RECORD', id }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setToastMessage({ text: '✅ تمت استعادة القيد من سلة المحذوفات بنجاح', type: 'success' });
+        await loadAccessHubData();
+      } else {
+        alert(data.error || 'فشلت استعادة القيد');
+      }
+    } catch (err: any) {
+      alert(`خطأ: ${err.message}`);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // حفظ صلاحية جهاز في Access Hub
+  const handleSaveAccessRole = async (guid: string, name: string, role: 'admin' | 'data_entry' | 'viewer') => {
+    try {
+      setActionLoading(true);
+      const res = await fetch('/api/access-hub', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'SET_ROLE', guid, name, role }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setToastMessage({ text: `✅ تم تحديث وتطبيق صلاحية الجهاز (${name}) إلى [${role}]`, type: 'success' });
+        await loadAccessHubData();
+      } else {
+        alert(data.error || 'فشل حفظ الصلاحية');
+      }
+    } catch (err: any) {
+      alert(`خطأ: ${err.message}`);
+    } finally {
+      setActionLoading(false);
+    }
+  };
 
   // معالجة تسجيل الدخول المتزامن مع السحابة
   const handleLogin = async (e?: React.FormEvent) => {
@@ -1287,6 +1523,7 @@ export default function AdminControlPage() {
       <div className="flex items-center gap-2 border-b border-[#E4E7EC] pb-3 overflow-x-auto">
         {[
           { id: 'DEPTS', label: 'إدارة الأقسام والمجلدات', count: departments.length },
+          { id: 'ACCESS_HUB', label: '🏛️ مركز قواعد بيانات Access', count: accessTotalRecords },
           { id: 'PERMS', label: 'مصفوفة الصلاحيات السحابية', count: permissions.length },
           { id: 'FILES', label: 'إدارة كافة المستندات', count: files.length },
           { id: 'DEVICES', label: 'الأجهزة المعتمدة', count: devices.length },
@@ -1316,6 +1553,410 @@ export default function AdminControlPage() {
       </div>
 
       {/* 4. محتوى التبويبات */}
+
+      {/* تبويب مركز تحكم وإدارة قواعد بيانات Access الموحدة */}
+      {activeTab === 'ACCESS_HUB' && (
+        <div className="space-y-6">
+          {/* بنر العنوان الرئيسي */}
+          <div className="bg-gradient-to-r from-[#14372e] to-[#1e4d41] text-white p-6 rounded-2xl shadow-sm border border-[#1b4438] flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-[#c59b27] text-white">إدارة مركزية عليا</span>
+                <span className="text-xs text-white/70">غرفة تجارة كربلاء المقدسة</span>
+              </div>
+              <h3 className="text-xl font-bold flex items-center gap-2">
+                <Database className="w-6 h-6 text-[#c59b27]" />
+                <span>مركز تحكم وإدارة قواعد بيانات Access الموحدة</span>
+              </h3>
+              <p className="text-sm text-white/80 mt-1 max-w-2xl leading-relaxed">
+                لوحة التحكم الإدارية الحصرية لحذف وإضافة الأقسام، التحكم في الحقول، إدارة السجلات، مصفوفة صلاحيات الأجهزة، وسلة المحذوفات المركزية.
+              </p>
+            </div>
+            <button
+              onClick={loadAccessHubData}
+              disabled={accessLoading}
+              className="flex items-center gap-2 px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl text-sm font-semibold transition border border-white/20 self-start md:self-auto cursor-pointer"
+            >
+              <RefreshCw className={`w-4 h-4 ${accessLoading ? 'animate-spin' : ''}`} />
+              <span>تحديث البيانات السحابية</span>
+            </button>
+          </div>
+
+          {/* شريط الإحصائيات السريعة */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div className="bg-white p-4 rounded-xl border border-slate-200">
+              <p className="text-xs font-bold text-slate-500">الأقسام النشطة</p>
+              <p className="text-2xl font-black text-[#14372e] mt-1">{accessFiles.length}</p>
+            </div>
+            <div className="bg-white p-4 rounded-xl border border-slate-200">
+              <p className="text-xs font-bold text-slate-500">إجمالي القيود الرسمية</p>
+              <p className="text-2xl font-black text-[#14372e] mt-1">{accessTotalRecords.toLocaleString()}</p>
+            </div>
+            <div className="bg-white p-4 rounded-xl border border-slate-200">
+              <p className="text-xs font-bold text-slate-500">الأقسام المؤرشفة/المحذوفة</p>
+              <p className="text-2xl font-black text-rose-600 mt-1">{accessDeletedSections.length}</p>
+            </div>
+            <div className="bg-white p-4 rounded-xl border border-slate-200">
+              <p className="text-xs font-bold text-slate-500">سجلات سلة المحذوفات</p>
+              <p className="text-2xl font-black text-amber-600 mt-1">{accessTrashBin.length}</p>
+            </div>
+          </div>
+
+          {/* أزرار التبويبات الفرعية لمركز Access */}
+          <div className="flex items-center gap-2 border-b border-slate-200 pb-2 overflow-x-auto">
+            {[
+              { id: 'SECTIONS', label: '📁 إدارة الأقسام والملفات', count: accessFiles.length },
+              { id: 'FIELDS', label: '📋 إدارة الحقول والهياكل', count: accessColumnsList.length },
+              { id: 'ROLES', label: '👥 مصفوفة الصلاحيات والأجهزة', count: Object.keys(accessRoles).length },
+              { id: 'TRASH', label: '🗑️ سلة المحذوفات الإدارية', count: accessTrashBin.length },
+            ].map((sub) => (
+              <button
+                key={sub.id}
+                onClick={() => setAccessHubSubTab(sub.id as any)}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer border whitespace-nowrap ${
+                  accessHubSubTab === sub.id
+                    ? 'bg-[#14372e] text-white border-[#14372e]'
+                    : 'bg-white text-slate-700 hover:bg-slate-50 border-slate-200'
+                }`}
+              >
+                <span>{sub.label}</span>
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${accessHubSubTab === sub.id ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                  {sub.count}
+                </span>
+              </button>
+            ))}
+          </div>
+
+          {/* محتوى القسم 1: إدارة الأقسام والملفات */}
+          {accessHubSubTab === 'SECTIONS' && (
+            <div className="space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+                <div>
+                  <h4 className="font-bold text-base text-slate-900">الأقسام وملفات Access المدمجة</h4>
+                  <p className="text-xs text-slate-600 mt-0.5">
+                    يمكن للمدير حذف أو أرشفة أي قسم، وعند الحذف يتم إخفاؤه فوراً عن كافة حواسيب الموظفين لمنع العبث.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {accessAllFiles.map((f: any, idx: number) => {
+                  const isDeleted = accessDeletedSections.includes(f.name);
+                  return (
+                    <div
+                      key={idx}
+                      className={`p-5 rounded-2xl border transition flex flex-col justify-between ${
+                        isDeleted ? 'bg-rose-50/50 border-rose-200' : 'bg-white border-slate-200 shadow-xs'
+                      }`}
+                    >
+                      <div>
+                        <div className="flex items-center justify-between gap-2 mb-3">
+                          <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
+                            isDeleted ? 'bg-rose-100 text-rose-700' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                          }`}>
+                            {isDeleted ? '🚫 مؤرشف / محذوف عن الموظفين' : '✅ نشط ومتاح للجميع'}
+                          </span>
+                          <span className="text-xs text-slate-500 font-mono">{(f.tables || []).length} جداول</span>
+                        </div>
+                        <h5 className="font-bold text-slate-900 text-sm mb-1 leading-snug">📁 {f.name}</h5>
+                        <p className="text-xs text-slate-500 line-clamp-2">
+                          الجداول: {(f.tables || []).join('، ')}
+                        </p>
+                      </div>
+
+                      <div className="pt-4 mt-4 border-t border-slate-100 flex items-center justify-end">
+                        {isDeleted ? (
+                          <button
+                            onClick={() => handleRestoreSection(f.name)}
+                            disabled={actionLoading}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition cursor-pointer"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            <span>استعادة القسم للعمل</span>
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleDeleteSection(f.name)}
+                            disabled={actionLoading}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-bold transition cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>حذف وأرشفة القسم</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* محتوى القسم 2: إدارة الحقول والهياكل */}
+          {accessHubSubTab === 'FIELDS' && (
+            <div className="space-y-4">
+              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <h4 className="font-bold text-base text-slate-900">إدارة حقول وهياكل الجداول</h4>
+                    <p className="text-xs text-slate-600 mt-0.5">
+                      اختر القسم والجدول لاستعراض حقوله الأصلية، إضافة حقل جديد سحابياً، أو حذف حقل غير مرغوب فيه.
+                    </p>
+                  </div>
+                </div>
+
+                {/* شريط اختيار القسم والجدول */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-100">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">📁 اختر القسم المستهدف:</label>
+                    <select
+                      value={selectedAccessFile}
+                      onChange={(e) => {
+                        const fname = e.target.value;
+                        setSelectedAccessFile(fname);
+                        const match = accessFiles.find((f: any) => f.name === fname);
+                        if (match && match.tables && match.tables.length > 0) {
+                          setSelectedAccessTable(match.tables[0]);
+                          setAccessTablesList(match.tables);
+                          fetchColumnsForTable(fname, match.tables[0]);
+                        }
+                      }}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 outline-none focus:border-[#14372e]"
+                    >
+                      {accessFiles.map((f: any, i: number) => (
+                        <option key={i} value={f.name}>{f.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">🏷️ اختر الجدول المستهدف:</label>
+                    <select
+                      value={selectedAccessTable}
+                      onChange={(e) => {
+                        const tname = e.target.value;
+                        setSelectedAccessTable(tname);
+                        fetchColumnsForTable(selectedAccessFile, tname);
+                      }}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 outline-none focus:border-[#14372e]"
+                    >
+                      {accessTablesList.map((t: string, i: number) => (
+                        <option key={i} value={t}>{t}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* نموذج إضافة حقل جديد */}
+                <div className="p-4 bg-emerald-50/60 border border-emerald-100 rounded-xl flex flex-col sm:flex-row items-center gap-3">
+                  <div className="flex-1 w-full">
+                    <label className="block text-xs font-bold text-[#14372e] mb-1">➕ إضافة حقل جديد لهذا الجدول:</label>
+                    <input
+                      type="text"
+                      placeholder="اكتب اسم الحقل الجديد (مثال: البريد الإلكتروني، رقم الهوية، ملاحظات)..."
+                      value={newColNameInput}
+                      onChange={(e) => setNewColNameInput(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleAddAccessColumn()}
+                      className="w-full bg-white border border-emerald-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-800 outline-none focus:border-[#14372e]"
+                    />
+                  </div>
+                  <button
+                    onClick={handleAddAccessColumn}
+                    disabled={actionLoading || !newColNameInput.trim()}
+                    className="w-full sm:w-auto px-5 py-2.5 bg-[#14372e] hover:bg-[#1a473b] disabled:opacity-50 text-white text-xs font-bold rounded-lg transition shrink-0 cursor-pointer"
+                  >
+                    ➕ إضافة الحقل وتعميمه
+                  </button>
+                </div>
+              </div>
+
+              {/* قائمة الحقول المعروضة للجدول */}
+              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+                <h5 className="font-bold text-sm text-slate-900 mb-3 flex items-center justify-between">
+                  <span>الحقول النشطة في جدول ({selectedAccessTable}):</span>
+                  <span className="text-xs text-slate-500 font-mono">إجمالي: {accessColumnsList.length} حقل</span>
+                </h5>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                  {accessColumnsList.map((col: string, idx: number) => (
+                    <div
+                      key={idx}
+                      className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between gap-2 hover:bg-slate-100/80 transition"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="w-5 h-5 rounded-full bg-slate-200 text-slate-600 text-[10px] font-mono flex items-center justify-center shrink-0">
+                          {idx + 1}
+                        </span>
+                        <span className="text-xs font-bold text-slate-800 truncate" title={col}>{col}</span>
+                      </div>
+                      <button
+                        onClick={() => handleDeleteAccessColumn(col)}
+                        title="حذف هذا الحقل"
+                        className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer shrink-0"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* محتوى القسم 3: مصفوفة الصلاحيات والأجهزة */}
+          {accessHubSubTab === 'ROLES' && (
+            <div className="space-y-4">
+              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+                <h4 className="font-bold text-base text-slate-900 mb-1">مصفوفة الصلاحيات المؤسسية (RBAC Engine)</h4>
+                <p className="text-xs text-slate-600">
+                  تحديد صلاحيات كل جهاز وموظف لمنع أي عمليات غير مصرح بها وحماية سرية وسلامة سجلات التجار والدلالين.
+                </p>
+
+                {/* جدول مستويات الصلاحيات التوضيحي */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 my-4">
+                  <div className="p-3 rounded-xl border border-amber-200 bg-amber-50/50">
+                    <p className="text-xs font-bold text-amber-800 flex items-center gap-1">👑 مدير نظام (Super Admin)</p>
+                    <p className="text-[11px] text-amber-900/80 mt-1">كامل الصلاحيات (إضافة، تعديل، حذف الأقسام والحقول والقيود، ومنح الصلاحيات).</p>
+                  </div>
+                  <div className="p-3 rounded-xl border border-emerald-200 bg-emerald-50/50">
+                    <p className="text-xs font-bold text-emerald-800 flex items-center gap-1">✏️ مدخل بيانات (Data Entry)</p>
+                    <p className="text-[11px] text-emerald-900/80 mt-1">البحث والاستعراض وتصدير Excel وإضافة وتعديل القيود. (الحذف محجوب تماماً).</p>
+                  </div>
+                  <div className="p-3 rounded-xl border border-blue-200 bg-blue-50/50">
+                    <p className="text-xs font-bold text-blue-800 flex items-center gap-1">👁️ مستعلم فقط (Viewer)</p>
+                    <p className="text-[11px] text-blue-900/80 mt-1">البحث والاستعراض وتصدير التقارير فقط للقراءة (Read-Only). كافة أزرار الإضافة والتعديل والحذف محجوبة.</p>
+                  </div>
+                </div>
+
+                {/* قائمة الأجهزة وإمكانية تعديل صلاحياتها */}
+                <div className="mt-4 border border-slate-200 rounded-xl overflow-hidden">
+                  <table className="w-full text-right text-xs">
+                    <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold">
+                      <tr>
+                        <th className="p-3">اسم الجهاز</th>
+                        <th className="p-3">معرّف العتاد (Machine GUID)</th>
+                        <th className="p-3">المستخدم المعتمد</th>
+                        <th className="p-3">الصلاحية الحالية</th>
+                        <th className="p-3 text-center">الإجراء والتحكم</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {devices.map((d: DeviceRecord, idx: number) => {
+                        const currentRole = accessRoles[d.machineGuid]?.role || 'data_entry';
+                        return (
+                          <tr key={idx} className="hover:bg-slate-50/80 transition">
+                            <td className="p-3 font-bold text-slate-900">💻 {d.name}</td>
+                            <td className="p-3 font-mono text-[11px] text-slate-500">{d.machineGuid}</td>
+                            <td className="p-3 text-slate-700">{d.user}</td>
+                            <td className="p-3">
+                              <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
+                                currentRole === 'admin' ? 'bg-amber-100 text-amber-800 border border-amber-300' :
+                                currentRole === 'viewer' ? 'bg-blue-100 text-blue-800 border border-blue-300' :
+                                'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                              }`}>
+                                {currentRole === 'admin' ? '👑 مدير نظام' : currentRole === 'viewer' ? '👁️ مستعلم فقط' : '✏️ مدخل بيانات'}
+                              </span>
+                            </td>
+                            <td className="p-3 text-center">
+                              <div className="flex items-center justify-center gap-1.5">
+                                <button
+                                  onClick={() => handleSaveAccessRole(d.machineGuid, d.name, 'data_entry')}
+                                  className={`px-2 py-1 rounded text-[10px] font-bold transition cursor-pointer ${
+                                    currentRole === 'data_entry' ? 'bg-[#14372e] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                  }`}
+                                >
+                                  مدخل بيانات
+                                </button>
+                                <button
+                                  onClick={() => handleSaveAccessRole(d.machineGuid, d.name, 'viewer')}
+                                  className={`px-2 py-1 rounded text-[10px] font-bold transition cursor-pointer ${
+                                    currentRole === 'viewer' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                  }`}
+                                >
+                                  مستعلم فقط
+                                </button>
+                                <button
+                                  onClick={() => handleSaveAccessRole(d.machineGuid, d.name, 'admin')}
+                                  className={`px-2 py-1 rounded text-[10px] font-bold transition cursor-pointer ${
+                                    currentRole === 'admin' ? 'bg-amber-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                  }`}
+                                >
+                                  مدير
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* محتوى القسم 4: سلة المحذوفات الإدارية */}
+          {accessHubSubTab === 'TRASH' && (
+            <div className="space-y-4">
+              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
+                <div className="flex items-center justify-between gap-3 mb-3">
+                  <div>
+                    <h4 className="font-bold text-base text-slate-900">سلة محذوفات السجلات المركزية (Trash Bin)</h4>
+                    <p className="text-xs text-slate-600 mt-0.5">
+                      أي قيد يتم حذفه من المنظومة يُحفظ هنا مع توثيق التاريخ وهوية من قام بالحذف، مع إمكانية استعادته بضغطة زر واحدة.
+                    </p>
+                  </div>
+                </div>
+
+                {accessTrashBin.length === 0 ? (
+                  <div className="p-8 text-center text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                    <Trash2 className="w-8 h-8 mx-auto mb-2 opacity-40 text-slate-400" />
+                    <p className="text-xs font-bold">سلة المحذوفات فارغة حالياً. لم يتم تسجيل أي قيود محذوفة.</p>
+                  </div>
+                ) : (
+                  <div className="border border-slate-200 rounded-xl overflow-hidden">
+                    <table className="w-full text-right text-xs">
+                      <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold">
+                        <tr>
+                          <th className="p-3">معرف القيد</th>
+                          <th className="p-3">القسم / الملف</th>
+                          <th className="p-3">الجدول</th>
+                          <th className="p-3">تاريخ الحذف</th>
+                          <th className="p-3">بواسطة</th>
+                          <th className="p-3 text-center">الإجراء</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {accessTrashBin.map((item: any, idx: number) => (
+                          <tr key={idx} className="hover:bg-slate-50/80 transition">
+                            <td className="p-3 font-mono text-[11px] text-slate-600">{item.id}</td>
+                            <td className="p-3 font-bold text-slate-900">{item.file}</td>
+                            <td className="p-3 text-slate-700">{item.table}</td>
+                            <td className="p-3 font-mono text-[11px] text-slate-500">
+                              {new Date(item.deleted_at).toLocaleString('ar-IQ')}
+                            </td>
+                            <td className="p-3 font-bold text-[#14372e]">{item.deleted_by || 'الإدارة'}</td>
+                            <td className="p-3 text-center">
+                              <button
+                                onClick={() => handleRestoreTrashRecord(item.id)}
+                                disabled={actionLoading}
+                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1 mx-auto"
+                              >
+                                <RotateCcw className="w-3.5 h-3.5" />
+                                <span>استعادة القيد</span>
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* التبويب الأول: إدارة الأقسام الإدارية */}
       {activeTab === 'DEPTS' && (

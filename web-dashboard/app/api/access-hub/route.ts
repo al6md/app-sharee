@@ -9,7 +9,12 @@ import {
   applyMutations,
   addColumnToTable,
   deleteColumnFromTable,
-  getCustomColumns
+  getCustomColumns,
+  deleteAccessSection,
+  restoreAccessSection,
+  deleteRecordToTrash,
+  restoreRecordFromTrash,
+  setAccessHubRole
 } from '@/lib/accessCloudStore';
 
 export const dynamic = 'force-dynamic';
@@ -17,6 +22,29 @@ export const revalidate = 0;
 export const fetchCache = 'force-no-store';
 
 const DATA_DIR = path.join(process.cwd(), 'data', 'access-hub');
+
+const TABLE_PRIORITY: Record<string, number> = {
+  'التجار': 1,
+  'الشركات': 2,
+  'الدلالين': 3,
+  'دلالين': 3,
+  'التعديل': 4,
+  'المعامل': 5,
+  'الفنادق': 6,
+  'المطاعم': 7,
+  'المقاهي': 8,
+  'الصيدليات': 9,
+  'الساحات': 10,
+  'الشطب': 11,
+};
+
+function sortTablesByPriority(tables: string[]): string[] {
+  return [...tables].sort((a, b) => {
+    const pA = TABLE_PRIORITY[a] || 50;
+    const pB = TABLE_PRIORITY[b] || 50;
+    return pA !== pB ? pA - pB : a.localeCompare(b, 'ar');
+  });
+}
 
 function getIndex() {
   const indexPath = path.join(DATA_DIR, 'index.json');
@@ -120,7 +148,7 @@ export async function GET(req: NextRequest) {
         if (a._adh_table) tablesSet.add(a._adh_table);
       });
 
-      availableTables = Array.from(tablesSet);
+      availableTables = sortTablesByPriority(Array.from(tablesSet));
 
       if (!activeTable || !tablesSet.has(activeTable)) {
         activeTable = availableTables[0] || 'التجار';
@@ -170,7 +198,7 @@ export async function GET(req: NextRequest) {
         }
       });
 
-      availableTables = Array.from(fileTablesSet);
+      availableTables = sortTablesByPriority(Array.from(fileTablesSet));
       if (!activeTable || !fileTablesSet.has(activeTable)) {
         activeTable = availableTables[0] || '';
       }
@@ -246,12 +274,19 @@ export async function GET(req: NextRequest) {
     const startIndex = (page - 1) * limit;
     const paginatedRows = filteredRows.slice(startIndex, startIndex + limit);
 
+    const deletedSections = mutations.deleted_sections || [];
+    const activeFiles = (index.files || []).filter((f: any) => !deletedSections.includes(f.name));
+
     const grandTotalRecords = (index.total_records || 0) + (mutations.adds?.length || 0) - (mutations.deletes?.length || 0);
 
     return NextResponse.json({
       success: true,
       sig: currentSig,
-      files: index.files || [],
+      files: activeFiles,
+      all_files: index.files || [],
+      deleted_sections: deletedSections,
+      trash_bin: mutations.trash_bin || [],
+      roles: mutations.roles || {},
       total_records: Math.max(0, grandTotalRecords),
       active_file: requestedFile,
       active_table: activeTable,
@@ -272,12 +307,51 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// POST: إضافة سجل جديد، أو إضافة حقل جديد، أو حذف حقل سحابياً
+// POST: إضافة سجل جديد، أو إضافة حقل جديد، أو حذف حقل سحابياً، أو إدارة الأقسام والصلاحيات
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
 
-    // 1. إضافة حقل جديد للجدول
+    // 0. إدارة الأقسام (حذف أو استعادة)
+    if (body.action === 'DELETE_SECTION') {
+      const { fileName } = body;
+      if (!fileName) return NextResponse.json({ success: false, error: 'اسم القسم مطلوب' }, { status: 400 });
+      const deleted = await deleteAccessSection(fileName);
+      return NextResponse.json({ success: true, message: `تم حذف وأرشفة القسم "${fileName}" بنجاح`, deleted_sections: deleted });
+    }
+
+    if (body.action === 'RESTORE_SECTION') {
+      const { fileName } = body;
+      if (!fileName) return NextResponse.json({ success: false, error: 'اسم القسم مطلوب' }, { status: 400 });
+      const remaining = await restoreAccessSection(fileName);
+      return NextResponse.json({ success: true, message: `تمت استعادة القسم "${fileName}" بنجاح`, deleted_sections: remaining });
+    }
+
+    // 1. حذف قيد ونقله إلى سلة المحذوفات الإدارية
+    if (body.action === 'TRASH_RECORD') {
+      const { id, file, table, record, deletedBy } = body;
+      if (!id) return NextResponse.json({ success: false, error: 'معرف القيد مطلوب' }, { status: 400 });
+      await deleteRecordToTrash(id, file, table, record, deletedBy);
+      return NextResponse.json({ success: true, message: 'تم حذف القيد ونقله إلى سلة المحذوفات بنجاح' });
+    }
+
+    // 2. استعادة قيد من سلة المحذوفات
+    if (body.action === 'RESTORE_RECORD') {
+      const { id } = body;
+      if (!id) return NextResponse.json({ success: false, error: 'معرف القيد مطلوب' }, { status: 400 });
+      await restoreRecordFromTrash(id);
+      return NextResponse.json({ success: true, message: 'تمت استعادة القيد من سلة المحذوفات بنجاح' });
+    }
+
+    // 3. تعيين وتحديث صلاحية الجهاز
+    if (body.action === 'SET_ROLE') {
+      const { guid, name, role } = body;
+      if (!guid || !role) return NextResponse.json({ success: false, error: 'بيانات الصلاحية غير مكتملة' }, { status: 400 });
+      const record = await setAccessHubRole(guid, name, role);
+      return NextResponse.json({ success: true, message: 'تم تحديث صلاحية الجهاز بنجاح', roleRecord: record });
+    }
+
+    // 4. إضافة حقل جديد للجدول
     if (body.action === 'ADD_COLUMN') {
       const { file, table, columnName } = body;
       if (!file || !table || !columnName) {
@@ -291,7 +365,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 2. حذف حقل من الجدول
+    // 5. حذف حقل من الجدول (إدارياً)
     if (body.action === 'DELETE_COLUMN') {
       const { file, table, columnName } = body;
       if (!file || !table || !columnName) {
@@ -305,7 +379,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 3. إضافة قيد بيانات جديد (Standard Record Add)
+    // 6. إضافة قيد بيانات جديد (Standard Record Add)
     const { file, table, record } = body;
     if (!file || !table || !record) {
       return NextResponse.json({ success: false, error: 'بيانات القيد غير مكتملة' }, { status: 400 });
