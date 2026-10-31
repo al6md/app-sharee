@@ -451,13 +451,13 @@ class AccessHubWidget(QWidget):
         pagination_row.addStretch()
 
         self.btn_prev = QPushButton("السابق")
-        self.btn_prev.setFont(QFont("IBM Plex Sans Arabic", 8.5))
+        self.btn_prev.setFont(QFont("IBM Plex Sans Arabic", 9))
         self.btn_prev.setStyleSheet("background: #FFFFFF; border: 1px solid #D0D5DD; padding: 4px 10px; border-radius: 5px;")
         self.btn_prev.clicked.connect(self._prev_page)
         pagination_row.addWidget(self.btn_prev)
 
         self.btn_next = QPushButton("التالي")
-        self.btn_next.setFont(QFont("IBM Plex Sans Arabic", 8.5))
+        self.btn_next.setFont(QFont("IBM Plex Sans Arabic", 9))
         self.btn_next.setStyleSheet("background: #FFFFFF; border: 1px solid #D0D5DD; padding: 4px 10px; border-radius: 5px;")
         self.btn_next.clicked.connect(self._next_page)
         pagination_row.addWidget(self.btn_next)
@@ -523,7 +523,7 @@ class AccessHubWidget(QWidget):
                 fname = f["name"]
                 btn = QPushButton(f"📁 {fname}")
                 btn.setCheckable(True)
-                btn.setFont(QFont("IBM Plex Sans Arabic", 8.5))
+                btn.setFont(QFont("IBM Plex Sans Arabic", 9))
                 btn.setStyleSheet(self._tab_btn_style())
                 btn.clicked.connect(lambda checked, name=fname: self._on_file_tab_clicked(name))
                 self.file_btn_group.addButton(btn)
@@ -536,7 +536,7 @@ class AccessHubWidget(QWidget):
                 item.widget().deleteLater()
 
         lbl = QLabel("الجداول:")
-        lbl.setFont(QFont("IBM Plex Sans Arabic", 8.5, QFont.Weight.Bold))
+        lbl.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
         lbl.setStyleSheet("color: #667085;")
         self.subtables_layout.addWidget(lbl)
 
@@ -566,7 +566,7 @@ class AccessHubWidget(QWidget):
             if self.active_file == "all":
                 src_item = QTableWidgetItem(str(row.get("_adh_file", "")))
                 src_item.setForeground(QColor("#14372e"))
-                src_item.setFont(QFont("IBM Plex Sans Arabic", 8.5, QFont.Weight.Bold))
+                src_item.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
                 self.table_widget.setItem(r_idx, 0, src_item)
                 c_offset = 1
 

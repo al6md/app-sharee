@@ -25,6 +25,7 @@ a = Analysis(
         'winreg',
         'icon_provider',
         'theme',
+        'access_hub_widget',
         'local_bridge',
         'supabase_client',
         'sync_engine',
