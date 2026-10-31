@@ -46,6 +46,52 @@ function sortTablesByPriority(tables: string[]): string[] {
   });
 }
 
+const COLUMN_PRIORITY: Record<string, number> = {
+  'اسم التاجر': 1,
+  'ArabicName': 1,
+  'الإسم التجاري': 2,
+  'الاسم التجاري': 2,
+  'EnglishName': 3,
+  'العمل': 4,
+  'Activity': 4,
+  'SpecificActivity': 5,
+  'الصنف': 6,
+  'الدرجة': 6,
+  'Class': 6,
+  'الهاتف': 7,
+  'رقم الهاتف': 7,
+  'Mobile': 7,
+  'العنوان': 8,
+  'Address': 8,
+  'تأريخه': 9,
+  'تاريخ الانتساب': 9,
+  'AffiliationDate': 9,
+  'رقم الأسم التجاري': 10,
+  'رقم التجديد': 10,
+  'RenewalNo': 10,
+  'ID': 11,
+  'id': 11,
+  'StampNo': 12,
+  'EnglishClass': 13,
+  'EnglishActivity': 14,
+  'اسم الزوج': 15,
+  'المواليد': 16,
+  'ذكر': 17,
+  'انثى': 18,
+  'Female': 18,
+  'الشطب': 19,
+  'Field1': 20,
+};
+
+function sortColumnsByPriority(cols: string[]): string[] {
+  return [...cols].sort((a, b) => {
+    const pA = COLUMN_PRIORITY[a] ?? 100;
+    const pB = COLUMN_PRIORITY[b] ?? 100;
+    if (pA !== pB) return pA - pB;
+    return cols.indexOf(a) - cols.indexOf(b);
+  });
+}
+
 function getIndex() {
   const indexPath = path.join(DATA_DIR, 'index.json');
   if (!fs.existsSync(indexPath)) {
@@ -182,7 +228,7 @@ export async function GET(req: NextRequest) {
         }
       }
 
-      baseColumns = colsOrder;
+      baseColumns = sortColumnsByPriority(colsOrder);
     } else {
       // 📁 وضع خانة ملف محدد باسمه الحقيقي
       const content = getFileContent(requestedFile);
@@ -203,8 +249,8 @@ export async function GET(req: NextRequest) {
         activeTable = availableTables[0] || '';
       }
 
-      // الأعمدة بنفس ترتيبها الأصلي 100% من ملف Access
-      baseColumns = content.columns?.[activeTable] || [];
+      // الأعمدة بترتيب الأولوية الذكي (اسم التاجر والنشاط والصنف والهاتف أولاً)
+      baseColumns = sortColumnsByPriority(content.columns?.[activeTable] || []);
 
       // السجلات الأساسية
       const tableRows = content.tables[activeTable] || [];

@@ -30,7 +30,8 @@ import {
   SlidersHorizontal,
   Columns,
   PlusCircle,
-  Settings
+  Settings,
+  Shield
 } from 'lucide-react';
 
 interface FileInfo {
@@ -370,537 +371,436 @@ export default function AccessHubPage() {
     }
   };
 
+  // دالة لتنسيق وتجميل محتوى الخلايا (الأصناف والأسماء وأرقام الهواتف)
+  const renderCellContent = (col: string, val: any) => {
+    if (val === null || val === undefined || val === '') {
+      return <span className="text-[#D0D5DD] font-mono">-</span>;
+    }
+    const str = String(val).trim();
+
+    // تمييز الأصناف والدرجات
+    if (['Class', 'الصنف', 'الدرجة'].includes(col)) {
+      if (str.includes('ممتاز') || str.toLowerCase().includes('excellent')) {
+        return <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-amber-50 text-amber-900 border border-amber-300">⭐ {str}</span>;
+      }
+      if (str.includes('أول') || str.includes('الاول') || str.toLowerCase().includes('first')) {
+        return <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-50 text-emerald-900 border border-emerald-300">🥇 {str}</span>;
+      }
+      if (str.includes('ثان') || str.toLowerCase().includes('second')) {
+        return <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-blue-50 text-blue-900 border border-blue-300">🥈 {str}</span>;
+      }
+      if (str.includes('ثالث') || str.toLowerCase().includes('third')) {
+        return <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-purple-50 text-purple-900 border border-purple-300">🥉 {str}</span>;
+      }
+      if (str.includes('رابع') || str.toLowerCase().includes('fourth')) {
+        return <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-slate-100 text-slate-900 border border-slate-300">4️⃣ {str}</span>;
+      }
+    }
+
+    // تمييز أسماء التجار والشركات
+    if (['ArabicName', 'اسم التاجر', 'الاسم التجاري', 'الإسم التجاري'].includes(col)) {
+      return <span className="font-bold text-[#14372e] text-[12.5px]">{str}</span>;
+    }
+
+    // تمييز أرقام الهواتف
+    if (['Mobile', 'الهاتف', 'رقم الهاتف'].includes(col)) {
+      return <span className="font-mono text-[#344054] font-semibold text-[11px]">{str}</span>;
+    }
+
+    return str;
+  };
+
   return (
-    <div className="flex flex-col h-full bg-[#F7F8FA] overflow-y-auto">
-      {/* 1. الترويسة العليا للمنظومة */}
-      <div className="bg-white border-b border-[#E4E7EC] px-6 py-4 flex flex-col md:flex-row md:items-center justify-between gap-4 sticky top-0 z-30 shadow-xs">
-        <div className="flex items-center gap-3.5">
-          <div className="w-11 h-11 rounded-xl bg-[#14372e] flex items-center justify-center text-[#ecd58a] shadow-sm shrink-0">
-            <Database className="w-6 h-6" />
+    <div className="flex flex-col h-full bg-[#F7F8FA] overflow-hidden">
+      {/* 1. الترويسة الرشيقة المدمجة (Compact Header - 44px) */}
+      <header className="h-[44px] bg-white border-b border-[#E4E7EC] px-4 flex items-center justify-between shrink-0 z-20">
+        <div className="flex items-center gap-2.5">
+          <div className="w-7 h-7 rounded-lg bg-[#14372e] flex items-center justify-center text-[#ecd58a] shrink-0">
+            <Database className="w-4 h-4" />
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="font-bold text-lg text-[#1B1F24]">مركز قواعد بيانات آكسس الموحد</h1>
-              <span className="text-[11px] bg-emerald-50 text-emerald-700 font-semibold px-2.5 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                سحابي وتشاركي 100%
-              </span>
-            </div>
-            <p className="text-xs text-[#667085] mt-0.5">
-              ترتيب زمني حي، إدارة وحذف وإضافة الحقول، وحفظ سحابي فوري لكافة الموظفين
-            </p>
+          <div className="flex items-center gap-2">
+            <h1 className="font-bold text-xs sm:text-sm text-[#1B1F24]">مركز قواعد بيانات Access الموحد</h1>
+            <span className="text-[11px] font-mono font-bold bg-[#EDF5F2] text-[#14372e] px-2 py-0.5 rounded-full border border-[#14372e]/20">
+              {data?.total_records ? data.total_records.toLocaleString('ar-IQ') : '88,987'} قيد
+            </span>
+            <span className="hidden md:inline-flex items-center gap-1 text-[10px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full font-semibold border border-emerald-200">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+              سحابي ومباشر
+            </span>
           </div>
         </div>
 
-        {/* مؤشرات الإحصائيات والإشعارات السحابية */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           {autoSyncMessage && (
-            <div className="bg-emerald-50 text-emerald-800 text-xs px-3 py-1.5 rounded-lg border border-emerald-200 flex items-center gap-1.5 animate-bounce shadow-xs">
-              <ShieldCheck className="w-4 h-4 text-emerald-600" />
+            <div className="text-[11px] bg-emerald-50 text-emerald-800 px-2.5 py-1 rounded-md border border-emerald-200 flex items-center gap-1 font-semibold animate-in fade-in">
+              <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
               <span>{autoSyncMessage}</span>
             </div>
           )}
 
-          <div className="bg-[#F7F8FA] px-3 py-1.5 rounded-lg border border-[#E4E7EC] text-right">
-            <div className="text-[11px] text-[#667085]">إجمالي السجلات المركزية</div>
-            <div className="text-sm font-bold text-[#14372e]">
-              {data?.total_records ? data.total_records.toLocaleString('ar-IQ') : '88,987'} قيد
-            </div>
-          </div>
-
           <Link
-            href="/admin?tab=access_hub"
-            className="flex items-center gap-1.5 px-3 py-2 bg-[#14372e] hover:bg-[#1a473b] text-white rounded-lg text-xs font-bold transition shadow-xs"
-            title="الانتقال إلى لوحة التحكم الإدارية لإدارة الحقول والأقسام والصلاحيات"
+            href="/admin"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-[#14372e] hover:bg-[#1a473b] text-white rounded-lg text-xs font-semibold transition cursor-pointer"
+            title="الانتقال إلى لوحة تحكم الإدارة والصلاحيات والحقول"
           >
-            <Settings className="w-3.5 h-3.5 text-[#ecd58a]" />
-            <span>لوحة الإدارة والحقول</span>
+            <Shield className="w-3.5 h-3.5 text-[#ecd58a]" />
+            <span className="hidden sm:inline">لوحة تحكم الإدارة</span>
+            <span className="sm:hidden">الإدارة</span>
           </Link>
 
           <button
             onClick={() => fetchData()}
             disabled={loading}
-            className="p-2.5 rounded-lg border border-[#E4E7EC] bg-white hover:bg-[#F7F8FA] text-[#1B1F24] transition disabled:opacity-50 cursor-pointer"
-            title="تحديث فوري"
+            className="p-1.5 rounded-lg border border-[#E4E7EC] bg-white hover:bg-[#F7F8FA] text-[#1B1F24] transition disabled:opacity-50 cursor-pointer"
+            title="تحديث فوري للسجلات"
           >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-[#14372e]' : ''}`} />
+            <RefreshCw className={`w-3.5 h-3.5 text-[#667085] ${loading ? 'animate-spin text-[#14372e]' : ''}`} />
           </button>
         </div>
-      </div>
+      </header>
 
-      {/* 2. شريط الخانات الرئيسي (الدمج الشامل + الخانات بالأسماء الحقيقية للملفات) */}
-      <div className="bg-white border-b border-[#E4E7EC] px-6 py-3.5 shadow-2xs">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs font-bold text-[#14372e] flex items-center gap-1.5">
-            <Layers className="w-4 h-4 text-[#c59b27]" />
-            <span>الخانات والأقسام المستقلة بحسب اسم كل ملف Access:</span>
+      {/* 2. شريط التنقل المدمج: اختيار الأقسام والجداول في سطر واحد (Unified Navigator - 42px) */}
+      <div className="h-[42px] bg-white border-b border-[#E4E7EC] px-4 flex items-center justify-between gap-3 shrink-0 overflow-x-auto text-xs z-10">
+        {/* اختيار القسم / الملف عبر قائمة منسدلة أنيقة */}
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="text-[#667085] font-bold flex items-center gap-1 text-xs">
+            <Layers className="w-3.5 h-3.5 text-[#c59b27]" />
+            <span>القسم:</span>
           </span>
-          <span className="text-[11px] text-[#667085]">
-            اضغط على أي خانة لعرض جداولها وبياناتها الأصلية بالكامل
-          </span>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          {/* الخانة الأولى: الدمج الشامل */}
-          <button
-            onClick={() => {
-              setActiveFile('all');
+          <select
+            value={activeFile}
+            onChange={(e) => {
+              setActiveFile(e.target.value);
               setActiveTable('');
               setPage(1);
             }}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition border ${
-              activeFile === 'all'
-                ? 'bg-[#14372e] text-white border-[#14372e] shadow-sm'
-                : 'bg-[#F7F8FA] text-[#475467] hover:bg-[#ECEFF3] border-[#E4E7EC]'
-            }`}
+            className="bg-[#F7F8FA] border border-[#D0D5DD] rounded-lg px-2.5 py-1 text-xs font-bold text-[#14372e] outline-none hover:border-[#14372e] focus:border-[#14372e] transition cursor-pointer max-w-[260px] truncate"
           >
-            <Sparkles className="w-4 h-4 text-[#ecd58a]" />
-            <span>🌐 الدمج الشامل (كافة الملفات)</span>
-            <span
-              className={`text-[10px] px-2 py-0.5 rounded-full font-mono ${
-                activeFile === 'all' ? 'bg-[#1a473b] text-[#ecd58a]' : 'bg-gray-200 text-gray-700'
-              }`}
-            >
-              {data?.total_records ? data.total_records.toLocaleString('ar-IQ') : '88,987'}
-            </span>
-          </button>
+            <option value="all">🌐 الدمج الشامل (كافة الملفات - 88,987 قيد)</option>
+            {(data?.files || []).map((f) => (
+              <option key={f.name} value={f.name}>
+                📁 {f.name} ({f.total_rows.toLocaleString('ar-IQ')} قيد)
+              </option>
+            ))}
+          </select>
+        </div>
 
-          {/* باقي الخانات: مشتقة ديناميكياً من الأسماء الحقيقية للملفات الـ 7 بالكامل */}
-          {data?.files && data.files.length > 0 ? (
-            data.files.map((file) => {
-              const isActive = activeFile === file.name;
-              return (
-                <button
-                  key={file.name}
-                  onClick={() => {
-                    setActiveFile(file.name);
-                    setActiveTable(file.tables[0] || '');
-                    setPage(1);
-                  }}
-                  className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition border ${
-                    isActive
-                      ? 'bg-[#14372e] text-white border-[#14372e] shadow-sm'
-                      : 'bg-white text-[#344054] hover:bg-[#F7F8FA] border-[#E4E7EC]'
-                  }`}
-                >
-                  <Layers className={`w-3.5 h-3.5 ${isActive ? 'text-[#ecd58a]' : 'text-[#c59b27]'}`} />
-                  <span>📁 {file.name}</span>
-                  <span
-                    className={`text-[10px] px-2 py-0.5 rounded-full font-mono ${
-                      isActive ? 'bg-[#1a473b] text-[#ecd58a]' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                    }`}
-                  >
-                    {file.total_rows.toLocaleString('ar-IQ')}
-                  </span>
-                </button>
-              );
-            })
-          ) : (
-            [
-              'اسماء التجار والدلالين من جهاز الاشتراكات',
-              'الاسم التجاري 2025 - 2026',
-              'الاسم التجاري 2024',
-              'الاسم التجاري 2023',
-              'الاسم التجاري 2022',
-              'الاسماء التجارية الكلية والمبتكرة لكل السنوات - جديد',
-              'الاسماء التجارية من سنة 1984 لسنة 2021'
-            ].map((fname) => (
+        {/* فئات وجداول هذا الملف مرتبة بالأولوية */}
+        <div className="flex items-center gap-1.5 overflow-x-auto py-1 scrollbar-none">
+          {(data?.available_tables || []).map((tbl) => {
+            const isTblActive = activeTable === tbl;
+            const count =
+              activeFile === 'all'
+                ? (data?.files || []).reduce((acc, f) => acc + (f.table_counts[tbl] || 0), 0)
+                : data?.files.find((f) => f.name === activeFile)?.table_counts[tbl] || 0;
+            return (
               <button
-                key={fname}
+                key={tbl}
                 onClick={() => {
-                  setActiveFile(fname);
+                  setActiveTable(tbl);
                   setPage(1);
                 }}
-                className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition border ${
-                  activeFile === fname
-                    ? 'bg-[#14372e] text-white border-[#14372e]'
-                    : 'bg-white text-[#344054] hover:bg-[#F7F8FA] border-[#E4E7EC]'
+                className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold whitespace-nowrap transition cursor-pointer shrink-0 ${
+                  isTblActive
+                    ? 'bg-[#14372e] text-white shadow-xs'
+                    : 'bg-[#F7F8FA] text-[#344054] hover:bg-[#ECEFF3] border border-[#E4E7EC]'
                 }`}
               >
-                <Layers className="w-3.5 h-3.5 text-[#c59b27]" />
-                <span>📁 {fname}</span>
-              </button>
-            ))
-          )}
-        </div>
-      </div>
-
-      {/* 3. شريط التحكم الداخلي: اختيار الجداول، البحث، الترتيب الزمني، وإدارة الحقول */}
-      <div className="p-6 space-y-4">
-        {/* اختيار الجدول */}
-        {data?.available_tables && data.available_tables.length > 0 && (
-          <div className="flex items-center gap-2 overflow-x-auto pb-1">
-            <span className="text-xs font-semibold text-[#667085] ml-2 shrink-0">
-              {activeFile === 'all' ? 'اختر الجدول الموحد:' : 'جداول هذا الملف:'}
-            </span>
-            {data.available_tables.map((tbl) => {
-              const isTblActive = activeTable === tbl;
-              const count =
-                activeFile === 'all'
-                  ? data.files.reduce((acc, f) => acc + (f.table_counts[tbl] || 0), 0)
-                  : data.files.find((f) => f.name === activeFile)?.table_counts[tbl] || 0;
-              return (
-                <button
-                  key={tbl}
-                  onClick={() => {
-                    setActiveTable(tbl);
-                    setPage(1);
-                  }}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition shrink-0 ${
-                    isTblActive
-                      ? 'bg-[#c59b27] text-white shadow-xs font-bold'
-                      : 'bg-white text-[#475467] hover:bg-[#F7F8FA] border border-[#E4E7EC]'
+                <span>{tbl}</span>
+                <span
+                  className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full ${
+                    isTblActive ? 'bg-[#c59b27] text-white' : 'bg-white text-[#667085] border border-[#E4E7EC]'
                   }`}
                 >
-                  {tbl} ({count.toLocaleString('ar-IQ')})
-                </button>
-              );
-            })}
-          </div>
-        )}
-
-        {/* شريط أدوات الفرز الزمني وإدارة الحقول */}
-        <div className="bg-white p-3.5 rounded-xl border border-[#E4E7EC] flex flex-wrap items-center justify-between gap-3 shadow-2xs">
-          {/* قسم الترتيب الزمني */}
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs font-bold text-[#14372e] flex items-center gap-1.5 ml-1">
-              <Calendar className="w-4 h-4 text-[#c59b27]" />
-              <span>ترتيب التاريخ:</span>
-            </span>
-
-            {/* زر من الجديد للقديم */}
-            <button
-              onClick={() => {
-                setSortDir('desc');
-                setPage(1);
-              }}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition border ${
-                sortDir === 'desc'
-                  ? 'bg-[#14372e] text-white border-[#14372e] shadow-xs'
-                  : 'bg-[#F7F8FA] text-[#344054] hover:bg-[#ECEFF3] border-[#E4E7EC]'
-              }`}
-              title="ترتيب السجلات من الأحدث تاريخاً إلى الأقدم"
-            >
-              <ArrowDown className="w-3.5 h-3.5 text-[#ecd58a]" />
-              <span>من الجديد إلى القديم (تنازلي)</span>
-            </button>
-
-            {/* زر من القديم للجديد */}
-            <button
-              onClick={() => {
-                setSortDir('asc');
-                setPage(1);
-              }}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition border ${
-                sortDir === 'asc'
-                  ? 'bg-[#14372e] text-white border-[#14372e] shadow-xs'
-                  : 'bg-[#F7F8FA] text-[#344054] hover:bg-[#ECEFF3] border-[#E4E7EC]'
-              }`}
-              title="ترتيب السجلات من الأقدم تاريخاً إلى الأحدث"
-            >
-              <ArrowUp className="w-3.5 h-3.5 text-[#ecd58a]" />
-              <span>من القديم إلى الجديد (تصاعدي)</span>
-            </button>
-
-            {/* زر الترتيب الأصلي */}
-            <button
-              onClick={() => {
-                setSortDir('none');
-                setSortCol('date_auto');
-                setPage(1);
-              }}
-              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition border ${
-                sortDir === 'none'
-                  ? 'bg-gray-200 text-gray-800 font-bold border-gray-300'
-                  : 'bg-white text-[#667085] hover:bg-[#F7F8FA] border-[#E4E7EC]'
-              }`}
-              title="إعادة الترتيب التلقائي الأصلي لملف Access"
-            >
-              🔄 الترتيب الأصلي
-            </button>
-
-            {/* اختيار حقل التاريخ للفرز في حال توفر أكثر من حقل */}
-            {data?.date_columns && data.date_columns.length > 1 && (
-              <div className="flex items-center gap-1 text-xs mr-2">
-                <span className="text-[#667085]">الحقل:</span>
-                <select
-                  value={sortCol}
-                  onChange={(e) => {
-                    setSortCol(e.target.value);
-                    if (sortDir === 'none') setSortDir('desc');
-                    setPage(1);
-                  }}
-                  className="px-2 py-1 text-xs bg-[#F7F8FA] border border-[#E4E7EC] rounded-md text-[#1B1F24] focus:outline-none"
-                >
-                  <option value="date_auto">تلقائي (أول حقل تاريخ)</option>
-                  {data.date_columns.map((dc) => (
-                    <option key={dc} value={dc}>
-                      {dc}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-          </div>
-
-          {/* قسم إدارة الحقول (إضافة حقل جديد / إدارة الحقول وحذفها) */}
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => {
-                setNewColName('');
-                setIsAddColModalOpen(true);
-              }}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg text-xs font-bold transition shadow-2xs"
-              title="إضافة عمود / حقل جديد لهذا الجدول ومزامنته سحابياً"
-            >
-              <PlusCircle className="w-3.5 h-3.5 text-emerald-600" />
-              <span>+ إضافة حقل جديد</span>
-            </button>
-
-            <button
-              onClick={() => setIsManageColsModalOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-[#F7F8FA] text-[#475467] border border-[#E4E7EC] rounded-lg text-xs font-semibold transition"
-              title="عرض قائمة حقول الجدول وإمكانية حذف أي حقل منها"
-            >
-              <Columns className="w-3.5 h-3.5 text-[#14372e]" />
-              <span>إدارة وحذف الحقول ({data?.columns?.length || 0})</span>
-            </button>
-          </div>
-        </div>
-
-        {/* شريط البحث والأزرار */}
-        <div className="bg-white p-4 rounded-xl border border-[#E4E7EC] flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-xs">
-          {/* حقل البحث الفوري */}
-          <div className="relative flex-1 max-w-md">
-            <Search className="w-4 h-4 text-[#98A2B3] absolute right-3.5 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder={
-                activeFile === 'all'
-                  ? 'بحث شامل في كافة السجلات والتجار والشركات...'
-                  : `بحث في جدول (${activeTable || 'البيانات'})...`
-              }
-              className="w-full pl-9 pr-10 py-2.5 text-xs bg-[#F7F8FA] border border-[#E4E7EC] rounded-lg text-[#1B1F24] focus:outline-none focus:border-[#14372e] transition"
-            />
-            {searchQuery && (
-              <button
-                onClick={() => setSearchQuery('')}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-[#98A2B3] hover:text-[#1B1F24]"
-              >
-                <X className="w-4 h-4" />
+                  {count.toLocaleString('ar-IQ')}
+                </span>
               </button>
-            )}
-          </div>
-
-          {/* أزرار العمليات */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-[#667085] ml-2">
-              نتائج البحث:{' '}
-              <strong className="text-[#14372e]">
-                {data?.total_matches ? data.total_matches.toLocaleString('ar-IQ') : 0}
-              </strong>{' '}
-              سجل
-            </span>
-
-            {/* تصدير إلى Excel */}
-            <button
-              onClick={handleExportCSV}
-              className="flex items-center gap-1.5 px-3 py-2 bg-white hover:bg-[#F7F8FA] border border-[#E4E7EC] rounded-lg text-xs font-semibold text-[#1B1F24] transition"
-              title="تصدير إلى ملف Excel / CSV"
-            >
-              <Download className="w-4 h-4 text-[#14372e]" />
-              <span>تصدير Excel</span>
-            </button>
-
-            {/* إضافة قيد جديد */}
-            <button
-              onClick={() => {
-                setFormData({});
-                setIsAddModalOpen(true);
-              }}
-              className="flex items-center gap-1.5 px-3.5 py-2 bg-[#14372e] hover:bg-[#1a473b] text-white rounded-lg text-xs font-semibold transition shadow-xs"
-            >
-              <Plus className="w-4 h-4 text-[#ecd58a]" />
-              <span>+ إضافة قيد جديد</span>
-            </button>
-          </div>
-        </div>
-
-        {/* 4. الجدول المركزي لعرض البيانات */}
-        <div className="bg-white rounded-xl border border-[#E4E7EC] shadow-xs overflow-hidden">
-          {loading ? (
-            <div className="p-12 flex flex-col items-center justify-center text-center gap-3">
-              <RefreshCw className="w-8 h-8 text-[#14372e] animate-spin" />
-              <p className="text-sm font-semibold text-[#1B1F24]">جاري جلب السجلات السحابية...</p>
-              <p className="text-xs text-[#667085]">يتم استخراج ومزامنة السجلات وترتيبها سحابياً</p>
-            </div>
-          ) : error ? (
-            <div className="p-8 text-center text-red-600 space-y-2">
-              <AlertCircle className="w-8 h-8 mx-auto text-red-500" />
-              <p className="font-semibold text-sm">{error}</p>
-            </div>
-          ) : data?.rows && data.rows.length > 0 ? (
-            <div className="overflow-x-auto">
-              <table className="w-full text-right text-xs">
-                <thead>
-                  <tr className="bg-[#F7F8FA] border-b border-[#E4E7EC] text-[#475467] font-bold">
-                    <th className="py-3.5 px-4 w-12 text-center">#</th>
-                    {activeFile === 'all' && (
-                      <th className="py-3.5 px-4 whitespace-nowrap">الملف الحقيقي المصدر</th>
-                    )}
-                    {data.columns.map((col) => {
-                      const isSorted = sortCol === col || (sortCol === 'date_auto' && data.date_columns?.[0] === col);
-                      return (
-                        <th
-                          key={col}
-                          className="py-3.5 px-4 whitespace-nowrap select-none group"
-                        >
-                          <div className="flex items-center justify-between gap-1.5">
-                            <button
-                              onClick={() => handleColumnHeaderClick(col)}
-                              className="flex items-center gap-1 hover:text-[#14372e] transition"
-                              title="اضغط للفرز حسب هذا العمود"
-                            >
-                              <span>{col}</span>
-                              {isSorted && sortDir === 'desc' && (
-                                <ArrowDown className="w-3.5 h-3.5 text-[#14372e]" />
-                              )}
-                              {isSorted && sortDir === 'asc' && (
-                                <ArrowUp className="w-3.5 h-3.5 text-[#14372e]" />
-                              )}
-                              {!isSorted && (
-                                <ArrowUpDown className="w-3 h-3 text-[#D0D5DD] opacity-0 group-hover:opacity-100 transition" />
-                              )}
-                            </button>
-
-                            {/* زر حذف هذا الحقل مباشرة */}
-                            <button
-                              onClick={() => setDeleteColConfirm(col)}
-                              className="text-[#D0D5DD] hover:text-red-600 p-0.5 rounded transition opacity-0 group-hover:opacity-100"
-                              title={`حذف حقل "${col}" من هذا الجدول`}
-                            >
-                              <X className="w-3 h-3" />
-                            </button>
-                          </div>
-                        </th>
-                      );
-                    })}
-                    <th className="py-3.5 px-4 text-center w-28 whitespace-nowrap">الإجراءات</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#E4E7EC]">
-                  {data.rows.map((row, idx) => {
-                    const rowNum = (page - 1) * limit + idx + 1;
-                    return (
-                      <tr key={row._adh_id || idx} className="hover:bg-[#F9FAFB] transition">
-                        <td className="py-3 px-4 text-center text-[#98A2B3] font-mono">{rowNum}</td>
-
-                        {/* إظهار اسم الملف في خانة الدمج الشامل */}
-                        {activeFile === 'all' && (
-                          <td className="py-3 px-4 whitespace-nowrap">
-                            <span className="inline-flex items-center gap-1 bg-[#14372e]/5 text-[#14372e] font-semibold px-2.5 py-1 rounded-md text-[11px] border border-[#14372e]/10">
-                              <Layers className="w-3 h-3 text-[#c59b27]" />
-                              {row._adh_file}
-                            </span>
-                          </td>
-                        )}
-
-                        {/* خلايا البيانات */}
-                        {data.columns.map((col) => (
-                          <td key={col} className="py-3 px-4 text-[#1B1F24] whitespace-nowrap max-w-xs truncate">
-                            {row[col] !== null && row[col] !== undefined && row[col] !== '' ? (
-                              String(row[col])
-                            ) : (
-                              <span className="text-[#D0D5DD]">-</span>
-                            )}
-                          </td>
-                        ))}
-
-                        {/* أزرار التعديل والحذف */}
-                        <td className="py-3 px-4 text-center whitespace-nowrap">
-                          <div className="flex items-center justify-center gap-1.5">
-                            <button
-                              onClick={() => {
-                                setSelectedRecord(row);
-                                setFormData({ ...row });
-                                setIsEditModalOpen(true);
-                              }}
-                              className="p-1.5 rounded-md hover:bg-emerald-50 text-[#14372e] transition"
-                              title="تعديل هذا السجل"
-                            >
-                              <Edit2 className="w-3.5 h-3.5" />
-                            </button>
-
-                            {deleteConfirmId === row._adh_id ? (
-                              <div className="flex items-center gap-1">
-                                <button
-                                  onClick={() => handleDelete(row)}
-                                  className="px-2 py-0.5 bg-red-600 text-white rounded text-[10px] font-bold"
-                                >
-                                  تأكيد
-                                </button>
-                                <button
-                                  onClick={() => setDeleteConfirmId(null)}
-                                  className="px-1 py-0.5 text-[#667085] text-[10px]"
-                                >
-                                  إلغاء
-                                </button>
-                              </div>
-                            ) : (
-                              <button
-                                onClick={() => setDeleteConfirmId(row._adh_id)}
-                                className="p-1.5 rounded-md hover:bg-red-50 text-red-500 transition"
-                                title="حذف هذا السجل"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="p-12 text-center text-[#667085]">
-              <AlertCircle className="w-8 h-8 mx-auto text-[#98A2B3] mb-2" />
-              <p className="text-sm font-semibold">لا توجد سجلات مطابقة للبحث أو الجدول فارغ</p>
-              <p className="text-xs mt-1">يمكنك إضافة قيد جديد أو إضافة حقول مخصصة بالضغط على الأزرار أعلاه</p>
-            </div>
-          )}
-
-          {/* 5. شريط الترقيم والتنقل بين الصفحات */}
-          {data && data.total_pages > 1 && (
-            <div className="p-4 border-t border-[#E4E7EC] flex items-center justify-between text-xs bg-white">
-              <span className="text-[#667085]">
-                الصفحة <strong>{page}</strong> من <strong>{data.total_pages}</strong> (إجمالي{' '}
-                {data.total_matches.toLocaleString('ar-IQ')} قيد)
-              </span>
-
-              <div className="flex items-center gap-1.5">
-                <button
-                  disabled={page <= 1}
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  className="px-3 py-1.5 rounded-lg border border-[#E4E7EC] text-[#1B1F24] hover:bg-[#F7F8FA] disabled:opacity-40 font-medium transition"
-                >
-                  السابق
-                </button>
-                <button
-                  disabled={page >= data.total_pages}
-                  onClick={() => setPage((p) => Math.min(data.total_pages, p + 1))}
-                  className="px-3 py-1.5 rounded-lg border border-[#E4E7EC] text-[#1B1F24] hover:bg-[#F7F8FA] disabled:opacity-40 font-medium transition"
-                >
-                  التالي
-                </button>
-              </div>
-            </div>
-          )}
+            );
+          })}
         </div>
       </div>
+
+      {/* 3. شريط العمليات الموحد في سطر واحد (Single Unified Toolbar - 46px) */}
+      <div className="h-[46px] bg-[#F7F8FA] border-b border-[#E4E7EC] px-4 flex items-center justify-between gap-3 shrink-0 text-xs">
+        {/* حقل البحث الفوري */}
+        <div className="relative flex-1 max-w-md">
+          <Search className="w-3.5 h-3.5 text-[#98A2B3] absolute right-3 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="بحث فوري بالاسم، النشاط، العنوان، الهاتف..."
+            className="w-full pl-8 pr-9 py-1.5 text-xs bg-white border border-[#D0D5DD] rounded-lg text-[#1B1F24] placeholder-[#98A2B3] outline-none focus:border-[#14372e] focus:ring-1 focus:ring-[#14372e] transition"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery('')}
+              className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#98A2B3] hover:text-[#1B1F24]"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+
+        {/* فرز التواريخ السريع وعداد النتائج */}
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="text-[11px] text-[#667085] hidden lg:inline">
+            النتائج: <strong className="text-[#14372e] font-mono">{data?.total_matches?.toLocaleString('ar-IQ') || 0}</strong>
+          </span>
+
+          <div className="inline-flex rounded-lg border border-[#D0D5DD] bg-white p-0.5">
+            <button
+              onClick={() => { setSortDir('desc'); setPage(1); }}
+              className={`px-2.5 py-1 text-[11px] font-bold rounded-md transition flex items-center gap-1 cursor-pointer ${
+                sortDir === 'desc' ? 'bg-[#14372e] text-white shadow-2xs' : 'text-[#344054] hover:bg-[#F7F8FA]'
+              }`}
+              title="فرز تنازلي (من الأحدث إلى الأقدم)"
+            >
+              <ArrowDown className="w-3 h-3 text-[#ecd58a]" />
+              <span className="hidden sm:inline">الأحدث</span>
+            </button>
+            <button
+              onClick={() => { setSortDir('asc'); setPage(1); }}
+              className={`px-2.5 py-1 text-[11px] font-bold rounded-md transition flex items-center gap-1 cursor-pointer ${
+                sortDir === 'asc' ? 'bg-[#14372e] text-white shadow-2xs' : 'text-[#344054] hover:bg-[#F7F8FA]'
+              }`}
+              title="فرز تصاعدي (من الأقدم إلى الأحدث)"
+            >
+              <ArrowUp className="w-3 h-3 text-[#ecd58a]" />
+              <span className="hidden sm:inline">الأقدم</span>
+            </button>
+            <button
+              onClick={() => { setSortDir('none'); setPage(1); }}
+              className={`px-2 py-1 text-[11px] font-semibold rounded-md transition cursor-pointer ${
+                sortDir === 'none' ? 'bg-slate-200 text-slate-800 font-bold' : 'text-[#667085] hover:bg-[#F7F8FA]'
+              }`}
+              title="الترتيب الأصلي لملف Access"
+            >
+              الأصلي
+            </button>
+          </div>
+        </div>
+
+        {/* أزرار العمليات الموحدة */}
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            onClick={() => { setFormData({}); setIsAddModalOpen(true); }}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-[#14372e] hover:bg-[#1a473b] text-white rounded-lg text-xs font-bold transition shadow-2xs cursor-pointer"
+          >
+            <Plus className="w-3.5 h-3.5 text-[#ecd58a]" />
+            <span>إضافة قيد</span>
+          </button>
+
+          <button
+            onClick={handleExportCSV}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 bg-white hover:bg-[#F7F8FA] border border-[#D0D5DD] text-[#344054] rounded-lg text-xs font-semibold transition cursor-pointer"
+            title="تصدير السجلات إلى ملف Excel / CSV"
+          >
+            <Download className="w-3.5 h-3.5 text-[#14372e]" />
+            <span className="hidden sm:inline">Excel</span>
+          </button>
+
+          <button
+            onClick={() => setIsManageColsModalOpen(true)}
+            className="p-1.5 bg-white hover:bg-[#F7F8FA] border border-[#D0D5DD] text-[#344054] rounded-lg transition cursor-pointer"
+            title="إدارة وحذف الحقول"
+          >
+            <Columns className="w-3.5 h-3.5 text-[#14372e]" />
+          </button>
+        </div>
+      </div>
+
+      {/* 4. الجدول المركزي لعرض البيانات (Maximized Data Grid - 78% Viewport) */}
+      <div className="flex-1 overflow-auto min-h-0 bg-white relative">
+        {loading ? (
+          <div className="h-full flex flex-col items-center justify-center text-center gap-3 p-12">
+            <RefreshCw className="w-8 h-8 text-[#14372e] animate-spin" />
+            <p className="text-sm font-bold text-[#1B1F24]">جاري جلب السجلات السحابية...</p>
+            <p className="text-xs text-[#667085]">مزامنة فورية لكافة القيود وعرضها بأعلى وضوح</p>
+          </div>
+        ) : error ? (
+          <div className="h-full flex flex-col items-center justify-center p-8 text-center text-red-600 space-y-2">
+            <AlertCircle className="w-8 h-8 mx-auto text-red-500" />
+            <p className="font-bold text-sm">{error}</p>
+          </div>
+        ) : data?.rows && data.rows.length > 0 ? (
+          <table className="w-full text-right text-xs border-collapse">
+            <thead className="sticky top-0 z-10 bg-[#EDF2EF] border-b-2 border-[#D0D5DD] text-[#14372e] font-bold text-xs shadow-xs">
+              <tr>
+                <th className="py-2.5 px-3 w-12 text-center border-l border-[#D0D5DD]/40 bg-[#EDF2EF]">#</th>
+                {activeFile === 'all' && (
+                  <th className="py-2.5 px-3.5 whitespace-nowrap border-l border-[#D0D5DD]/40 bg-[#EDF2EF]">القسم المصدر</th>
+                )}
+                {data.columns.map((col) => {
+                  const isSorted = sortCol === col || (sortCol === 'date_auto' && data.date_columns?.[0] === col);
+                  return (
+                    <th
+                      key={col}
+                      className="py-2.5 px-3.5 whitespace-nowrap border-l border-[#D0D5DD]/40 bg-[#EDF2EF] select-none group"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <button
+                          onClick={() => handleColumnHeaderClick(col)}
+                          className="flex items-center gap-1 hover:text-[#c59b27] transition cursor-pointer font-bold"
+                          title="اضغط للفرز حسب هذا العمود"
+                        >
+                          <span>{col}</span>
+                          {isSorted && sortDir === 'desc' && (
+                            <ArrowDown className="w-3 h-3 text-[#14372e]" />
+                          )}
+                          {isSorted && sortDir === 'asc' && (
+                            <ArrowUp className="w-3 h-3 text-[#14372e]" />
+                          )}
+                          {!isSorted && (
+                            <ArrowUpDown className="w-2.5 h-2.5 text-[#98A2B3] opacity-0 group-hover:opacity-100 transition" />
+                          )}
+                        </button>
+
+                        <button
+                          onClick={() => setDeleteColConfirm(col)}
+                          className="text-[#98A2B3] hover:text-red-600 p-0.5 rounded transition opacity-0 group-hover:opacity-100 cursor-pointer"
+                          title={`حذف حقل "${col}"`}
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </th>
+                  );
+                })}
+                <th className="py-2.5 px-3 text-center w-24 whitespace-nowrap bg-[#EDF2EF]">الإجراءات</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[#E4E7EC]">
+              {data.rows.map((row, idx) => {
+                const rowNum = (page - 1) * limit + idx + 1;
+                return (
+                  <tr key={row._adh_id || idx} className="hover:bg-amber-50/50 even:bg-[#FAFAFA] odd:bg-white transition-colors group">
+                    <td className="py-2.5 px-3 text-center text-[#98A2B3] font-mono text-[11px] border-l border-[#E4E7EC]/60">{rowNum}</td>
+
+                    {activeFile === 'all' && (
+                      <td className="py-2.5 px-3.5 whitespace-nowrap border-l border-[#E4E7EC]/60">
+                        <span className="inline-flex items-center gap-1 bg-[#14372e]/5 text-[#14372e] font-semibold px-2 py-0.5 rounded text-[11px] border border-[#14372e]/10">
+                          {row._adh_file}
+                        </span>
+                      </td>
+                    )}
+
+                    {data.columns.map((col) => (
+                      <td key={col} className="py-2.5 px-3.5 whitespace-nowrap max-w-xs truncate border-l border-[#E4E7EC]/40">
+                        {renderCellContent(col, row[col])}
+                      </td>
+                    ))}
+
+                    <td className="py-2 px-3 text-center whitespace-nowrap">
+                      <div className="flex items-center justify-center gap-1">
+                        <button
+                          onClick={() => {
+                            setSelectedRecord(row);
+                            setFormData({ ...row });
+                            setIsEditModalOpen(true);
+                          }}
+                          className="p-1 rounded hover:bg-emerald-100 text-[#14372e] transition cursor-pointer"
+                          title="تعديل هذا القيد"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+
+                        {deleteConfirmId === row._adh_id ? (
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => handleDelete(row)}
+                              className="px-1.5 py-0.5 bg-red-600 text-white rounded text-[10px] font-bold cursor-pointer"
+                            >
+                              تأكيد
+                            </button>
+                            <button
+                              onClick={() => setDeleteConfirmId(null)}
+                              className="px-1 py-0.5 text-[#667085] text-[10px] cursor-pointer"
+                            >
+                              إلغاء
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setDeleteConfirmId(row._adh_id)}
+                            className="p-1 rounded hover:bg-red-100 text-red-500 transition cursor-pointer"
+                            title="حذف هذا القيد"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        ) : (
+          <div className="h-full flex flex-col items-center justify-center p-12 text-center text-[#667085] gap-2">
+            <AlertCircle className="w-8 h-8 text-[#98A2B3]" />
+            <p className="text-sm font-bold">لا توجد سجلات مطابقة للبحث أو الجدول فارغ</p>
+            <p className="text-xs text-[#98A2B3]">يمكنك كتابة كلمة بحث أخرى أو إضافة قيد جديد بالضغط على "إضافة قيد"</p>
+          </div>
+        )}
+      </div>
+
+      {/* 5. شريط التصفح السفلي الثابت (Sticky Pagination Footer - 40px) */}
+      <footer className="h-[40px] bg-white border-t border-[#E4E7EC] px-4 flex items-center justify-between text-xs text-[#667085] shrink-0 z-20">
+        <div className="flex items-center gap-1.5 font-mono">
+          <span>عرض السجلات:</span>
+          <strong className="text-[#14372e]">
+            {data?.rows && data.rows.length > 0 ? ((page - 1) * limit + 1).toLocaleString('ar-IQ') : 0}
+          </strong>
+          <span>-</span>
+          <strong className="text-[#14372e]">
+            {data?.rows ? Math.min(page * limit, data.total_matches).toLocaleString('ar-IQ') : 0}
+          </strong>
+          <span>من إجمالي</span>
+          <strong className="text-[#14372e]">{data?.total_matches?.toLocaleString('ar-IQ') || 0}</strong>
+          <span>قيد</span>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1">
+            <span className="hidden sm:inline">لكل صفحة:</span>
+            <select
+              value={limit}
+              onChange={(e) => { setLimit(Number(e.target.value)); setPage(1); }}
+              className="bg-[#F7F8FA] border border-[#D0D5DD] rounded px-2 py-0.5 text-xs font-bold text-[#14372e] outline-none cursor-pointer"
+            >
+              <option value={25}>25 قيد</option>
+              <option value={50}>50 قيد</option>
+              <option value={100}>100 قيد</option>
+              <option value={200}>200 قيد</option>
+            </select>
+          </div>
+
+          <div className="flex items-center gap-1">
+            <button
+              disabled={page <= 1}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              className="px-2.5 py-1 rounded border border-[#E4E7EC] bg-white hover:bg-[#F7F8FA] disabled:opacity-30 disabled:cursor-not-allowed font-semibold text-[#1B1F24] transition flex items-center gap-1 cursor-pointer"
+            >
+              <ChevronRight className="w-3.5 h-3.5" />
+              <span>السابق</span>
+            </button>
+
+            <span className="px-2 font-mono font-bold text-[#14372e]">
+              {page} / {data?.total_pages || 1}
+            </span>
+
+            <button
+              disabled={page >= (data?.total_pages || 1)}
+              onClick={() => setPage((p) => p + 1)}
+              className="px-2.5 py-1 rounded border border-[#E4E7EC] bg-white hover:bg-[#F7F8FA] disabled:opacity-30 disabled:cursor-not-allowed font-semibold text-[#1B1F24] transition flex items-center gap-1 cursor-pointer"
+            >
+              <span>التالي</span>
+              <ChevronLeft className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      </footer>
 
       {/* 6. نافذة إضافة قيد جديد (Add Record Modal) */}
       {isAddModalOpen && (
