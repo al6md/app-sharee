@@ -124,7 +124,7 @@ export default function AdminControlPage() {
   const [actionLoading, setActionLoading] = useState(false);
 
   // حالة مركز قواعد بيانات Access الموحدة
-  const [accessHubSubTab, setAccessHubSubTab] = useState<'SECTIONS' | 'FIELDS' | 'SECURITY' | 'ROLES' | 'TRASH'>('SECTIONS');
+  const [accessHubSubTab, setAccessHubSubTab] = useState<'SECTIONS' | 'FIELDS' | 'SECURITY' | 'TRASH'>('SECTIONS');
   const [accessFiles, setAccessFiles] = useState<any[]>([]);
   const [accessAllFiles, setAccessAllFiles] = useState<any[]>([]);
   const [accessDeletedSections, setAccessDeletedSections] = useState<string[]>([]);
@@ -2272,7 +2272,6 @@ export default function AdminControlPage() {
               { id: 'SECTIONS', label: '📁 إدارة الأقسام والملفات', count: accessFiles.length },
               { id: 'FIELDS', label: '📋 إدارة الحقول والهياكل', count: accessColumnsList.length },
               { id: 'SECURITY', label: '🔒 أمان المركز والأجهزة المعتمدة', count: allKnownDevices.length },
-              { id: 'ROLES', label: '👥 مصفوفة الصلاحيات والأجهزة', count: allKnownDevices.length },
               { id: 'TRASH', label: '🗑️ سلة المحذوفات الإدارية', count: accessTrashBin.length },
             ].map((sub) => (
               <button
@@ -2795,113 +2794,6 @@ export default function AdminControlPage() {
                     </table>
                   </div>
                 )}
-              </div>
-            </div>
-          )}
-
-          {/* محتوى القسم 3: مصفوفة الصلاحيات والأجهزة */}
-          {accessHubSubTab === 'ROLES' && (
-            <div className="space-y-4">
-              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-                <h4 className="font-bold text-base text-slate-900 mb-1">مصفوفة الصلاحيات المؤسسية (RBAC Engine)</h4>
-                <p className="text-xs text-slate-600">
-                  تحديد صلاحيات كل جهاز وموظف لمنع أي عمليات غير مصرح بها وحماية سرية وسلامة سجلات التجار والدلالين.
-                </p>
-
-                {/* جدول مستويات الصلاحيات التوضيحي */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 my-4">
-                  <div className="p-3 rounded-xl border border-amber-200 bg-amber-50/50">
-                    <p className="text-xs font-bold text-amber-800 flex items-center gap-1">👑 مدير نظام (Super Admin)</p>
-                    <p className="text-[11px] text-amber-900/80 mt-1">كامل الصلاحيات (إضافة، تعديل، حذف الأقسام والحقول والقيود، ومنح الصلاحيات).</p>
-                  </div>
-                  <div className="p-3 rounded-xl border border-emerald-200 bg-emerald-50/50">
-                    <p className="text-xs font-bold text-emerald-800 flex items-center gap-1">✏️ مدخل بيانات (Data Entry)</p>
-                    <p className="text-[11px] text-emerald-900/80 mt-1">البحث والاستعراض وتصدير Excel وإضافة وتعديل القيود. (الحذف محجوب تماماً).</p>
-                  </div>
-                  <div className="p-3 rounded-xl border border-blue-200 bg-blue-50/50">
-                    <p className="text-xs font-bold text-blue-800 flex items-center gap-1">👁️ مستعلم فقط (Viewer)</p>
-                    <p className="text-[11px] text-blue-900/80 mt-1">البحث والاستعراض وتصدير التقارير فقط للقراءة (Read-Only). كافة أزرار الإضافة والتعديل والحذف محجوبة.</p>
-                  </div>
-                </div>
-
-                {/* قائمة الأجهزة وإمكانية تعديل صلاحياتها */}
-                <div className="mt-4 border border-slate-200 rounded-xl overflow-hidden">
-                  <table className="w-full text-right text-xs">
-                    <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold">
-                      <tr>
-                        <th className="p-3">اسم الجهاز</th>
-                        <th className="p-3">معرّف العتاد (Machine GUID)</th>
-                        <th className="p-3">المستخدم المعتمد</th>
-                        <th className="p-3">الصلاحية الحالية</th>
-                        <th className="p-3 text-center">الإجراء والتحكم</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {allKnownDevices.length === 0 ? (
-                        <tr>
-                          <td colSpan={5} className="p-8 text-center text-slate-500 font-semibold">
-                            لا توجد أجهزة مسجلة حالياً. بمجرد تسجيل أي جهاز من شاشة تسجيل الدخول سيظهر هنا فورياً للتحكم بصلاحياته.
-                          </td>
-                        </tr>
-                      ) : (
-                        allKnownDevices.map((d, idx: number) => {
-                          const currentRole = d.role || 'data_entry';
-                          return (
-                            <tr key={idx} className="hover:bg-slate-50/80 transition">
-                              <td className="p-3 font-bold text-slate-900">💻 {d.name}</td>
-                              <td className="p-3 font-mono text-[11px] text-slate-500">{d.guid}</td>
-                              <td className="p-3 text-slate-700">{d.user}</td>
-                              <td className="p-3">
-                                <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
-                                  currentRole === 'admin' ? 'bg-amber-100 text-amber-800 border border-amber-300' :
-                                  currentRole === 'viewer' ? 'bg-blue-100 text-blue-800 border border-blue-300' :
-                                  'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                                }`}>
-                                  {currentRole === 'admin' ? '👑 مدير نظام' : currentRole === 'viewer' ? '👁️ مستعلم فقط' : '✏️ مدخل بيانات'}
-                                </span>
-                              </td>
-                              <td className="p-3 text-center">
-                                <div className="flex items-center justify-center gap-1.5">
-                                  <button
-                                    onClick={() => handleSaveAccessRole(d.guid, d.name, 'data_entry')}
-                                    className={`px-2 py-1 rounded text-[10px] font-bold transition cursor-pointer ${
-                                      currentRole === 'data_entry' ? 'bg-[#14372e] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                                    }`}
-                                  >
-                                    مدخل بيانات
-                                  </button>
-                                  <button
-                                    onClick={() => handleSaveAccessRole(d.guid, d.name, 'viewer')}
-                                    className={`px-2 py-1 rounded text-[10px] font-bold transition cursor-pointer ${
-                                      currentRole === 'viewer' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                                    }`}
-                                  >
-                                    مستعلم فقط
-                                  </button>
-                                  <button
-                                    onClick={() => handleSaveAccessRole(d.guid, d.name, 'admin')}
-                                    className={`px-2 py-1 rounded text-[10px] font-bold transition cursor-pointer ${
-                                      currentRole === 'admin' ? 'bg-amber-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                                    }`}
-                                  >
-                                    مدير
-                                  </button>
-                                  <button
-                                    onClick={() => handleDeleteDevice(d.id || d.guid, d.name)}
-                                    className="p-1.5 rounded text-rose-600 hover:bg-rose-50 transition cursor-pointer"
-                                    title="حذف الجهاز وسحب اعتماده نهائياً"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })
-                      )}
-                    </tbody>
-                  </table>
-                </div>
               </div>
             </div>
           )}
