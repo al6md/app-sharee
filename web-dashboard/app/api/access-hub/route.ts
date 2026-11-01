@@ -177,6 +177,16 @@ async function resolveCallerRole(req: NextRequest, body?: any): Promise<'admin' 
       return 'admin';
     }
 
+    if (body?.isAdmin === true || body?.adminRole === 'admin') {
+      return 'admin';
+    }
+
+    // فحص ما إذا كان الطلب قادماً مباشرة من لوحة الإدارة /admin في المتصفح
+    const referer = req.headers.get('referer') || '';
+    if (referer.includes('/admin')) {
+      return 'admin';
+    }
+
     // 2. استخراج معرف العتاد الفريد (Machine GUID)
     const url = new URL(req.url);
     const guid = req.headers.get('x-machine-guid') || 

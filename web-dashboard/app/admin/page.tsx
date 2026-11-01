@@ -478,11 +478,25 @@ export default function AdminControlPage() {
     return () => clearInterval(interval);
   }, [isAuthenticated]);
 
+  // ترويسات الصلاحية الإدارية الكاملة لمركز بيانات Access
+  const getAdminHeaders = () => {
+    const guid = typeof window !== 'undefined' ? localStorage.getItem('sharecoc_device_guid') || '' : '';
+    return {
+      'Content-Type': 'application/json',
+      'x-admin-role': 'admin',
+      'x-admin-session': 'true',
+      ...(guid ? { 'x-machine-guid': guid } : {}),
+    };
+  };
+
   // جلب بيانات مركز قواعد بيانات Access
   const loadAccessHubData = async () => {
     try {
       setAccessLoading(true);
-      const res = await fetch('/api/access-hub?file=all&limit=1', { cache: 'no-store' });
+      const res = await fetch('/api/access-hub?file=all&limit=1', {
+        cache: 'no-store',
+        headers: getAdminHeaders(),
+      });
       const data = await res.json();
       if (data.success) {
         setAccessFiles(data.files || []);
@@ -516,7 +530,10 @@ export default function AdminControlPage() {
   const fetchColumnsForTable = async (fileName: string, tableName: string) => {
     if (!fileName || !tableName) return;
     try {
-      const res = await fetch(`/api/access-hub?file=${encodeURIComponent(fileName)}&table=${encodeURIComponent(tableName)}&limit=1`, { cache: 'no-store' });
+      const res = await fetch(`/api/access-hub?file=${encodeURIComponent(fileName)}&table=${encodeURIComponent(tableName)}&limit=1`, {
+        cache: 'no-store',
+        headers: getAdminHeaders(),
+      });
       const data = await res.json();
       if (data.success) {
         setAccessColumnsList(data.columns || []);
@@ -535,8 +552,8 @@ export default function AdminControlPage() {
       setActionLoading(true);
       const res = await fetch('/api/access-hub', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'DELETE_SECTION', fileName }),
+        headers: getAdminHeaders(),
+        body: JSON.stringify({ action: 'DELETE_SECTION', fileName, isAdmin: true }),
       });
       const data = await res.json();
       if (data.success) {
@@ -558,8 +575,8 @@ export default function AdminControlPage() {
       setActionLoading(true);
       const res = await fetch('/api/access-hub', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'RESTORE_SECTION', fileName }),
+        headers: getAdminHeaders(),
+        body: JSON.stringify({ action: 'RESTORE_SECTION', fileName, isAdmin: true }),
       });
       const data = await res.json();
       if (data.success) {
@@ -588,12 +605,13 @@ export default function AdminControlPage() {
       setActionLoading(true);
       const res = await fetch('/api/access-hub', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAdminHeaders(),
         body: JSON.stringify({
           action: 'ADD_COLUMN',
           file: selectedAccessFile,
           table: selectedAccessTable,
           columnName: colName,
+          isAdmin: true,
         }),
       });
       const data = await res.json();
@@ -620,12 +638,13 @@ export default function AdminControlPage() {
       setActionLoading(true);
       const res = await fetch('/api/access-hub', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAdminHeaders(),
         body: JSON.stringify({
           action: 'DELETE_COLUMN',
           file: selectedAccessFile,
           table: selectedAccessTable,
           columnName: colName,
+          isAdmin: true,
         }),
       });
       const data = await res.json();
@@ -658,13 +677,14 @@ export default function AdminControlPage() {
       setActionLoading(true);
       const res = await fetch('/api/access-hub', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAdminHeaders(),
         body: JSON.stringify({
           action: 'RENAME_COLUMN',
           file: selectedAccessFile,
           table: selectedAccessTable,
           oldName: cleanOld,
           newName: cleanNew,
+          isAdmin: true,
         }),
       });
       const data = await res.json();
@@ -689,7 +709,7 @@ export default function AdminControlPage() {
       setActionLoading(true);
       const res = await fetch('/api/access-hub', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAdminHeaders(),
         body: JSON.stringify({
           action: 'MOVE_COLUMN',
           file: selectedAccessFile,
@@ -697,6 +717,7 @@ export default function AdminControlPage() {
           columnName: colName,
           direction,
           allColumns: accessColumnsList,
+          isAdmin: true,
         }),
       });
       const data = await res.json();
@@ -727,8 +748,8 @@ export default function AdminControlPage() {
       setActionLoading(true);
       const res = await fetch('/api/access-hub', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'RESTORE_RECORD', id }),
+        headers: getAdminHeaders(),
+        body: JSON.stringify({ action: 'RESTORE_RECORD', id, isAdmin: true }),
       });
       const data = await res.json();
       if (data.success) {
@@ -750,8 +771,8 @@ export default function AdminControlPage() {
       setActionLoading(true);
       const res = await fetch('/api/access-hub', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'SET_ROLE', guid, name, role }),
+        headers: getAdminHeaders(),
+        body: JSON.stringify({ action: 'SET_ROLE', guid, name, role, isAdmin: true }),
       });
       const data = await res.json();
       if (data.success) {
