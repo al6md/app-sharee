@@ -19,6 +19,11 @@ import {
   restoreRecordFromTrash,
   setAccessHubRole
 } from '@/lib/accessCloudStore';
+import { 
+  getCloudAdminStore, 
+  persistCloudAdminStore, 
+  DEFAULT_ACCESS_HUB_SECURITY 
+} from '@/lib/googleDrive';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -157,6 +162,63 @@ function parseDateValue(val: any): number | null {
   return null;
 }
 
+/**
+ * التحقق الأمني الصارم من هوية الجهاز والصلاحية المعتمدة له في مركز بيانات Access
+ * الأدوار المؤسسية (RBAC Engine):
+ * 1. admin: مدير نظام (كامل الصلاحيات)
+ * 2. data_entry: مدخل بيانات (إضافة وتعديل - الحذف محجوب تماماً)
+ * 3. viewer: مستعلم فقط (للقراءة والاستعلام والتصدير - الإضافة والتعديل والحذف محجوبة)
+ */
+async function resolveCallerRole(req: NextRequest, body?: any): Promise<'admin' | 'data_entry' | 'viewer'> {
+  try {
+    // 1. فحص جلسة الأدمن في لوحة التحكم
+    const adminHeader = req.headers.get('x-admin-role') || req.headers.get('x-admin-session');
+    if (adminHeader === 'admin' || adminHeader === 'true') {
+      return 'admin';
+    }
+
+    // 2. استخراج معرف العتاد الفريد (Machine GUID)
+    const url = new URL(req.url);
+    const guid = req.headers.get('x-machine-guid') || 
+                 url.searchParams.get('guid') || 
+                 body?.guid || 
+                 body?.machineGuid || 
+                 '';
+
+    if (!guid) {
+      return 'data_entry';
+    }
+
+    // 3. التحقق من طفرات الصلاحيات السحابية (.sharecoc_access_mutations.json)
+    try {
+      const { mutations } = await getAccessHubMutations(false);
+      if (mutations.roles && mutations.roles[guid]?.role) {
+        return mutations.roles[guid].role;
+      }
+    } catch (e) {
+      // fallback
+    }
+
+    // 4. التحقق من مستودع الصلاحيات والأجهزة المركزي (.sharecoc_permissions.json)
+    try {
+      const store = await getCloudAdminStore(false);
+      if (store.accessHubSecurity?.roles && store.accessHubSecurity.roles[guid]) {
+        return store.accessHubSecurity.roles[guid];
+      }
+      const dev = (store.devices || []).find((d) => d.machineGuid === guid);
+      if (dev?.accessRole) {
+        return dev.accessRole;
+      }
+    } catch (e) {
+      // fallback
+    }
+  } catch (err) {
+    console.error('Error resolving caller role:', err);
+  }
+
+  return 'data_entry';
+}
+
 // GET: الاستعلام عن الجداول والبيانات بالحفاظ التام 100% على ترتيب الحقول + الفرز الزمني + إدارة الحقول
 export async function GET(req: NextRequest) {
   try {
@@ -175,6 +237,7 @@ export async function GET(req: NextRequest) {
     const index = getIndex();
     const { mutations } = await getAccessHubMutations();
     const currentSig = mutations.last_sync || index.last_sync || '1';
+    const callerRole = await resolveCallerRole(req);
 
     // فحص التحديثات الحية الفوري
     if (checkSig !== null && checkSig !== undefined && checkSig === currentSig) {
@@ -332,6 +395,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       success: true,
       sig: currentSig,
+      current_role: callerRole,
       files: activeFiles,
       all_files: index.files || [],
       deleted_sections: deletedSections,
@@ -361,6 +425,30 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
+    const callerRole = await resolveCallerRole(req, body);
+
+    // العمليات الإدارية الحساسة محصورة حصراً بمدير النظام (Super Admin)
+    const adminActions = [
+      'DELETE_SECTION',
+      'RESTORE_SECTION',
+      'TRASH_RECORD',
+      'RESTORE_RECORD',
+      'ADD_COLUMN',
+      'DELETE_COLUMN',
+      'RENAME_COLUMN',
+      'MOVE_COLUMN',
+      'REORDER_COLUMNS',
+      'SET_ROLE',
+    ];
+
+    if (body.action && adminActions.includes(body.action)) {
+      if (callerRole !== 'admin') {
+        return NextResponse.json({ 
+          success: false, 
+          error: 'عفواً، تم حجب العملية! تقتصر هذه الإجراءات الإدارية المتقدمة على مدير النظام (Super Admin) حصراً.' 
+        }, { status: 403 });
+      }
+    }
 
     // 0. إدارة الأقسام (حذف أو استعادة)
     if (body.action === 'DELETE_SECTION') {
@@ -398,7 +486,34 @@ export async function POST(req: NextRequest) {
       const { guid, name, role } = body;
       if (!guid || !role) return NextResponse.json({ success: false, error: 'بيانات الصلاحية غير مكتملة' }, { status: 400 });
       const record = await setAccessHubRole(guid, name, role);
-      return NextResponse.json({ success: true, message: 'تم تحديث صلاحية الجهاز بنجاح', roleRecord: record });
+
+      // مزامنة الصلاحية فوراً أيضاً في مستودع الصلاحيات المركزي (.sharecoc_permissions.json)
+      try {
+        await persistCloudAdminStore((cur) => {
+          const sec = cur.accessHubSecurity || { ...DEFAULT_ACCESS_HUB_SECURITY };
+          const curRoles = { ...(sec.roles || {}) };
+          curRoles[guid] = role;
+          const updatedDevices = (cur.devices || []).map((d) => {
+            if (d.machineGuid === guid) {
+              return { ...d, accessRole: role };
+            }
+            return d;
+          });
+          return {
+            ...cur,
+            devices: updatedDevices,
+            accessHubSecurity: {
+              ...sec,
+              roles: curRoles,
+              updatedAt: new Date().toISOString(),
+            },
+          };
+        });
+      } catch (syncErr) {
+        console.error('Failed to sync role to cloud admin store:', syncErr);
+      }
+
+      return NextResponse.json({ success: true, message: 'تم تحديث وتطبيق صلاحية الجهاز بنجاح وتعميمها', roleRecord: record });
     }
 
     // 4. إضافة حقل جديد للجدول
@@ -472,6 +587,13 @@ export async function POST(req: NextRequest) {
     }
 
     // 6. إضافة قيد بيانات جديد (Standard Record Add)
+    if (callerRole === 'viewer') {
+      return NextResponse.json({ 
+        success: false, 
+        error: 'عفواً، لا يمكنك إضافة قيود جديدة! حساب هذا الجهاز مفعل بصلاحية (مستعلم فقط - Viewer للقراءة والاستعلام فقط).' 
+      }, { status: 403 });
+    }
+
     const { file, table, record } = body;
     if (!file || !table || !record) {
       return NextResponse.json({ success: false, error: 'بيانات القيد غير مكتملة' }, { status: 400 });
@@ -493,6 +615,15 @@ export async function POST(req: NextRequest) {
 export async function PUT(req: NextRequest) {
   try {
     const body = await req.json();
+    const callerRole = await resolveCallerRole(req, body);
+
+    if (callerRole === 'viewer') {
+      return NextResponse.json({ 
+        success: false, 
+        error: 'عفواً، لا يمكنك تعديل القيود! حساب هذا الجهاز مفعل بصلاحية (مستعلم فقط - Viewer للقراءة والاستعلام فقط).' 
+      }, { status: 403 });
+    }
+
     const { id, updates } = body;
 
     if (!id || !updates) {
@@ -514,6 +645,15 @@ export async function PUT(req: NextRequest) {
 // DELETE: حذف سجل أو حذف حقل
 export async function DELETE(req: NextRequest) {
   try {
+    const callerRole = await resolveCallerRole(req);
+
+    if (callerRole !== 'admin') {
+      return NextResponse.json({ 
+        success: false, 
+        error: 'عفواً، عملية الحذف محجوبة تماماً عنك! تقتصر صلاحية الحذف على مدير النظام (Super Admin) حصراً لحماية سرية وسلامة البيانات.' 
+      }, { status: 403 });
+    }
+
     const url = new URL(req.url);
     const type = url.searchParams.get('type');
 

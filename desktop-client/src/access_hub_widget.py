@@ -27,6 +27,19 @@ from PyQt6.QtGui import QFont, QColor, QCursor, QIcon
 CLOUD_API_URL = "https://web-dashboard-pi-self.vercel.app/api/access-hub"
 LOCAL_API_URL = "http://localhost:3000/api/access-hub"
 
+
+def get_desktop_machine_guid():
+    """استخراج المعرف الثابت للحاسوب من سجل الويندوز"""
+    try:
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography", 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY)
+        val, _ = winreg.QueryValueEx(key, "MachineGuid")
+        winreg.CloseKey(key)
+        return str(val).strip()
+    except Exception:
+        import socket
+        return socket.gethostname()
+
 # مسار مجلد البيانات المحلي كنسخة احتياطية سريعة
 LOCAL_DATA_DIR = Path(__file__).parent.parent.parent / "web-dashboard" / "data" / "access-hub"
 
@@ -170,6 +183,7 @@ class DataLoaderThread(QThread):
                 pass
 
         # 2. في حال عدم توفر البيانات محلياً، الاستعلام من السحابة السريعة
+        my_guid = get_desktop_machine_guid()
         params = {
             "file": self.file_name,
             "table": self.table_name,
@@ -177,10 +191,14 @@ class DataLoaderThread(QThread):
             "page": self.page,
             "limit": self.limit,
             "sort_dir": self.sort_dir,
-            "sort_col": self.sort_col
+            "sort_col": self.sort_col,
+            "guid": my_guid,
+        }
+        headers = {
+            "x-machine-guid": my_guid
         }
         try:
-            r = requests.get(CLOUD_API_URL, params=params, timeout=10)
+            r = requests.get(CLOUD_API_URL, params=params, headers=headers, timeout=10)
             if r.status_code == 200:
                 self.data_loaded.emit(r.json())
                 return
@@ -346,8 +364,13 @@ class DataLoaderThread(QThread):
         start_idx = (self.page - 1) * self.limit
         page_rows = filtered_rows[start_idx:start_idx + self.limit]
 
+        my_guid = get_desktop_machine_guid()
+        roles_map = mutations.get("roles", {})
+        cur_role = roles_map.get(my_guid, {}).get("role", "data_entry") if isinstance(roles_map.get(my_guid), dict) else "data_entry"
         return {
             "success": True,
+            "current_role": cur_role,
+            "roles": roles_map,
             "files": idx.get("files", []),
             "total_records": idx.get("total_records", 0) + len(mutations.get("adds", [])) - len(mutations.get("deletes", [])),
             "active_file": req_file,
@@ -933,6 +956,13 @@ class AccessHubWidget(QWidget):
         self.search_input.returnPressed.connect(self._execute_search)
         action_layout.addWidget(self.search_input, stretch=1)
 
+        # شارة الصلاحية الحالية للجهاز (RBAC Engine)
+        self.user_role = "data_entry"
+        self.role_badge = QLabel("✏️ مدخل بيانات")
+        self.role_badge.setFont(QFont("IBM Plex Sans Arabic", 8, QFont.Weight.Bold))
+        self.role_badge.setStyleSheet("background: #D1FAE5; color: #065F46; border: 1px solid #6EE7B7; border-radius: 6px; padding: 4px 8px;")
+        action_layout.addWidget(self.role_badge)
+
         # أزرار الإجراءات الأساسية (تم سحب زر الحذف لحماية البيانات وحصر الحذف في لوحة الأدمن)
         self.btn_add = QPushButton("➕ إضافة قيد")
         self.btn_add.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
@@ -1016,7 +1046,7 @@ class AccessHubWidget(QWidget):
         self.table_widget.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.table_widget.horizontalHeader().sectionClicked.connect(self._on_header_clicked)
         self.table_widget.setFont(QFont("IBM Plex Sans Arabic", 10))
-        self.table_widget.doubleClicked.connect(self._on_edit_clicked)
+        self.table_widget.doubleClicked.connect(self._on_table_double_clicked)
 
         # قائمة الزر الأيمن المخصصة
         self.table_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -1129,6 +1159,32 @@ class AccessHubWidget(QWidget):
 
         main_layout.addWidget(pagination_frame)
 
+    def _apply_user_role(self):
+        """تطبيق قيود الصلاحيات وشارات الواجهة حسب رتبة الجهاز"""
+        role = getattr(self, "user_role", "data_entry")
+        if role == "admin":
+            self.role_badge.setText("👑 مدير نظام (كامل الصلاحيات)")
+            self.role_badge.setStyleSheet("background: #FEF3C7; color: #92400E; border: 1px solid #FCD34D; border-radius: 6px; padding: 4px 10px; font-weight: bold; font-size: 11px;")
+            self.btn_add.show()
+            self.btn_edit.show()
+        elif role == "viewer":
+            self.role_badge.setText("👁️ مستعلم فقط (للقراءة والاستعلام)")
+            self.role_badge.setStyleSheet("background: #DBEAFE; color: #1E40AF; border: 1px solid #93C5FD; border-radius: 6px; padding: 4px 10px; font-weight: bold; font-size: 11px;")
+            self.btn_add.hide()
+            self.btn_edit.hide()
+        else: # data_entry
+            self.role_badge.setText("✏️ مدخل بيانات (إضافة وتعديل)")
+            self.role_badge.setStyleSheet("background: #D1FAE5; color: #065F46; border: 1px solid #6EE7B7; border-radius: 6px; padding: 4px 10px; font-weight: bold; font-size: 11px;")
+            self.btn_add.show()
+            self.btn_edit.show()
+
+    def _on_table_double_clicked(self, index):
+        """عند النقر المزدوج: للمستعلم عرض التفاصيل وللمدخل فتح نافذة التعديل"""
+        if getattr(self, "user_role", "data_entry") == "viewer":
+            self._show_record_details(index.row())
+        else:
+            self._on_edit_clicked()
+
     def _subtable_btn_style(self):
         return """
             QPushButton {
@@ -1173,6 +1229,18 @@ class AccessHubWidget(QWidget):
         self.btn_refresh.setEnabled(True)
         self.btn_refresh.setText("🔄 تحديث")
         self.current_data = data
+
+        # تحديد وتطبيق الصلاحية المؤسسية لهذا الجهاز (RBAC Engine)
+        role = data.get("current_role")
+        if not role:
+            my_guid = get_desktop_machine_guid()
+            roles_map = data.get("roles", {})
+            if my_guid in roles_map and isinstance(roles_map[my_guid], dict):
+                role = roles_map[my_guid].get("role", "data_entry")
+            else:
+                role = "data_entry"
+        self.user_role = role
+        self._apply_user_role()
 
         # 1. تحديث قائمة الأقسام (الملفات) في الـ ComboBox مرة واحدة
         files = data.get("files", [])
@@ -1398,8 +1466,10 @@ class AccessHubWidget(QWidget):
             }
         """)
 
-        act_add_col = menu.addAction("➕ إضافة حقل جديد لهذا القسم")
-        menu.addSeparator()
+        act_add_col = None
+        if getattr(self, "user_role", "data_entry") == "admin":
+            act_add_col = menu.addAction("➕ إضافة حقل جديد لهذا القسم")
+            menu.addSeparator()
         act_sort_desc = menu.addAction("⬇️ فرز زمني (من الأحدث للأقدم)")
         act_sort_asc = menu.addAction("⬆️ فرز زمني (من الأقدم للأحدث)")
         act_reset_sort = menu.addAction("🔄 الترتيب الأصلي (إلغاء الفرز)")
@@ -1455,8 +1525,10 @@ class AccessHubWidget(QWidget):
 
         act_details = menu.addAction("🔍 عرض تفاصيل القيد بالكامل")
         menu.addSeparator()
-        act_edit = menu.addAction("✏️ تعديل هذا القيد")
-        menu.addSeparator()
+        act_edit = None
+        if getattr(self, "user_role", "data_entry") != "viewer":
+            act_edit = menu.addAction("✏️ تعديل هذا القيد")
+            menu.addSeparator()
         act_copy = menu.addAction("📋 نسخ بيانات السجل")
 
         action = menu.exec(self.table_widget.viewport().mapToGlobal(pos))
@@ -1499,12 +1571,14 @@ class AccessHubWidget(QWidget):
         if dlg.exec() == QDialog.DialogCode.Accepted:
             new_col = dlg.get_column_name()
             try:
+                my_guid = get_desktop_machine_guid()
                 r = requests.post(CLOUD_API_URL, json={
                     "file": target_file,
                     "table": self.active_table,
                     "action": "ADD_COLUMN",
-                    "columnName": new_col
-                }, timeout=10)
+                    "columnName": new_col,
+                    "guid": my_guid,
+                }, headers={"x-machine-guid": my_guid}, timeout=10)
                 if r.status_code == 200:
                     QMessageBox.information(self, "نجاح", f"تمت إضافة الحقل '{new_col}' سحابياً بنجاح وتعميمه للجميع.")
                     self.load_data()
@@ -1525,12 +1599,14 @@ class AccessHubWidget(QWidget):
             col_to_del = dlg.get_selected_column()
             target_file = self.active_file if self.active_file != "all" else (self.current_data["files"][0]["name"] if self.current_data.get("files") else "الاسم التجاري 2025 - 2026")
             try:
+                my_guid = get_desktop_machine_guid()
                 r = requests.post(CLOUD_API_URL, json={
                     "file": target_file,
                     "table": self.active_table,
                     "action": "DELETE_COLUMN",
-                    "columnName": col_to_del
-                }, timeout=10)
+                    "columnName": col_to_del,
+                    "guid": my_guid,
+                }, headers={"x-machine-guid": my_guid}, timeout=10)
                 if r.status_code == 200:
                     QMessageBox.information(self, "نجاح", f"تم حذف الحقل '{col_to_del}' سحابياً بنجاح.")
                     self.load_data()
@@ -1541,6 +1617,9 @@ class AccessHubWidget(QWidget):
 
     def _on_add_clicked(self):
         """إضافة قيد جديد مع إمكانية تحديد الملف إذا كان في وضع الدمج الشامل"""
+        if getattr(self, "user_role", "data_entry") == "viewer":
+            QMessageBox.warning(self, "صلاحية محجوبة", "عفواً، لا تملك صلاحية إضافة قيود.\nحساب هذا الجهاز مفعل بصلاحية (مستعلم فقط - للقراءة والاستعلام).")
+            return
         if not self.current_data or not self.current_data.get("columns"):
             return
         cols = self.current_data["columns"]
@@ -1550,11 +1629,13 @@ class AccessHubWidget(QWidget):
             new_data = dlg.get_data()
             target_file = dlg.get_target_file() or (self.active_file if self.active_file != "all" else self.current_data["files"][0]["name"])
             try:
+                my_guid = get_desktop_machine_guid()
                 r = requests.post(CLOUD_API_URL, json={
                     "file": target_file,
                     "table": self.active_table,
-                    "record": new_data
-                }, timeout=10)
+                    "record": new_data,
+                    "guid": my_guid,
+                }, headers={"x-machine-guid": my_guid}, timeout=10)
                 if r.status_code == 200:
                     QMessageBox.information(self, "نجاح", "تمت إضافة القيد بنجاح ومزامنته سحابياً لجميع الأجهزة.")
                     self.load_data()
@@ -1569,18 +1650,24 @@ class AccessHubWidget(QWidget):
             QMessageBox.information(self, "تنبيه", "يرجى تحديد السجل المراد تعديله أولاً.")
             return
 
+        if getattr(self, "user_role", "data_entry") == "viewer":
+            self._show_record_details(row_idx)
+            return
+
         row_data = self.current_data["rows"][row_idx]
         cols = self.current_data["columns"]
         dlg = RecordFormDialog(f"تعديل القيد (الملف: {row_data.get('_adh_file')})", cols, initial_data=row_data, parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             updates = dlg.get_data()
             try:
+                my_guid = get_desktop_machine_guid()
                 r = requests.put(CLOUD_API_URL, json={
                     "file": row_data["_adh_file"],
                     "table": row_data["_adh_table"],
                     "id": row_data["_adh_id"],
-                    "updates": updates
-                }, timeout=10)
+                    "updates": updates,
+                    "guid": my_guid,
+                }, headers={"x-machine-guid": my_guid}, timeout=10)
                 if r.status_code == 200:
                     QMessageBox.information(self, "نجاح", "تم تعديل السجل ومزامنته فورياً مع كافة الموظفين.")
                     self.load_data()

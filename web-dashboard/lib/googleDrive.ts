@@ -72,6 +72,7 @@ export interface AuthorizedDeviceConfig {
   department?: string;
   authorizedDepts?: string[];
   registeredAt?: string;
+  accessRole?: 'admin' | 'data_entry' | 'viewer';
 }
 
 export interface AccessHubSecurityConfig {
@@ -80,6 +81,7 @@ export interface AccessHubSecurityConfig {
   password?: string;
   pinCode?: string;
   authorizedDevices?: string[];
+  roles?: Record<string, 'admin' | 'data_entry' | 'viewer'>;
   updatedAt?: string;
 }
 
@@ -450,6 +452,7 @@ export async function getCloudAdminStore(forceRefresh: boolean = false): Promise
               ? dev.authorizedDepts
               : (dev.department ? [String(dev.department)] : []),
             registeredAt: dev.registeredAt ? String(dev.registeredAt) : undefined,
+            accessRole: dev.accessRole || rawAccessSec?.roles?.[dev.machineGuid] || 'data_entry',
           }))
         : [];
 
@@ -466,6 +469,7 @@ export async function getCloudAdminStore(forceRefresh: boolean = false): Promise
       authorizedDevices: Array.isArray(rawAccessSec?.authorizedDevices)
         ? rawAccessSec.authorizedDevices.filter(Boolean)
         : [],
+      roles: rawAccessSec?.roles && typeof rawAccessSec.roles === 'object' ? rawAccessSec.roles : {},
       updatedAt: rawAccessSec?.updatedAt || new Date().toISOString(),
     };
 
@@ -497,7 +501,7 @@ export async function getCloudAdminStore(forceRefresh: boolean = false): Promise
 /**
  * حفظ ملف الإعدادات الإدارية والصلاحيات الكامل في Google Drive بشكل متسلسل ذري (Atomic Queue)
  */
-async function persistCloudAdminStore(
+export async function persistCloudAdminStore(
   mutator: (current: CloudAdminStore) => CloudAdminStore
 ): Promise<CloudAdminStore> {
   const runSave = async (): Promise<CloudAdminStore> => {
@@ -821,12 +825,15 @@ export async function saveAccessHubSecurity(
     const enabled = secInput.enabled !== undefined ? (Boolean(secInput.enabled) || hasCredentials) : (curSec.enabled || hasCredentials);
     const authDevs = Array.isArray(secInput.authorizedDevices) ? secInput.authorizedDevices : curSec.authorizedDevices || [];
 
+    const roles = secInput.roles !== undefined ? secInput.roles : curSec.roles || {};
+
     const newSec: AccessHubSecurityConfig = {
       enabled,
       username,
       password,
       pinCode,
       authorizedDevices: authDevs,
+      roles,
       updatedAt: new Date().toISOString(),
     };
 

@@ -673,6 +673,7 @@ export async function setAccessHubRole(
   };
 
   mutations.roles[guid] = record;
+  mutations.last_sync = new Date().toISOString();
   await saveAccessHubMutations(mutations);
   return record;
 }

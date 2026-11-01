@@ -52,6 +52,8 @@ interface FileInfo {
 interface ApiResponse {
   success: boolean;
   sig: string;
+  current_role?: 'admin' | 'data_entry' | 'viewer';
+  roles?: Record<string, any>;
   files: FileInfo[];
   total_records: number;
   active_file: string;
@@ -91,6 +93,9 @@ export default function AccessHubPage() {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [page, setPage] = useState<number>(1);
   const [limit, setLimit] = useState<number>(50);
+
+  // Role & Permissions State (RBAC Engine)
+  const [userRole, setUserRole] = useState<'admin' | 'data_entry' | 'viewer'>('data_entry');
 
   // Mobile & Responsive View States
   const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
@@ -260,6 +265,9 @@ export default function AccessHubPage() {
     setError(null);
 
     try {
+      const guid = typeof window !== 'undefined' ? localStorage.getItem('sharecoc_device_guid') || '' : '';
+      const isAdminSession = typeof window !== 'undefined' && localStorage.getItem('sharecoc_admin_session') === 'true';
+
       const params = new URLSearchParams({
         file: activeFile,
         table: activeTable,
@@ -268,14 +276,30 @@ export default function AccessHubPage() {
         limit: limit.toString(),
         sort_dir: sortDir,
         sort_col: sortCol,
+        guid: guid,
       });
 
-      const res = await fetch(`/api/access-hub?${params.toString()}`);
+      const res = await fetch(`/api/access-hub?${params.toString()}`, {
+        headers: {
+          'x-machine-guid': guid,
+          ...(isAdminSession ? { 'x-admin-role': 'admin' } : {}),
+        },
+      });
       const json: ApiResponse = await res.json();
 
       if (json.success) {
         setData(json);
         setLastSig(json.sig);
+        if (json.current_role) {
+          setUserRole(json.current_role);
+        } else if (guid && json.roles && json.roles[guid]?.role) {
+          setUserRole(json.roles[guid].role);
+        } else if (isAdminSession) {
+          setUserRole('admin');
+        } else {
+          setUserRole('data_entry');
+        }
+
         if (!activeTable && json.active_table) {
           setActiveTable(json.active_table);
         }
@@ -352,15 +376,26 @@ export default function AccessHubPage() {
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeTable) return;
+    if (userRole === 'viewer') {
+      alert('عفواً، لا تملك صلاحية إضافة قيود. حساب هذا الجهاز مفعل بصلاحية (مستعلم فقط للقراءة).');
+      return;
+    }
     setIsSubmitting(true);
     try {
+      const guid = typeof window !== 'undefined' ? localStorage.getItem('sharecoc_device_guid') || '' : '';
+      const isAdminSession = typeof window !== 'undefined' && localStorage.getItem('sharecoc_admin_session') === 'true';
       const res = await fetch('/api/access-hub', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-machine-guid': guid,
+          ...(isAdminSession ? { 'x-admin-role': 'admin' } : {}),
+        },
         body: JSON.stringify({
           file: activeFile === 'all' ? (data?.files[0]?.name || '') : activeFile,
           table: activeTable,
           record: formData,
+          guid,
         }),
       });
       const resJson = await res.json();
@@ -384,16 +419,27 @@ export default function AccessHubPage() {
   const handleEditSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedRecord) return;
+    if (userRole === 'viewer') {
+      alert('عفواً، لا تملك صلاحية تعديل القيود. حساب هذا الجهاز مفعل بصلاحية (مستعلم فقط للقراءة).');
+      return;
+    }
     setIsSubmitting(true);
     try {
+      const guid = typeof window !== 'undefined' ? localStorage.getItem('sharecoc_device_guid') || '' : '';
+      const isAdminSession = typeof window !== 'undefined' && localStorage.getItem('sharecoc_admin_session') === 'true';
       const res = await fetch('/api/access-hub', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-machine-guid': guid,
+          ...(isAdminSession ? { 'x-admin-role': 'admin' } : {}),
+        },
         body: JSON.stringify({
           file: selectedRecord._adh_file,
           table: selectedRecord._adh_table,
           id: selectedRecord._adh_id,
           updates: formData,
+          guid,
         }),
       });
       const resJson = await res.json();
@@ -416,10 +462,22 @@ export default function AccessHubPage() {
 
   // Submit Delete Record
   const handleDelete = async (record: any) => {
+    if (userRole !== 'admin') {
+      alert('عفواً، تقتصر صلاحية الحذف على مدير النظام (Super Admin) حصراً.');
+      return;
+    }
     try {
+      const guid = typeof window !== 'undefined' ? localStorage.getItem('sharecoc_device_guid') || '' : '';
+      const isAdminSession = typeof window !== 'undefined' && localStorage.getItem('sharecoc_admin_session') === 'true';
       const res = await fetch(
-        `/api/access-hub?id=${encodeURIComponent(record._adh_id)}`,
-        { method: 'DELETE' }
+        `/api/access-hub?id=${encodeURIComponent(record._adh_id)}&guid=${encodeURIComponent(guid)}`,
+        { 
+          method: 'DELETE',
+          headers: {
+            'x-machine-guid': guid,
+            ...(isAdminSession ? { 'x-admin-role': 'admin' } : {}),
+          }
+        }
       );
       const resJson = await res.json();
       if (resJson.success) {
@@ -444,16 +502,27 @@ export default function AccessHubPage() {
       alert('يرجى اختيار جدول أولاً لإضافة الحقل إليه');
       return;
     }
+    if (userRole !== 'admin') {
+      alert('عفواً، تقتصر إضافة الحقول على مدير النظام (Super Admin) حصراً.');
+      return;
+    }
     setIsSubmitting(true);
     try {
+      const guid = typeof window !== 'undefined' ? localStorage.getItem('sharecoc_device_guid') || '' : '';
+      const isAdminSession = typeof window !== 'undefined' && localStorage.getItem('sharecoc_admin_session') === 'true';
       const res = await fetch('/api/access-hub', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-machine-guid': guid,
+          ...(isAdminSession ? { 'x-admin-role': 'admin' } : {}),
+        },
         body: JSON.stringify({
           action: 'ADD_COLUMN',
           file: activeFile,
           table: activeTable,
           columnName: colTrimmed,
+          guid,
         }),
       });
       const resJson = await res.json();
@@ -476,16 +545,27 @@ export default function AccessHubPage() {
   // Submit Delete Column (حذف حقل من الجدول)
   const handleDeleteColumn = async (colToDelete: string) => {
     if (!activeTable) return;
+    if (userRole !== 'admin') {
+      alert('عفواً، يقتصر حذف الحقول على مدير النظام (Super Admin) حصراً.');
+      return;
+    }
     setIsSubmitting(true);
     try {
+      const guid = typeof window !== 'undefined' ? localStorage.getItem('sharecoc_device_guid') || '' : '';
+      const isAdminSession = typeof window !== 'undefined' && localStorage.getItem('sharecoc_admin_session') === 'true';
       const res = await fetch('/api/access-hub', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-machine-guid': guid,
+          ...(isAdminSession ? { 'x-admin-role': 'admin' } : {}),
+        },
         body: JSON.stringify({
           action: 'DELETE_COLUMN',
           file: activeFile,
           table: activeTable,
           columnName: colToDelete,
+          guid,
         }),
       });
       const resJson = await res.json();
@@ -789,6 +869,22 @@ export default function AccessHubPage() {
             </div>
           )}
 
+          <div className="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold border shadow-2xs">
+            {userRole === 'admin' ? (
+              <span className="text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full flex items-center gap-1">
+                👑 مدير نظام (Super Admin)
+              </span>
+            ) : userRole === 'viewer' ? (
+              <span className="text-blue-800 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full flex items-center gap-1">
+                👁️ مستعلم فقط (Viewer)
+              </span>
+            ) : (
+              <span className="text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full flex items-center gap-1">
+                ✏️ مدخل بيانات (Data Entry)
+              </span>
+            )}
+          </div>
+
           <Link
             href="/admin"
             className="flex items-center gap-1.5 px-3 py-1.5 bg-[#14372e] hover:bg-[#1a473b] text-white rounded-lg text-xs font-semibold transition cursor-pointer"
@@ -822,6 +918,9 @@ export default function AccessHubPage() {
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
+          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border">
+            {userRole === 'admin' ? '👑 مدير' : userRole === 'viewer' ? '👁️ مستعلم' : '✏️ مدخل'}
+          </span>
           <Link
             href="/admin"
             className="flex items-center gap-1 px-2.5 py-1 bg-[#14372e] text-white rounded-lg text-[11px] font-semibold"
@@ -983,13 +1082,15 @@ export default function AccessHubPage() {
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          <button
-            onClick={() => { setFormData({}); setIsAddModalOpen(true); }}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-[#14372e] hover:bg-[#1a473b] text-white rounded-lg text-xs font-bold transition shadow-2xs cursor-pointer"
-          >
-            <Plus className="w-3.5 h-3.5 text-[#ecd58a]" />
-            <span>إضافة قيد</span>
-          </button>
+          {userRole !== 'viewer' && (
+            <button
+              onClick={() => { setFormData({}); setIsAddModalOpen(true); }}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-[#14372e] hover:bg-[#1a473b] text-white rounded-lg text-xs font-bold transition shadow-2xs cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5 text-[#ecd58a]" />
+              <span>إضافة قيد</span>
+            </button>
+          )}
 
           <button
             onClick={handleExportCSV}
@@ -1000,13 +1101,15 @@ export default function AccessHubPage() {
             <span>Excel</span>
           </button>
 
-          <button
-            onClick={() => setIsManageColsModalOpen(true)}
-            className="p-1.5 bg-white hover:bg-[#F7F8FA] border border-[#D0D5DD] text-[#344054] rounded-lg transition cursor-pointer"
-            title="إدارة وحذف الحقول"
-          >
-            <Columns className="w-3.5 h-3.5 text-[#14372e]" />
-          </button>
+          {userRole === 'admin' && (
+            <button
+              onClick={() => setIsManageColsModalOpen(true)}
+              className="p-1.5 bg-white hover:bg-[#F7F8FA] border border-[#D0D5DD] text-[#344054] rounded-lg transition cursor-pointer"
+              title="إدارة وحذف الحقول"
+            >
+              <Columns className="w-3.5 h-3.5 text-[#14372e]" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -1086,13 +1189,15 @@ export default function AccessHubPage() {
 
           {/* زر إضافة قيد وتصدير وإدارة */}
           <div className="flex items-center gap-1 shrink-0">
-            <button
-              onClick={() => { setFormData({}); setIsAddModalOpen(true); }}
-              className="flex items-center gap-1 px-2.5 py-1 bg-[#14372e] text-white rounded-lg text-[11px] font-bold shadow-2xs shrink-0"
-            >
-              <Plus className="w-3.5 h-3.5 text-[#ecd58a]" />
-              <span>قيد جديد</span>
-            </button>
+            {userRole !== 'viewer' && (
+              <button
+                onClick={() => { setFormData({}); setIsAddModalOpen(true); }}
+                className="flex items-center gap-1 px-2.5 py-1 bg-[#14372e] text-white rounded-lg text-[11px] font-bold shadow-2xs shrink-0"
+              >
+                <Plus className="w-3.5 h-3.5 text-[#ecd58a]" />
+                <span>قيد جديد</span>
+              </button>
+            )}
             <button
               onClick={handleExportCSV}
               className="p-1 bg-white border border-[#D0D5DD] text-[#344054] rounded-lg"
@@ -1100,19 +1205,32 @@ export default function AccessHubPage() {
             >
               <Download className="w-3.5 h-3.5 text-[#14372e]" />
             </button>
-            <button
-              onClick={() => setIsManageColsModalOpen(true)}
-              className="p-1 bg-white border border-[#D0D5DD] text-[#344054] rounded-lg"
-              title="إدارة الحقول"
-            >
-              <Columns className="w-3.5 h-3.5 text-[#14372e]" />
-            </button>
+            {userRole === 'admin' && (
+              <button
+                onClick={() => setIsManageColsModalOpen(true)}
+                className="p-1 bg-white border border-[#D0D5DD] text-[#344054] rounded-lg"
+                title="إدارة الحقول"
+              >
+                <Columns className="w-3.5 h-3.5 text-[#14372e]" />
+              </button>
+            )}
           </div>
         </div>
       </div>
 
       {/* 4. منطقة عرض البيانات: البطاقات الذكية (Cards) أو الجدول المركزي (Table) */}
       <div className="flex-1 overflow-auto min-h-0 bg-[#F7F8FA] relative pb-28 md:pb-4">
+        {userRole === 'viewer' && (
+          <div className="m-3 md:m-4 mb-1 md:mb-2 bg-blue-50 border border-blue-200 text-blue-900 px-3.5 py-2.5 rounded-xl text-xs flex items-center justify-between shadow-2xs">
+            <div className="flex items-center gap-2">
+              <Eye className="w-4 h-4 text-blue-600 shrink-0" />
+              <span>
+                <strong>وضع مستعلم فقط (Read-Only):</strong> يمكنك البحث والاستعراض وتصدير Excel. تم حجب أزرار الإضافة والتعديل والحذف بناءً على صلاحيات الإدارة المعتمدة لهذا الجهاز.
+              </span>
+            </div>
+            <span className="text-[10px] bg-blue-200/80 text-blue-900 font-bold px-2 py-0.5 rounded shrink-0 mr-2">للقراءة فقط</span>
+          </div>
+        )}
         {loading ? (
           <div className="h-full flex flex-col items-center justify-center text-center gap-3 p-12">
             <RefreshCw className="w-8 h-8 text-[#14372e] animate-spin" />
@@ -1237,41 +1355,45 @@ export default function AccessHubPage() {
                         <Copy className="w-3.5 h-3.5" />
                       </button>
 
-                      <button
-                        onClick={() => {
-                          setSelectedRecord(row);
-                          setFormData({ ...row });
-                          setIsEditModalOpen(true);
-                        }}
-                        className="p-1.5 rounded-lg bg-white border border-[#E4E7EC] hover:bg-emerald-50 text-[#14372e] transition"
-                        title="تعديل هذا القيد"
-                      >
-                        <Edit2 className="w-3.5 h-3.5" />
-                      </button>
-
-                      {deleteConfirmId === row._adh_id ? (
-                        <div className="flex items-center gap-1">
-                          <button
-                            onClick={() => handleDelete(row)}
-                            className="px-2 py-1 bg-red-600 text-white rounded text-[10px] font-bold cursor-pointer"
-                          >
-                            تأكيد
-                          </button>
-                          <button
-                            onClick={() => setDeleteConfirmId(null)}
-                            className="px-1.5 py-1 text-[#667085] text-[10px] cursor-pointer"
-                          >
-                            إلغاء
-                          </button>
-                        </div>
-                      ) : (
+                      {userRole !== 'viewer' && (
                         <button
-                          onClick={() => setDeleteConfirmId(row._adh_id)}
-                          className="p-1.5 rounded-lg bg-white border border-[#E4E7EC] hover:bg-red-50 text-red-500 transition"
-                          title="حذف هذا القيد"
+                          onClick={() => {
+                            setSelectedRecord(row);
+                            setFormData({ ...row });
+                            setIsEditModalOpen(true);
+                          }}
+                          className="p-1.5 rounded-lg bg-white border border-[#E4E7EC] hover:bg-emerald-50 text-[#14372e] transition"
+                          title="تعديل هذا القيد"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <Edit2 className="w-3.5 h-3.5" />
                         </button>
+                      )}
+
+                      {userRole === 'admin' && (
+                        deleteConfirmId === row._adh_id ? (
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => handleDelete(row)}
+                              className="px-2 py-1 bg-red-600 text-white rounded text-[10px] font-bold cursor-pointer"
+                            >
+                              تأكيد
+                            </button>
+                            <button
+                              onClick={() => setDeleteConfirmId(null)}
+                              className="px-1.5 py-1 text-[#667085] text-[10px] cursor-pointer"
+                            >
+                              إلغاء
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setDeleteConfirmId(row._adh_id)}
+                            className="p-1.5 rounded-lg bg-white border border-[#E4E7EC] hover:bg-red-50 text-red-500 transition"
+                            title="حذف هذا القيد"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )
                       )}
                     </div>
                   </div>
@@ -1367,41 +1489,45 @@ export default function AccessHubPage() {
                             <Eye className="w-3.5 h-3.5" />
                           </button>
 
-                          <button
-                            onClick={() => {
-                              setSelectedRecord(row);
-                              setFormData({ ...row });
-                              setIsEditModalOpen(true);
-                            }}
-                            className="p-1 rounded hover:bg-emerald-100 text-[#14372e] transition cursor-pointer"
-                            title="تعديل هذا القيد"
-                          >
-                            <Edit2 className="w-3.5 h-3.5" />
-                          </button>
-
-                          {deleteConfirmId === row._adh_id ? (
-                            <div className="flex items-center gap-1">
-                              <button
-                                onClick={() => handleDelete(row)}
-                                className="px-1.5 py-0.5 bg-red-600 text-white rounded text-[10px] font-bold cursor-pointer"
-                              >
-                                تأكيد
-                              </button>
-                              <button
-                                onClick={() => setDeleteConfirmId(null)}
-                                className="px-1 py-0.5 text-[#667085] text-[10px] cursor-pointer"
-                              >
-                                إلغاء
-                              </button>
-                            </div>
-                          ) : (
+                          {userRole !== 'viewer' && (
                             <button
-                              onClick={() => setDeleteConfirmId(row._adh_id)}
-                              className="p-1 rounded hover:bg-red-100 text-red-500 transition cursor-pointer"
-                              title="حذف هذا القيد"
+                              onClick={() => {
+                                setSelectedRecord(row);
+                                setFormData({ ...row });
+                                setIsEditModalOpen(true);
+                              }}
+                              className="p-1 rounded hover:bg-emerald-100 text-[#14372e] transition cursor-pointer"
+                              title="تعديل هذا القيد"
                             >
-                              <Trash2 className="w-3.5 h-3.5" />
+                              <Edit2 className="w-3.5 h-3.5" />
                             </button>
+                          )}
+
+                          {userRole === 'admin' && (
+                            deleteConfirmId === row._adh_id ? (
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => handleDelete(row)}
+                                  className="px-1.5 py-0.5 bg-red-600 text-white rounded text-[10px] font-bold cursor-pointer"
+                                >
+                                  تأكيد
+                                </button>
+                                <button
+                                  onClick={() => setDeleteConfirmId(null)}
+                                  className="px-1 py-0.5 text-[#667085] text-[10px] cursor-pointer"
+                                >
+                                  إلغاء
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => setDeleteConfirmId(row._adh_id)}
+                                className="p-1 rounded hover:bg-red-100 text-red-500 transition cursor-pointer"
+                                title="حذف هذا القيد"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )
                           )}
                         </div>
                       </td>
@@ -1786,31 +1912,35 @@ export default function AccessHubPage() {
               </div>
 
               <div className="flex items-center gap-1.5">
-                <button
-                  onClick={() => {
-                    const rec = viewingRecord;
-                    setViewingRecord(null);
-                    setSelectedRecord(rec);
-                    setFormData({ ...rec });
-                    setIsEditModalOpen(true);
-                  }}
-                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-[#14372e] hover:bg-[#1a473b] text-white text-xs font-bold transition shadow-2xs"
-                >
-                  <Edit2 className="w-3.5 h-3.5 text-[#ecd58a]" />
-                  <span>تعديل</span>
-                </button>
+                {userRole !== 'viewer' && (
+                  <button
+                    onClick={() => {
+                      const rec = viewingRecord;
+                      setViewingRecord(null);
+                      setSelectedRecord(rec);
+                      setFormData({ ...rec });
+                      setIsEditModalOpen(true);
+                    }}
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-[#14372e] hover:bg-[#1a473b] text-white text-xs font-bold transition shadow-2xs"
+                  >
+                    <Edit2 className="w-3.5 h-3.5 text-[#ecd58a]" />
+                    <span>تعديل</span>
+                  </button>
+                )}
 
-                <button
-                  onClick={() => {
-                    const rec = viewingRecord;
-                    setViewingRecord(null);
-                    setDeleteConfirmId(rec._adh_id);
-                  }}
-                  className="p-1.5 rounded-lg bg-white border border-[#E4E7EC] hover:bg-red-50 text-red-600 transition"
-                  title="حذف هذا القيد"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+                {userRole === 'admin' && (
+                  <button
+                    onClick={() => {
+                      const rec = viewingRecord;
+                      setViewingRecord(null);
+                      setDeleteConfirmId(rec._adh_id);
+                    }}
+                    className="p-1.5 rounded-lg bg-white border border-[#E4E7EC] hover:bg-red-50 text-red-600 transition"
+                    title="حذف هذا القيد"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
             </div>
 
