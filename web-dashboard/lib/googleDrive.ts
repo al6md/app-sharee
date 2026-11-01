@@ -530,6 +530,13 @@ export async function persistCloudAdminStore(
       fileId: _adminStoreCache?.fileId,
     };
 
+    if (_cloudFilesCache && _cloudFilesCache.data) {
+      _cloudFilesCache.data.permissions = updatedStore.departments;
+      _cloudFilesCache.data.devices = updatedStore.devices;
+      _cloudFilesCache.data.accessHubSecurity = updatedStore.accessHubSecurity;
+    }
+    invalidateCloudFilesCache();
+
     const payload = JSON.stringify(updatedStore, null, 2);
     const buffer = Buffer.from(payload, 'utf-8');
     const stream = new Readable();

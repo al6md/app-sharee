@@ -147,7 +147,17 @@ export default function FilesPage() {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [permissionsMap, setPermissionsMap] = useState<Record<string, DepartmentPermConfig>>({});
-  const [unlockedDepts, setUnlockedDepts] = useState<string[]>([]);
+  const [unlockedDepts, setUnlockedDepts] = useState<string[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = JSON.parse(localStorage.getItem('sharecoc_unlocked_depts') || '[]');
+        return Array.isArray(saved) ? saved : [];
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  });
   const [pinPromptDept, setPinPromptDept] = useState<string | null>(null);
   const [pinPromptTargetFolder, setPinPromptTargetFolder] = useState<string | null>(null);
   const [pinPromptInput, setPinPromptInput] = useState<string>('');
@@ -219,18 +229,29 @@ export default function FilesPage() {
     if (!dept) return true;
     if (!isDeptProtected(dept)) return true;
 
-    // التحقق السحابي الفوري: هل بصمة هذا الجهاز مسجلة ومعتمدة لدى القسم في لوحة الأدمن؟
+    // 1. التحقق السحابي الفوري: هل بصمة هذا الجهاز مسجلة ومعتمدة لدى القسم في لوحة الأدمن؟
     const perm = permissionsMap[dept];
     const currentGuid = deviceGuid || (typeof window !== 'undefined' ? localStorage.getItem('sharecoc_device_guid') || '' : '');
-    if (perm && Array.isArray(perm.authorizedDevices)) {
-      if (currentGuid && perm.authorizedDevices.includes(currentGuid)) {
-        return true;
-      }
-      // إذا حملت السحابة ولم يعد الجهاز موجوداً في قائمة المصرح لهم (قام الأدمن بحذفه من لوحة التحكم)
-      return false;
+    if (perm && Array.isArray(perm.authorizedDevices) && currentGuid && perm.authorizedDevices.includes(currentGuid)) {
+      return true;
     }
 
-    return unlockedDepts.includes(dept);
+    // 2. هل تم فك قفل القسم في الجلسة الحالية النشطة؟
+    if (unlockedDepts.includes(dept)) {
+      return true;
+    }
+
+    // 3. هل تم تسجيل واعتماد هذا الحاسوب مسبقاً وتخزينه محلياً؟
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = JSON.parse(localStorage.getItem('sharecoc_unlocked_depts') || '[]');
+        if (Array.isArray(saved) && saved.includes(dept)) {
+          return true;
+        }
+      } catch {}
+    }
+
+    return false;
   };
 
   const handleSelectDepartment = (deptName: string, targetFolder: string | null = null) => {
@@ -287,15 +308,50 @@ export default function FilesPage() {
         if (typeof window !== 'undefined') {
           localStorage.setItem('sharecoc_device_guid', currentGuid);
           localStorage.setItem('sharecoc_device_name', finalDeviceName);
+          localStorage.setItem('sharecoc_device_registered', 'true');
         }
         setDeviceGuid(currentGuid);
         setDeviceName(finalDeviceName);
 
         if (data.departments) {
           setPermissionsMap(data.departments);
+        } else {
+          setPermissionsMap((prev) => {
+            const cur = prev[pinPromptDept];
+            const curAuth = Array.isArray(cur?.authorizedDevices) ? [...(cur?.authorizedDevices || [])] : [];
+            if (!curAuth.includes(currentGuid)) curAuth.push(currentGuid);
+            const updatedDept: DepartmentPermConfig = cur
+              ? { ...cur, authorizedDevices: curAuth }
+              : {
+                  departmentName: pinPromptDept,
+                  canView: true,
+                  canDownload: true,
+                  canUpload: true,
+                  canCreateFolder: true,
+                  canEdit: true,
+                  canRename: true,
+                  canMove: true,
+                  canDelete: true,
+                  canPermanentDelete: true,
+                  authorizedDevices: curAuth,
+                };
+            return {
+              ...prev,
+              [pinPromptDept]: updatedDept,
+            };
+          });
         }
 
-        setUnlockedDepts((prev) => (prev.includes(pinPromptDept) ? prev : [...prev, pinPromptDept]));
+        setUnlockedDepts((prev) => {
+          const next = prev.includes(pinPromptDept) ? prev : [...prev, pinPromptDept];
+          if (typeof window !== 'undefined') {
+            try {
+              localStorage.setItem('sharecoc_unlocked_depts', JSON.stringify(next));
+            } catch {}
+          }
+          return next;
+        });
+
         setSelectedDept(pinPromptDept);
         setCurrentFolder(pinPromptTargetFolder);
         setPinPromptDept(null);
@@ -664,8 +720,44 @@ export default function FilesPage() {
       });
       const data = await res.json();
       if (data.success) {
+        const myGuid = deviceGuid || (typeof window !== 'undefined' ? localStorage.getItem('sharecoc_device_guid') || '' : '');
+
+        // فحص ما إذا كان الأدمن قد قام صراحةً بحذف هذا الجهاز من لوحة التحكم
+        if (myGuid && Array.isArray(data.devices)) {
+          const isRegistered = typeof window !== 'undefined' && localStorage.getItem('sharecoc_device_registered') === 'true';
+          const stillInDevices = data.devices.some((d: any) => d.machineGuid === myGuid || d.id === myGuid);
+          if (isRegistered && !stillInDevices) {
+            if (typeof window !== 'undefined') {
+              localStorage.removeItem('sharecoc_unlocked_depts');
+              localStorage.removeItem('sharecoc_device_registered');
+            }
+            setUnlockedDepts([]);
+          }
+        }
+
         if (data.permissions && typeof data.permissions === 'object') {
-          setPermissionsMap(data.permissions);
+          setPermissionsMap((prev) => {
+            const merged: Record<string, DepartmentPermConfig> = { ...data.permissions };
+            if (myGuid) {
+              const activeUnlocked = typeof window !== 'undefined'
+                ? (() => {
+                    try { return JSON.parse(localStorage.getItem('sharecoc_unlocked_depts') || '[]'); } catch { return []; }
+                  })()
+                : unlockedDepts;
+              if (Array.isArray(activeUnlocked)) {
+                activeUnlocked.forEach((d: string) => {
+                  if (merged[d]) {
+                    const devs = Array.isArray(merged[d].authorizedDevices) ? [...merged[d].authorizedDevices] : [];
+                    if (!devs.includes(myGuid)) {
+                      devs.push(myGuid);
+                    }
+                    merged[d] = { ...merged[d], authorizedDevices: devs };
+                  }
+                });
+              }
+            }
+            return merged;
+          });
         }
         const loadedFolders: string[] = (data.folders || []).map((f: any) => f.name);
         const fMap: Record<string, string> = {};

@@ -723,6 +723,7 @@ class GoogleDriveClient:
             else:
                 raw_text = str(raw_bytes)
             data = json.loads(raw_text or "{}")
+            self._raw_cloud_devices = list(data.get("devices", []) or []) if isinstance(data, dict) else []
             depts_obj = data.get("departments", data) if isinstance(data, dict) else {}
             normalized = {}
             if isinstance(depts_obj, dict):

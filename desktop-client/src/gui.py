@@ -2700,18 +2700,25 @@ class FileExchangeMainWindow(QMainWindow):
                     is_cloud_authed = my_guid in authed_devices
                     is_locally_authed = target_dept in getattr(self, '_unlocked_pin_depts', set())
 
-                    # إذا كان معتمداً سحابياً، نثبّته في الذاكرة الدائمة المحلية للأبد
+                    # تتبع تأكيد الاعتماد السحابي لكشف إذا قام الأدمن بحذف الجهاز لاحقاً
+                    if not hasattr(self, '_cloud_registration_confirmed'):
+                        self._cloud_registration_confirmed = {}
+
                     if is_cloud_authed:
+                        self._cloud_registration_confirmed[target_dept] = True
                         if not is_locally_authed:
                             self._save_persistent_unlocked_dept(target_dept)
                             is_locally_authed = True
-                    elif is_locally_authed:
-                        # سحب الاعتماد فقط إذا كنا متصلين بالسحابة وتم جلب البيانات الحية بنجاح من Google Drive
-                        # وتأكدنا أن السحابة استجابت ولم تجد هذا الجهاز في الأجهزة المعتمدة
-                        has_live_cloud = getattr(self.client, '_has_fetched_cloud_perms', False)
-                        if has_live_cloud and isinstance(authed_devices, list):
-                            self._remove_persistent_unlocked_dept(target_dept)
-                            is_locally_authed = False
+                    else:
+                        # إذا كان مسجلاً سحابياً مسبقاً وتأكد حذفه من قِبل الأدمن من قائمة السحابة
+                        was_confirmed = self._cloud_registration_confirmed.get(target_dept, False)
+                        cloud_devs = getattr(self.client, '_raw_cloud_devices', None) if hasattr(self, 'client') and self.client else None
+                        if was_confirmed and cloud_devs is not None and isinstance(cloud_devs, list) and len(cloud_devs) > 0:
+                            has_dev = any(d.get('machineGuid') == my_guid or d.get('id') == my_guid for d in cloud_devs)
+                            if not has_dev:
+                                self._remove_persistent_unlocked_dept(target_dept)
+                                is_locally_authed = False
+                                self._cloud_registration_confirmed[target_dept] = False
 
                     is_already_authed = is_cloud_authed or is_locally_authed
 
@@ -2776,12 +2783,19 @@ class FileExchangeMainWindow(QMainWindow):
                         self._save_persistent_unlocked_dept(target_dept)
 
                         # تسجيل واعتماد الجهاز سحابياً في لوحة تحكم الأدمن في Google Drive
+                        rule.setdefault('authorized_devices', [])
+                        if my_guid not in rule['authorized_devices']:
+                            rule['authorized_devices'].append(my_guid)
+                        if 'authorizedDevices' in rule and my_guid not in rule['authorizedDevices']:
+                            rule['authorizedDevices'].append(my_guid)
+
                         if hasattr(self, 'client') and self.client:
-                            rule.setdefault('authorized_devices', [])
-                            if my_guid not in rule['authorized_devices']:
-                                rule['authorized_devices'].append(my_guid)
-                            if 'authorizedDevices' in rule and my_guid not in rule['authorizedDevices']:
-                                rule['authorizedDevices'].append(my_guid)
+                            if hasattr(self.client, '_cached_permissions') and isinstance(self.client._cached_permissions, dict):
+                                cp = self.client._cached_permissions.get(target_dept)
+                                if isinstance(cp, dict):
+                                    ad = cp.setdefault('authorizedDevices', [])
+                                    if my_guid not in ad:
+                                        ad.append(my_guid)
 
                             import threading
                             threading.Thread(
@@ -2789,6 +2803,33 @@ class FileExchangeMainWindow(QMainWindow):
                                 args=(target_dept, my_guid, computer_name, "Windows Desktop"),
                                 daemon=True
                             ).start()
+
+                        # المزامنة المباشرة عبر API الويب لضمان تسجيل وظهور الجهاز في لوحة الأدمن للأبد
+                        entered_user = ent_u if dept_user else ""
+                        entered_pass = ent_p if dept_user else clean_entered
+
+                        def _sync_dept_reg_to_web():
+                            try:
+                                import requests
+                                requests.post(
+                                    "https://web-dashboard-pi-self.vercel.app/api/drive/permissions",
+                                    json={
+                                        "action": "REGISTER_DEPARTMENT_DEVICE",
+                                        "departmentName": target_dept,
+                                        "username": entered_user,
+                                        "password": entered_pass,
+                                        "machineGuid": my_guid,
+                                        "deviceName": computer_name,
+                                        "os": "Windows 11 Desktop",
+                                        "user": computer_name
+                                    },
+                                    timeout=8
+                                )
+                            except Exception:
+                                pass
+
+                        import threading
+                        threading.Thread(target=_sync_dept_reg_to_web, daemon=True).start()
 
                         # تحديث فوري للأيقونات في القائمة الجانبية (إظهار 🔓)
                         self._refresh_departments_sidebar()
