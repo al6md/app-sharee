@@ -82,7 +82,16 @@ export async function POST(req: NextRequest) {
     const { action, departmentName, permission, permissions } = body || {};
 
     const adminToken = req.headers.get('x-admin-token') || req.headers.get('authorization') || body?.adminToken;
-    const isCallerAdmin = isValidAdminToken(adminToken);
+    let isCallerAdmin = isValidAdminToken(adminToken);
+
+    // التحقق الاحتياطي بكلمة مرور الأدمن إذا أُرسلت في الطلب
+    if (!isCallerAdmin && (body?.adminPassword || body?.currentPassword)) {
+      const passToCheck = String(body.adminPassword || body.currentPassword || '').trim();
+      const store = await getCloudAdminStore(false);
+      if (passToCheck && passToCheck === store.adminCredentials.password) {
+        isCallerAdmin = true;
+      }
+    }
 
     if (action === 'UPDATE_CREDENTIALS') {
       const currentPassword = String(body.currentPassword || '').trim();

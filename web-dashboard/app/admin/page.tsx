@@ -104,7 +104,7 @@ export default function AdminControlPage() {
   const [showLoginPass, setShowLoginPass] = useState<boolean>(false);
   const [loginError, setLoginError] = useState<string>('');
   const [loggingIn, setLoggingIn] = useState<boolean>(false);
-  const [adminToken, setAdminToken] = useState<string>(() => (typeof window !== 'undefined' ? sessionStorage.getItem('sharecoc_admin_token') || '' : ''));
+  const [adminToken, setAdminToken] = useState<string>(() => (typeof window !== 'undefined' ? localStorage.getItem('sharecoc_admin_token') || sessionStorage.getItem('sharecoc_admin_token') || '' : ''));
 
   // نافذة وتبويب تعديل بيانات الدخول (اليوزر والباسورد)
   const [showCredentialsModal, setShowCredentialsModal] = useState<boolean>(false);
@@ -341,8 +341,12 @@ export default function AdminControlPage() {
           setNewUserInput(localUser);
 
           const sessionActive = localStorage.getItem('sharecoc_admin_session');
+          const savedToken = localStorage.getItem('sharecoc_admin_token') || sessionStorage.getItem('sharecoc_admin_token');
           if (sessionActive === 'true') {
             setIsAuthenticated(true);
+            if (savedToken) {
+              setAdminToken(savedToken);
+            }
           }
 
           const urlParams = new URLSearchParams(window.location.search);
@@ -542,9 +546,9 @@ export default function AdminControlPage() {
   }, [isAuthenticated]);
 
   // ترويسات الصلاحية الإدارية الكاملة لمركز بيانات Access
-  const getAdminHeaders = () => {
+  const getAdminHeaders = (overrideToken?: string) => {
     const guid = typeof window !== 'undefined' ? localStorage.getItem('sharecoc_device_guid') || '' : '';
-    const token = adminToken || (typeof window !== 'undefined' ? sessionStorage.getItem('sharecoc_admin_token') || '' : '');
+    const token = overrideToken || adminToken || (typeof window !== 'undefined' ? localStorage.getItem('sharecoc_admin_token') || sessionStorage.getItem('sharecoc_admin_token') || '' : '');
     return {
       'Content-Type': 'application/json',
       'x-admin-token': token,
@@ -967,6 +971,7 @@ export default function AdminControlPage() {
       if (data.success && data.valid && data.adminToken) {
         setAdminToken(data.adminToken);
         if (typeof window !== 'undefined') {
+          localStorage.setItem('sharecoc_admin_token', data.adminToken);
           sessionStorage.setItem('sharecoc_admin_token', data.adminToken);
           localStorage.setItem('sharecoc_admin_session', 'true');
         }
@@ -1022,6 +1027,7 @@ export default function AdminControlPage() {
       setIsAuthenticated(false);
       setAdminToken('');
       if (typeof window !== 'undefined') {
+        localStorage.removeItem('sharecoc_admin_token');
         sessionStorage.removeItem('sharecoc_admin_token');
         localStorage.removeItem('sharecoc_admin_session');
       }
@@ -1673,9 +1679,43 @@ export default function AdminControlPage() {
     try {
       setActionLoading(true);
       const targetGuid = selectedDeviceForPerms.guid || selectedDeviceForPerms.id;
-      const res = await fetch('/api/drive/permissions', {
+      let token = adminToken || (typeof window !== 'undefined' ? localStorage.getItem('sharecoc_admin_token') || sessionStorage.getItem('sharecoc_admin_token') || '' : '');
+
+      // إذا لم يتوفر التوكن المشفر (مثلاً جلسة سابقة قبل التحديث)، نطلب كلمة المرور لتوثيق الجلسة فوراً
+      if (!token) {
+        const pass = prompt('لتأكيد جلسة الإدارة وتطبيق الصلاحيات المخصصة سحابياً، يرجى إدخال كلمة مرور الأدمن:');
+        if (!pass) {
+          setActionLoading(false);
+          return;
+        }
+        const verifyRes = await fetch('/api/drive/permissions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'VERIFY_CREDENTIALS',
+            username: adminUsername || 'admin',
+            password: pass.trim(),
+          }),
+        });
+        const verifyData = await verifyRes.json();
+        if (verifyData.success && verifyData.valid && verifyData.adminToken) {
+          token = verifyData.adminToken;
+          setAdminToken(token);
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('sharecoc_admin_token', token);
+            sessionStorage.setItem('sharecoc_admin_token', token);
+            localStorage.setItem('sharecoc_admin_session', 'true');
+          }
+        } else {
+          alert('كلمة المرور غير صحيحة، تعذر توثيق الجلسة.');
+          setActionLoading(false);
+          return;
+        }
+      }
+
+      let res = await fetch('/api/drive/permissions', {
         method: 'POST',
-        headers: getAdminHeaders(),
+        headers: getAdminHeaders(token),
         body: JSON.stringify({
           action: 'UPDATE_DEVICE_PERMISSIONS',
           machineGuid: targetGuid,
@@ -1687,6 +1727,47 @@ export default function AdminControlPage() {
           departmentPermissions: permsModalDeptActions,
         }),
       });
+
+      // إذا كان التوكن منتهي الصلاحية أو غير معتمد، نحاول التوثيق بكلمة المرور فوراً
+      if (res.status === 401 || res.status === 403) {
+        const pass = prompt('انتهت صلاحية جلسة الأدمن الحالية. يرجى إدخال كلمة مرور مسؤول النظام للتجديد الفوري والحفظ:');
+        if (pass) {
+          const verifyRes = await fetch('/api/drive/permissions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'VERIFY_CREDENTIALS',
+              username: adminUsername || 'admin',
+              password: pass.trim(),
+            }),
+          });
+          const verifyData = await verifyRes.json();
+          if (verifyData.success && verifyData.valid && verifyData.adminToken) {
+            token = verifyData.adminToken;
+            setAdminToken(token);
+            if (typeof window !== 'undefined') {
+              localStorage.setItem('sharecoc_admin_token', token);
+              sessionStorage.setItem('sharecoc_admin_token', token);
+            }
+            res = await fetch('/api/drive/permissions', {
+              method: 'POST',
+              headers: getAdminHeaders(token),
+              body: JSON.stringify({
+                action: 'UPDATE_DEVICE_PERMISSIONS',
+                machineGuid: targetGuid,
+                name: selectedDeviceForPerms.name,
+                user: selectedDeviceForPerms.user,
+                authorizedDepts: permsModalAuthorizedDepts,
+                accessRole: permsModalAccessRole,
+                allowedAccessSections: permsModalAllowedSections,
+                departmentPermissions: permsModalDeptActions,
+                adminPassword: pass.trim(),
+              }),
+            });
+          }
+        }
+      }
+
       const data = await res.json();
       if (data.success) {
         setToastMessage({
