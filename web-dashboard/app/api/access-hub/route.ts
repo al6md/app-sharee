@@ -266,11 +266,19 @@ async function resolveCallerContext(req: NextRequest, body?: any): Promise<Calle
       return { role: 'admin', allowedSections: [], guid: 'admin' };
     }
 
+    // 1.1 فحص جلسة لوحة الأدمن المفتوحة
+    const adminHeader = req.headers.get('x-admin-role') || req.headers.get('x-admin-session');
+    const referer = req.headers.get('referer') || '';
+    if (adminHeader === 'admin' || adminHeader === 'true' || body?.isAdmin === true || referer.includes('/admin')) {
+      return { role: 'admin', allowedSections: [], guid: 'admin' };
+    }
+
     // 2. استخراج معرف العتاد الفريد (Machine GUID)
     const url = new URL(req.url);
+    const isTargetRoleAction = body?.action === 'SET_ROLE' || body?.action === 'DELETE_ROLE';
     const guid = req.headers.get('x-machine-guid') || 
                  url.searchParams.get('guid') || 
-                 body?.guid || 
+                 (!isTargetRoleAction ? body?.guid : '') || 
                  body?.machineGuid || 
                  '';
 
