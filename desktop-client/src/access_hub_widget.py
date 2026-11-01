@@ -1047,6 +1047,7 @@ class AccessHubWidget(QWidget):
         self.table_widget.horizontalHeader().sectionClicked.connect(self._on_header_clicked)
         self.table_widget.setFont(QFont("IBM Plex Sans Arabic", 10))
         self.table_widget.doubleClicked.connect(self._on_table_double_clicked)
+        self.table_widget.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
 
         # قائمة الزر الأيمن المخصصة
         self.table_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -1084,6 +1085,20 @@ class AccessHubWidget(QWidget):
                 background-color: #EDF5F2;
                 color: #14372e;
                 font-weight: bold;
+            }
+            QScrollBar:horizontal {
+                height: 12px;
+                background: #EDF2EF;
+                border-top: 1px solid #D0D5DD;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:horizontal {
+                background: #14372e;
+                min-width: 25px;
+                border-radius: 5px;
+            }
+            QScrollBar::handle:horizontal:hover {
+                background: #c59b27;
             }
         """)
         main_layout.addWidget(self.table_widget, stretch=1)

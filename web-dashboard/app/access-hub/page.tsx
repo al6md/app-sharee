@@ -17,6 +17,8 @@ import {
   X,
   ChevronRight,
   ChevronLeft,
+  ChevronsRight,
+  ChevronsLeft,
   ArrowUpDown,
   ArrowDown,
   ArrowUp,
@@ -247,6 +249,107 @@ export default function AccessHubPage() {
   const [newColName, setNewColName] = useState<string>('');
   const [isManageColsModalOpen, setIsManageColsModalOpen] = useState<boolean>(false);
   const [deleteColConfirm, setDeleteColConfirm] = useState<string | null>(null);
+
+  // حالة وأدوات شريط التمرير العرضي بين الحقول بالماوس (Horizontal Field Navigation & Scrolling)
+  const tableContainerRef = useRef<HTMLDivElement>(null);
+  const [scrollPercent, setScrollPercent] = useState<number>(0);
+  const [selectedColToScroll, setSelectedColToScroll] = useState<string>('');
+  const [isDragging, setIsDragging] = useState<boolean>(false);
+  const dragStartX = useRef<number>(0);
+  const dragStartScroll = useRef<number>(0);
+  const hasMovedRef = useRef<boolean>(false);
+
+  const handleTableScroll = () => {
+    if (!tableContainerRef.current) return;
+    const el = tableContainerRef.current;
+    const max = el.scrollWidth - el.clientWidth;
+    if (max <= 0) {
+      setScrollPercent(0);
+      return;
+    }
+    const currentScroll = Math.abs(el.scrollLeft);
+    const pct = Math.min(100, Math.max(0, Math.round((currentScroll / max) * 100)));
+    setScrollPercent(pct);
+  };
+
+  const handleSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = Number(e.target.value);
+    setScrollPercent(val);
+    if (!tableContainerRef.current) return;
+    const el = tableContainerRef.current;
+    const max = el.scrollWidth - el.clientWidth;
+    if (max <= 0) return;
+
+    const target = (val / 100) * max;
+    el.scrollLeft = -target;
+    if (el.scrollLeft === 0 && target > 0) {
+      el.scrollLeft = target;
+    }
+  };
+
+  const scrollToStart = () => {
+    if (!tableContainerRef.current) return;
+    tableContainerRef.current.scrollTo({ left: 0, behavior: 'smooth' });
+  };
+
+  const scrollToEnd = () => {
+    if (!tableContainerRef.current) return;
+    const el = tableContainerRef.current;
+    const max = el.scrollWidth - el.clientWidth;
+    el.scrollTo({ left: -max, behavior: 'smooth' });
+    if (el.scrollLeft === 0 && max > 0) {
+      el.scrollTo({ left: max, behavior: 'smooth' });
+    }
+  };
+
+  const scrollColumns = (direction: 'left' | 'right', step = 320) => {
+    if (!tableContainerRef.current) return;
+    const el = tableContainerRef.current;
+    const delta = direction === 'left' ? -step : step;
+    el.scrollBy({ left: delta, behavior: 'smooth' });
+  };
+
+  const handleJumpToColumn = (colName: string) => {
+    setSelectedColToScroll(colName);
+    if (!colName || !tableContainerRef.current) return;
+    const th = tableContainerRef.current.querySelector(`th[data-col="${CSS.escape(colName)}"]`);
+    if (th) {
+      th.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    }
+  };
+
+  const handleHeaderWheel = (e: React.WheelEvent) => {
+    if (!tableContainerRef.current) return;
+    if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+      e.preventDefault();
+      tableContainerRef.current.scrollBy({ left: -e.deltaY * 1.5, behavior: 'auto' });
+    }
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    if (target.closest('button, a, input, select, textarea')) return;
+
+    if (!tableContainerRef.current) return;
+    setIsDragging(true);
+    hasMovedRef.current = false;
+    dragStartX.current = e.clientX;
+    dragStartScroll.current = tableContainerRef.current.scrollLeft;
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isDragging || !tableContainerRef.current) return;
+    const deltaX = e.clientX - dragStartX.current;
+    if (Math.abs(deltaX) > 4) {
+      hasMovedRef.current = true;
+    }
+    tableContainerRef.current.scrollLeft = dragStartScroll.current - deltaX;
+  };
+
+  const handleMouseUp = () => {
+    setIsDragging(false);
+  };
 
   // قراءة معلمات الرابط عند الانتقال
   useEffect(() => {
@@ -1219,9 +1322,9 @@ export default function AccessHubPage() {
       </div>
 
       {/* 4. منطقة عرض البيانات: البطاقات الذكية (Cards) أو الجدول المركزي (Table) */}
-      <div className="flex-1 overflow-auto min-h-0 bg-[#F7F8FA] relative pb-28 md:pb-4">
+      <div className={`flex-1 min-h-0 bg-[#F7F8FA] relative ${viewMode === 'cards' ? 'overflow-auto pb-28 md:pb-4' : 'flex flex-col overflow-hidden'}`}>
         {userRole === 'viewer' && (
-          <div className="m-3 md:m-4 mb-1 md:mb-2 bg-blue-50 border border-blue-200 text-blue-900 px-3.5 py-2.5 rounded-xl text-xs flex items-center justify-between shadow-2xs">
+          <div className="m-3 md:m-4 mb-1 md:mb-2 bg-blue-50 border border-blue-200 text-blue-900 px-3.5 py-2.5 rounded-xl text-xs flex items-center justify-between shadow-2xs shrink-0">
             <div className="flex items-center gap-2">
               <Eye className="w-4 h-4 text-blue-600 shrink-0" />
               <span>
@@ -1402,146 +1505,259 @@ export default function AccessHubPage() {
             })}
           </div>
         ) : (
-          /* عرض الجدول المركزي عالي الدقة */
-          <div className="w-full overflow-x-auto">
-            <table className="w-full text-right text-xs border-collapse">
-              <thead className="sticky top-0 z-10 bg-[#EDF2EF] border-b-2 border-[#D0D5DD] text-[#14372e] font-bold text-xs shadow-xs">
-                <tr>
-                  <th className="py-2.5 px-3 w-12 text-center border-l border-[#D0D5DD]/40 bg-[#EDF2EF]">#</th>
-                  {activeFile === 'all' && (
-                    <th className="py-2.5 px-3.5 whitespace-nowrap border-l border-[#D0D5DD]/40 bg-[#EDF2EF]">القسم</th>
-                  )}
-                  {data.columns.map((col) => {
-                    const isSorted = sortCol === col || (sortCol === 'date_auto' && data.date_columns?.[0] === col);
-                    return (
-                      <th
-                        key={col}
-                        className="py-2.5 px-3.5 whitespace-nowrap border-l border-[#D0D5DD]/40 bg-[#EDF2EF] select-none group"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <button
-                            onClick={() => handleColumnHeaderClick(col)}
-                            className="flex items-center gap-1 hover:text-[#c59b27] transition cursor-pointer font-bold"
-                            title="اضغط للفرز حسب هذا العمود"
-                          >
-                            <span>{col}</span>
-                            {isSorted && sortDir === 'desc' && (
-                              <ArrowDown className="w-3 h-3 text-[#14372e]" />
-                            )}
-                            {isSorted && sortDir === 'asc' && (
-                              <ArrowUp className="w-3 h-3 text-[#14372e]" />
-                            )}
-                            {!isSorted && (
-                              <ArrowUpDown className="w-2.5 h-2.5 text-[#98A2B3] opacity-0 group-hover:opacity-100 transition" />
-                            )}
-                          </button>
+          /* عرض الجدول المركزي عالي الدقة مع شريط تمرير الحقول العرضي البارز */
+          <div className="flex-1 flex flex-col min-h-0 bg-[#F7F8FA] relative overflow-hidden">
+            {/* شريط تمرير الحقول العرضي بالماوس (Horizontal Field Navigation Bar) */}
+            <div 
+              onWheel={handleHeaderWheel}
+              className="bg-[#EDF2EF] border-y border-[#D0D5DD] px-3 py-1.5 flex items-center justify-between gap-2 shrink-0 select-none shadow-2xs z-20"
+            >
+              {/* عنوان وأزرار التمرير بالماوس */}
+              <div className="flex items-center gap-1.5 shrink-0">
+                <div className="flex items-center gap-1 text-[#14372e] font-bold text-xs pl-1">
+                  <SlidersHorizontal className="w-3.5 h-3.5 text-[#14372e]" />
+                  <span className="hidden sm:inline">تمرير الحقول:</span>
+                </div>
 
-                          <button
-                            onClick={() => setDeleteColConfirm(col)}
-                            className="text-[#98A2B3] hover:text-red-600 p-0.5 rounded transition opacity-0 group-hover:opacity-100 cursor-pointer"
-                            title={`حذف حقل "${col}"`}
-                          >
-                            <X className="w-3 h-3" />
-                          </button>
-                        </div>
-                      </th>
+                <div className="flex items-center gap-1 bg-white p-0.5 rounded-lg border border-[#D0D5DD] shadow-2xs">
+                  <button
+                    type="button"
+                    onClick={scrollToStart}
+                    className="flex items-center gap-0.5 px-2 py-1 text-[11px] font-bold text-[#14372e] hover:bg-[#14372e] hover:text-white rounded transition cursor-pointer"
+                    title="الانتقال إلى أول حقل (# والاسم)"
+                  >
+                    <ChevronsRight className="w-3.5 h-3.5" />
+                    <span className="hidden md:inline">أول الحقول</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => scrollColumns('right', 300)}
+                    className="flex items-center gap-0.5 px-2 py-1 text-[11px] font-bold text-[#344054] hover:bg-[#14372e] hover:text-white rounded transition cursor-pointer"
+                    title="تمرير لليمين (الحقول السابقة)"
+                  >
+                    <ChevronRight className="w-3.5 h-3.5" />
+                    <span>يمين</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => scrollColumns('left', 300)}
+                    className="flex items-center gap-0.5 px-2 py-1 text-[11px] font-bold text-[#344054] hover:bg-[#14372e] hover:text-white rounded transition cursor-pointer"
+                    title="تمرير لليسار (الحقول التالية)"
+                  >
+                    <span>يسار</span>
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={scrollToEnd}
+                    className="flex items-center gap-0.5 px-2 py-1 text-[11px] font-bold text-[#14372e] hover:bg-[#14372e] hover:text-white rounded transition cursor-pointer"
+                    title="الانتقال إلى آخر حقل"
+                  >
+                    <span className="hidden md:inline">آخر الحقول</span>
+                    <ChevronsLeft className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* شريط السحب التفاعلي بالماوس (Range Slider) */}
+              <div className="flex-1 max-w-xs md:max-w-sm lg:max-w-md mx-2 flex items-center gap-2">
+                <span className="text-[10px] text-[#667085] font-bold shrink-0 hidden lg:inline">البداية</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={scrollPercent}
+                  onChange={handleSliderChange}
+                  className="field-range-slider w-full h-2 cursor-pointer"
+                  title="اسحب شريط التمرير بالماوس للتنقل بين الحقول عرضياً"
+                />
+                <span className="text-[10px] text-[#667085] font-bold shrink-0 hidden lg:inline">النهاية</span>
+              </div>
+
+              {/* القفز المباشر لأي حقل + تنبيه سحب الماوس */}
+              <div className="flex items-center gap-2 shrink-0">
+                <div className="flex items-center gap-1">
+                  <span className="text-[11px] text-[#667085] hidden xl:inline">انتقال لحقل:</span>
+                  <select
+                    value={selectedColToScroll}
+                    onChange={(e) => handleJumpToColumn(e.target.value)}
+                    className="bg-white border border-[#D0D5DD] text-[#14372e] font-bold text-[11px] rounded-md px-2 py-1 outline-none cursor-pointer hover:border-[#14372e] shadow-2xs max-w-[130px] truncate"
+                    title="اختر أي حقل للانتقال إليه مباشرة"
+                  >
+                    <option value="">اختر حقل...</option>
+                    {data.columns.map((col) => (
+                      <option key={col} value={col}>
+                        {col}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <span className="text-[11px] font-mono font-bold bg-white text-[#14372e] px-2 py-0.5 rounded border border-[#D0D5DD] shadow-2xs">
+                  {data.columns.length} حقل
+                </span>
+              </div>
+            </div>
+
+            {/* حاوية الجدول مع التمرير الأفقي والعمودي المدمج */}
+            <div 
+              ref={tableContainerRef}
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseUp}
+              onScroll={handleTableScroll}
+              className={`flex-1 min-h-0 overflow-auto w-full table-scroll-container bg-white relative ${
+                isDragging ? 'cursor-grabbing select-none' : 'cursor-default'
+              }`}
+            >
+              <table className="w-full text-right text-xs border-collapse">
+                <thead 
+                  onWheel={handleHeaderWheel}
+                  className="sticky top-0 z-10 bg-[#EDF2EF] border-b-2 border-[#D0D5DD] text-[#14372e] font-bold text-xs shadow-xs"
+                >
+                  <tr>
+                    <th data-col="#first-col" className="py-2.5 px-3 w-12 text-center border-l border-[#D0D5DD]/40 bg-[#EDF2EF]">#</th>
+                    {activeFile === 'all' && (
+                      <th data-col="القسم" className="py-2.5 px-3.5 whitespace-nowrap border-l border-[#D0D5DD]/40 bg-[#EDF2EF]">القسم</th>
+                    )}
+                    {data.columns.map((col) => {
+                      const isSorted = sortCol === col || (sortCol === 'date_auto' && data.date_columns?.[0] === col);
+                      return (
+                        <th
+                          key={col}
+                          data-col={col}
+                          className="py-2.5 px-3.5 whitespace-nowrap border-l border-[#D0D5DD]/40 bg-[#EDF2EF] select-none group"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <button
+                              onClick={() => handleColumnHeaderClick(col)}
+                              className="flex items-center gap-1 hover:text-[#c59b27] transition cursor-pointer font-bold"
+                              title="اضغط للفرز حسب هذا العمود"
+                            >
+                              <span>{col}</span>
+                              {isSorted && sortDir === 'desc' && (
+                                <ArrowDown className="w-3 h-3 text-[#14372e]" />
+                              )}
+                              {isSorted && sortDir === 'asc' && (
+                                <ArrowUp className="w-3 h-3 text-[#14372e]" />
+                              )}
+                              {!isSorted && (
+                                <ArrowUpDown className="w-2.5 h-2.5 text-[#98A2B3] opacity-0 group-hover:opacity-100 transition" />
+                              )}
+                            </button>
+
+                            <button
+                              onClick={() => setDeleteColConfirm(col)}
+                              className="text-[#98A2B3] hover:text-red-600 p-0.5 rounded transition opacity-0 group-hover:opacity-100 cursor-pointer"
+                              title={`حذف حقل "${col}"`}
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        </th>
+                      );
+                    })}
+                    <th data-col="#last-col" className="py-2.5 px-3 text-center w-24 whitespace-nowrap bg-[#EDF2EF]">الإجراءات</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#E4E7EC]">
+                  {data.rows.map((row, idx) => {
+                    const rowNum = (page - 1) * limit + idx + 1;
+                    return (
+                      <tr
+                        key={row._adh_id || idx}
+                        onClick={(e) => {
+                          // فتح التفاصيل عند النقر ما لم يكن الهدف زراً أو بعد السحب بالماوس
+                          if (hasMovedRef.current) return;
+                          if ((e.target as HTMLElement).closest('button, a')) return;
+                          setViewingRecord(row);
+                        }}
+                        className="hover:bg-amber-50/50 even:bg-[#FAFAFA] odd:bg-white transition-colors group cursor-pointer"
+                      >
+                        <td className="py-2.5 px-3 text-center text-[#98A2B3] font-mono text-[11px] border-l border-[#E4E7EC]/60">{rowNum}</td>
+
+                        {activeFile === 'all' && (
+                          <td className="py-2.5 px-3.5 whitespace-nowrap border-l border-[#E4E7EC]/60">
+                            <span className="inline-flex items-center gap-1 bg-[#14372e]/5 text-[#14372e] font-semibold px-2 py-0.5 rounded text-[11px] border border-[#14372e]/10">
+                              {getShortFileName(row._adh_file)}
+                            </span>
+                          </td>
+                        )}
+
+                        {data.columns.map((col) => (
+                          <td key={col} className="py-2.5 px-3.5 whitespace-nowrap max-w-xs truncate border-l border-[#E4E7EC]/40">
+                            {renderCellContent(col, row[col])}
+                          </td>
+                        ))}
+
+                        <td className="py-2 px-3 text-center whitespace-nowrap">
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              onClick={() => setViewingRecord(row)}
+                              className="p-1 rounded hover:bg-slate-100 text-[#667085] transition cursor-pointer"
+                              title="تفاصيل القيد"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                            </button>
+
+                            {userRole !== 'viewer' && (
+                              <button
+                                onClick={() => {
+                                  setSelectedRecord(row);
+                                  setFormData({ ...row });
+                                  setIsEditModalOpen(true);
+                                }}
+                                className="p-1 rounded hover:bg-emerald-100 text-[#14372e] transition cursor-pointer"
+                                title="تعديل هذا القيد"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+
+                            {userRole === 'admin' && (
+                              deleteConfirmId === row._adh_id ? (
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    onClick={() => handleDelete(row)}
+                                    className="px-1.5 py-0.5 bg-red-600 text-white rounded text-[10px] font-bold cursor-pointer"
+                                  >
+                                    تأكيد
+                                  </button>
+                                  <button
+                                    onClick={() => setDeleteConfirmId(null)}
+                                    className="px-1 py-0.5 text-[#667085] text-[10px] cursor-pointer"
+                                  >
+                                    إلغاء
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  onClick={() => setDeleteConfirmId(row._adh_id)}
+                                  className="p-1 rounded hover:bg-red-100 text-red-500 transition cursor-pointer"
+                                  title="حذف هذا القيد"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )
+                            )}
+                          </div>
+                        </td>
+                      </tr>
                     );
                   })}
-                  <th className="py-2.5 px-3 text-center w-24 whitespace-nowrap bg-[#EDF2EF]">الإجراءات</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#E4E7EC]">
-                {data.rows.map((row, idx) => {
-                  const rowNum = (page - 1) * limit + idx + 1;
-                  return (
-                    <tr
-                      key={row._adh_id || idx}
-                      onClick={(e) => {
-                        // فتح التفاصيل عند النقر ما لم يكن الهدف زراً
-                        if ((e.target as HTMLElement).closest('button, a')) return;
-                        setViewingRecord(row);
-                      }}
-                      className="hover:bg-amber-50/50 even:bg-[#FAFAFA] odd:bg-white transition-colors group cursor-pointer"
-                    >
-                      <td className="py-2.5 px-3 text-center text-[#98A2B3] font-mono text-[11px] border-l border-[#E4E7EC]/60">{rowNum}</td>
-
-                      {activeFile === 'all' && (
-                        <td className="py-2.5 px-3.5 whitespace-nowrap border-l border-[#E4E7EC]/60">
-                          <span className="inline-flex items-center gap-1 bg-[#14372e]/5 text-[#14372e] font-semibold px-2 py-0.5 rounded text-[11px] border border-[#14372e]/10">
-                            {getShortFileName(row._adh_file)}
-                          </span>
-                        </td>
-                      )}
-
-                      {data.columns.map((col) => (
-                        <td key={col} className="py-2.5 px-3.5 whitespace-nowrap max-w-xs truncate border-l border-[#E4E7EC]/40">
-                          {renderCellContent(col, row[col])}
-                        </td>
-                      ))}
-
-                      <td className="py-2 px-3 text-center whitespace-nowrap">
-                        <div className="flex items-center justify-center gap-1">
-                          <button
-                            onClick={() => setViewingRecord(row)}
-                            className="p-1 rounded hover:bg-slate-100 text-[#667085] transition cursor-pointer"
-                            title="تفاصيل القيد"
-                          >
-                            <Eye className="w-3.5 h-3.5" />
-                          </button>
-
-                          {userRole !== 'viewer' && (
-                            <button
-                              onClick={() => {
-                                setSelectedRecord(row);
-                                setFormData({ ...row });
-                                setIsEditModalOpen(true);
-                              }}
-                              className="p-1 rounded hover:bg-emerald-100 text-[#14372e] transition cursor-pointer"
-                              title="تعديل هذا القيد"
-                            >
-                              <Edit2 className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-
-                          {userRole === 'admin' && (
-                            deleteConfirmId === row._adh_id ? (
-                              <div className="flex items-center gap-1">
-                                <button
-                                  onClick={() => handleDelete(row)}
-                                  className="px-1.5 py-0.5 bg-red-600 text-white rounded text-[10px] font-bold cursor-pointer"
-                                >
-                                  تأكيد
-                                </button>
-                                <button
-                                  onClick={() => setDeleteConfirmId(null)}
-                                  className="px-1 py-0.5 text-[#667085] text-[10px] cursor-pointer"
-                                >
-                                  إلغاء
-                                </button>
-                              </div>
-                            ) : (
-                              <button
-                                onClick={() => setDeleteConfirmId(row._adh_id)}
-                                className="p-1 rounded hover:bg-red-100 text-red-500 transition cursor-pointer"
-                                title="حذف هذا القيد"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            )
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
       </div>
 
       {/* 5. شريط التصفح السفلي الرشيق والمدمج (Ultra-compact Pagination - 36px) مثبت فوق شريط الجوال مباشرة */}
-      <footer className="h-[36px] md:h-[38px] fixed bottom-[56px] left-0 right-0 z-30 md:relative md:bottom-auto md:z-20 bg-white border-t border-[#E4E7EC] px-2.5 sm:px-4 flex items-center justify-between text-[#667085] shadow-xs select-none">
+      <footer className="h-[36px] md:h-[38px] shrink-0 fixed bottom-[56px] left-0 right-0 z-30 md:relative md:bottom-auto md:z-20 bg-white border-t border-[#E4E7EC] px-2.5 sm:px-4 flex items-center justify-between text-[#667085] shadow-xs select-none">
         {/* عداد السجلات بصيغة رشيقة ومختصرة */}
         <div className="flex items-center gap-1 font-mono text-[10.5px] sm:text-xs shrink-0">
           <span className="hidden sm:inline">عرض:</span>
