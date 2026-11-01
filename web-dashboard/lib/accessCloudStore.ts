@@ -459,6 +459,10 @@ export async function moveColumnInTable(
  * استخراج قائمة الأعمدة النهائية بدمج الأعمدة المضافة وتصفية المحذوفة وتطبيق الأسماء المعدلة والترتيب المخصص
  */
 export function getCustomColumns(file: string, table: string, baseColumns: string[], mutations: AccessMutations): string[] {
+  if (table === 'all' || !table) {
+    return baseColumns;
+  }
+
   const key = `${file}_${table}`;
   const allKey = `all_${table}`;
 
@@ -552,7 +556,7 @@ export function applyMutations(
     }
 
     const matchesFile = fileName === 'all' || added._adh_file === fileName;
-    const matchesTable = !tableName || added._adh_table === tableName;
+    const matchesTable = !tableName || tableName === 'all' || added._adh_table === tableName;
 
     if (matchesFile && matchesTable) {
       let finalAdded = { ...added };

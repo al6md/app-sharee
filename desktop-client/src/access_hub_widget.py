@@ -99,6 +99,7 @@ TABLE_PRIORITY = {
 
 # المسميات والأيقونات الاحترافية لمنع أي بتر أو تشويه للكلمات عبر كافة الشاشات
 TABLE_DISPLAY_META = {
+    "all": ("🌟", "جميع الأصناف"),
     "التجار": ("👥", "التجار"),
     "الشركات": ("🏢", "الشركات"),
     "الدلالين": ("🤝", "الدلالين"),
@@ -231,6 +232,8 @@ class DataLoaderThread(QThread):
         columns = []
         available_tables = []
 
+        is_all_tables = (req_table == "all" or not req_table)
+
         if req_file == "all":
             tables_set = set()
             for f in idx.get("files", []):
@@ -240,31 +243,55 @@ class DataLoaderThread(QThread):
                 if a.get("_adh_table"):
                     tables_set.add(a["_adh_table"])
             available_tables = sort_tables_by_priority(list(tables_set))
-            if not req_table or req_table not in tables_set:
-                req_table = available_tables[0] if available_tables else "التجار"
 
             cols_order = []
             cols_seen = set()
 
-            for f in idx.get("files", []):
-                fpath = local_dir / f"{f['name']}.json"
-                data = get_cached_json_file(fpath)
-                if not data:
-                    continue
+            if is_all_tables:
+                req_table = "all"
+                for f in idx.get("files", []):
+                    fpath = local_dir / f"{f['name']}.json"
+                    data = get_cached_json_file(fpath)
+                    if not data:
+                        continue
 
-                orig_cols = data.get("columns", {}).get(req_table, [])
-                for c in orig_cols:
-                    if c not in cols_seen:
-                        cols_seen.add(c)
-                        cols_order.append(c)
+                    for tbl_name, orig_cols in data.get("columns", {}).items():
+                        for c in orig_cols:
+                            if c not in cols_seen:
+                                cols_seen.add(c)
+                                cols_order.append(c)
 
-                for r in data.get("tables", {}).get(req_table, []):
-                    r_copy = dict(r)
-                    r_copy["_adh_file"] = f["name"]
-                    r_copy["_adh_table"] = req_table
-                    rows.append(r_copy)
+                    for tbl_name, tbl_rows in data.get("tables", {}).items():
+                        for r in tbl_rows:
+                            r_copy = dict(r)
+                            r_copy["_adh_file"] = f["name"]
+                            r_copy["_adh_table"] = tbl_name
+                            rows.append(r_copy)
 
-            columns = cols_order
+                columns = cols_order
+            else:
+                if not req_table or req_table not in tables_set:
+                    req_table = available_tables[0] if available_tables else "التجار"
+
+                for f in idx.get("files", []):
+                    fpath = local_dir / f"{f['name']}.json"
+                    data = get_cached_json_file(fpath)
+                    if not data:
+                        continue
+
+                    orig_cols = data.get("columns", {}).get(req_table, [])
+                    for c in orig_cols:
+                        if c not in cols_seen:
+                            cols_seen.add(c)
+                            cols_order.append(c)
+
+                    for r in data.get("tables", {}).get(req_table, []):
+                        r_copy = dict(r)
+                        r_copy["_adh_file"] = f["name"]
+                        r_copy["_adh_table"] = req_table
+                        rows.append(r_copy)
+
+                columns = cols_order
         else:
             fpath = local_dir / f"{req_file}.json"
             data = get_cached_json_file(fpath)
@@ -272,15 +299,35 @@ class DataLoaderThread(QThread):
                 return None
 
             available_tables = sort_tables_by_priority(list(data.get("tables", {}).keys()))
-            if not req_table or req_table not in data.get("tables", {}):
-                req_table = available_tables[0] if available_tables else ""
+            cols_order = []
+            cols_seen = set()
 
-            columns = list(data.get("columns", {}).get(req_table, []))
-            for r in data.get("tables", {}).get(req_table, []):
-                r_copy = dict(r)
-                r_copy["_adh_file"] = req_file
-                r_copy["_adh_table"] = req_table
-                rows.append(r_copy)
+            if is_all_tables:
+                req_table = "all"
+                for tbl_name, orig_cols in data.get("columns", {}).items():
+                    for c in orig_cols:
+                        if c not in cols_seen:
+                            cols_seen.add(c)
+                            cols_order.append(c)
+
+                for tbl_name, tbl_rows in data.get("tables", {}).items():
+                    for r in tbl_rows:
+                        r_copy = dict(r)
+                        r_copy["_adh_file"] = req_file
+                        r_copy["_adh_table"] = tbl_name
+                        rows.append(r_copy)
+
+                columns = cols_order
+            else:
+                if not req_table or req_table not in data.get("tables", {}):
+                    req_table = available_tables[0] if available_tables else ""
+
+                columns = list(data.get("columns", {}).get(req_table, []))
+                for r in data.get("tables", {}).get(req_table, []):
+                    r_copy = dict(r)
+                    r_copy["_adh_file"] = req_file
+                    r_copy["_adh_table"] = req_table
+                    rows.append(r_copy)
 
         # دمج الحقول المضافة والمحذوفة
         added_for_tbl = []
@@ -331,7 +378,7 @@ class DataLoaderThread(QThread):
         # إضافة السجلات الجديدة
         for a in mutations.get("adds", []):
             if req_file == "all" or a.get("_adh_file") == req_file:
-                if a.get("_adh_table") == req_table:
+                if req_table == "all" or a.get("_adh_table") == req_table:
                     a_id = a.get("_adh_id")
                     if a_id and a_id in deleted_ids:
                         continue
@@ -1281,7 +1328,7 @@ class AccessHubWidget(QWidget):
             if item.widget():
                 item.widget().deleteLater()
 
-        tables_list = sort_tables_by_priority(data.get("available_tables", []))
+        tables_list = ["all"] + [t for t in sort_tables_by_priority(data.get("available_tables", [])) if t != "all"]
         active_tbl = data.get("active_table", self.active_table)
         self.active_table = active_tbl
 
@@ -1321,6 +1368,8 @@ class AccessHubWidget(QWidget):
             display_cols = []
             if self.active_file == "all":
                 display_cols.append("الملف المصدر")
+            if self.active_table == "all":
+                display_cols.append("الصنف / الجدول")
 
             for c in cols:
                 header_txt = c
@@ -1342,8 +1391,17 @@ class AccessHubWidget(QWidget):
                     src_item.setForeground(QColor("#14372e"))
                     src_item.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
                     src_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                    self.table_widget.setItem(r_idx, 0, src_item)
-                    c_offset = 1
+                    self.table_widget.setItem(r_idx, c_offset, src_item)
+                    c_offset += 1
+
+                if self.active_table == "all":
+                    tbl_meta = TABLE_DISPLAY_META.get(row.get("_adh_table"), ("🏷️", row.get("_adh_table", "")))
+                    tbl_item = QTableWidgetItem(f"{tbl_meta[0]} {tbl_meta[1]}")
+                    tbl_item.setForeground(QColor("#8C6B1B"))
+                    tbl_item.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+                    tbl_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    self.table_widget.setItem(r_idx, c_offset, tbl_item)
+                    c_offset += 1
 
                 for c_idx, col in enumerate(cols):
                     val = row.get(col, "")

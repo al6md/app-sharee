@@ -55,40 +55,94 @@ function sortTablesByPriority(tables: string[]): string[] {
 }
 
 const COLUMN_PRIORITY: Record<string, number> = {
+  // 1. الأسماء الرئيسية
   'اسم التاجر': 1,
   'ArabicName': 1,
+  'اسم الشركة': 1,
+  'اسم الفندق': 1,
+  'اسم الصيدلية': 1,
+  'اسم المعمل': 1,
+  'اسم الدلال': 1,
   'الإسم التجاري': 2,
   'الاسم التجاري': 2,
+  'ArabicCommercialName': 2,
   'EnglishName': 3,
-  'العمل': 4,
-  'Activity': 4,
+
+  // 2. المالك وصاحب المنشأة
+  'صاحب الاسم التجاري': 4,
+  'اسم صاحب الفندق': 4,
+  'اسم صاحب المعمل': 4,
+  'اسم صاحب المكتب': 4,
+  'اسم صاحب الصيدلية': 4,
+  'اسم صاحب الشركة': 4,
+  'الإسم': 4,
+
+  // 3. النشاط والعمل
+  'العمل': 5,
+  'Activity': 5,
   'SpecificActivity': 5,
-  'الصنف': 6,
-  'الدرجة': 6,
-  'Class': 6,
-  'الهاتف': 7,
-  'رقم الهاتف': 7,
-  'Mobile': 7,
-  'العنوان': 8,
-  'Address': 8,
-  'تأريخه': 9,
-  'تاريخ الانتساب': 9,
-  'AffiliationDate': 9,
-  'رقم الأسم التجاري': 10,
-  'رقم التجديد': 10,
-  'RenewalNo': 10,
-  'ID': 11,
-  'id': 11,
-  'StampNo': 12,
-  'EnglishClass': 13,
-  'EnglishActivity': 14,
-  'اسم الزوج': 15,
-  'المواليد': 16,
-  'ذكر': 17,
-  'انثى': 18,
-  'Female': 18,
-  'الشطب': 19,
-  'Field1': 20,
+  'العمل التجاري': 5,
+  'EnglishActivity': 6,
+
+  // 4. الصنف والدرجة
+  'الصنف': 7,
+  'الدرجة': 7,
+  'Class': 7,
+  'EnglishClass': 8,
+
+  // 5. الاتصال والهاتف
+  'الهاتف': 9,
+  'رقم الهاتف': 9,
+  'Mobile': 9,
+
+  // 6. العنوان والموقع
+  'العنوان': 10,
+  'Address': 10,
+
+  // 7. التواريخ
+  'تأريخه': 11,
+  'تاريخه': 11,
+  'تأريحه': 11,
+  'تاريخ الانتساب': 11,
+  'AffiliationDate': 11,
+  'تاريخ التسجيل': 11,
+  'ExpirationDate': 12,
+  'تاريخ التعديل': 13,
+  'تاريخ الشطب': 13,
+
+  // 8. الأرقام والهويات
+  'رقم الأسم التجاري': 14,
+  'رقم الاسم التجاري': 14,
+  'رقم  التجاري': 14,
+  'رقم التجديد': 15,
+  'RenewalNo': 15,
+  'ID': 16,
+  'id': 16,
+  'IDNo': 16,
+  'ID_No': 16,
+  'StampNo': 17,
+  'CommercialNo': 17,
+  'تسلسل الشركة': 17,
+  'رقم اجازة التأسيس': 18,
+  'رقم شهادة الجنسية': 18,
+
+  // 9. البيانات الشخصية
+  'اسم الزوج': 20,
+  'اسم الام': 21,
+  'المواليد': 22,
+  'ذكر': 23,
+  'انثى': 24,
+  'Female': 24,
+  'جنسيته': 25,
+
+  // 10. التعديل والشطب والملاحظات
+  'التعديل': 30,
+  'الشطب': 31,
+  'العمل التجاري القديم': 32,
+  'الملاحظات': 33,
+  'المرفق': 34,
+  'المرفقات': 34,
+  'Field1': 35,
 };
 
 function sortColumnsByPriority(cols: string[]): string[] {
@@ -99,6 +153,19 @@ function sortColumnsByPriority(cols: string[]): string[] {
     return cols.indexOf(a) - cols.indexOf(b);
   });
 }
+
+function normalizeArabic(text: any): string {
+  if (text === null || text === undefined) return '';
+  return String(text)
+    .toLowerCase()
+    .replace(/[أإآ]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/ى/g, 'ي')
+    .replace(/[\u064B-\u065F]/g, '')
+    .trim();
+}
+
+const _fileRamCache = new Map<string, { mtime: number; content: any }>();
 
 function getIndex() {
   const indexPath = path.join(DATA_DIR, 'index.json');
@@ -119,7 +186,15 @@ function getFileContent(fileName: string) {
     return null;
   }
   try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    const stats = fs.statSync(filePath);
+    const cached = _fileRamCache.get(filePath);
+    if (cached && cached.mtime === stats.mtimeMs) {
+      return cached.content;
+    }
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    const content = JSON.parse(raw);
+    _fileRamCache.set(filePath, { mtime: stats.mtimeMs, content });
+    return content;
   } catch {
     return null;
   }
@@ -259,6 +334,8 @@ export async function GET(req: NextRequest) {
     let availableTables: string[] = [];
     let activeTable = requestedTable;
 
+    const isAllTables = requestedTable === 'all' || requestedTable === 'all_categories' || (!requestedTable && requestedFile === 'all');
+
     if (requestedFile === 'all') {
       // 🌐 وضع الدمج الشامل (كافة الملفات مدمجة)
       const allFiles = index.files || [];
@@ -273,39 +350,81 @@ export async function GET(req: NextRequest) {
 
       availableTables = sortTablesByPriority(Array.from(tablesSet));
 
-      if (!activeTable || !tablesSet.has(activeTable)) {
-        activeTable = availableTables[0] || 'التجار';
-      }
+      if (isAllTables) {
+        activeTable = 'all';
+        const colsOrder: string[] = [];
+        const colsSeen = new Set<string>();
 
-      // جمع الأعمدة بترتيبها الأصلي الدقيق من ملفات Access بدون أي تعديل أو فرز
-      const colsOrder: string[] = [];
-      const colsSeen = new Set<string>();
+        for (const f of allFiles) {
+          const content = getFileContent(f.name);
+          if (!content || !content.tables) continue;
 
-      for (const f of allFiles) {
-        const content = getFileContent(f.name);
-        if (!content || !content.tables) continue;
+          // جمع الأعمدة من كافة الجداول
+          if (content.columns) {
+            for (const [, cols] of Object.entries(content.columns)) {
+              if (Array.isArray(cols)) {
+                for (const col of cols) {
+                  if (!colsSeen.has(col)) {
+                    colsSeen.add(col);
+                    colsOrder.push(col);
+                  }
+                }
+              }
+            }
+          }
 
-        // قراءة الأعمدة الأصلية كما هي في ملف Access
-        const origCols = content.columns?.[activeTable] || [];
-        for (const col of origCols) {
-          if (!colsSeen.has(col)) {
-            colsSeen.add(col);
-            colsOrder.push(col);
+          // جمع السجلات من كافة الجداول (تجار، شركات، دلالين، فنادق، مطاعم، صيدليات، معامل، إلخ)
+          for (const [tblName, tableRows] of Object.entries(content.tables)) {
+            if (!Array.isArray(tableRows)) continue;
+            for (let idx = 0; idx < tableRows.length; idx++) {
+              const row = tableRows[idx];
+              const rId = row._adh_id || `${f.name}_${tblName}_${idx}`;
+              rawRows.push({
+                ...row,
+                _adh_file: row._adh_file || f.name,
+                _adh_table: row._adh_table || tblName,
+                _adh_id: rId,
+              });
+            }
           }
         }
 
-        // جمع السجلات الأساسية
-        const tableRows = content.tables[activeTable] || [];
-        for (let idx = 0; idx < tableRows.length; idx++) {
-          const row = tableRows[idx];
-          if (!row._adh_file) row._adh_file = f.name;
-          if (!row._adh_table) row._adh_table = activeTable;
-          if (!row._adh_id) row._adh_id = `${f.name}_${activeTable}_${idx}`;
-          rawRows.push(row);
+        baseColumns = sortColumnsByPriority(colsOrder);
+      } else {
+        if (!activeTable || !tablesSet.has(activeTable)) {
+          activeTable = availableTables[0] || 'التجار';
         }
-      }
 
-      baseColumns = sortColumnsByPriority(colsOrder);
+        // جمع الأعمدة بترتيبها الأصلي الدقيق من ملفات Access بدون أي تعديل أو فرز
+        const colsOrder: string[] = [];
+        const colsSeen = new Set<string>();
+
+        for (const f of allFiles) {
+          const content = getFileContent(f.name);
+          if (!content || !content.tables) continue;
+
+          // قراءة الأعمدة الأصلية كما هي في ملف Access
+          const origCols = content.columns?.[activeTable] || [];
+          for (const col of origCols) {
+            if (!colsSeen.has(col)) {
+              colsSeen.add(col);
+              colsOrder.push(col);
+            }
+          }
+
+          // جمع السجلات الأساسية
+          const tableRows = content.tables[activeTable] || [];
+          for (let idx = 0; idx < tableRows.length; idx++) {
+            const row = tableRows[idx];
+            if (!row._adh_file) row._adh_file = f.name;
+            if (!row._adh_table) row._adh_table = activeTable;
+            if (!row._adh_id) row._adh_id = `${f.name}_${activeTable}_${idx}`;
+            rawRows.push(row);
+          }
+        }
+
+        baseColumns = sortColumnsByPriority(colsOrder);
+      }
     } else {
       // 📁 وضع خانة ملف محدد باسمه الحقيقي
       const content = getFileContent(requestedFile);
@@ -322,21 +441,57 @@ export async function GET(req: NextRequest) {
       });
 
       availableTables = sortTablesByPriority(Array.from(fileTablesSet));
-      if (!activeTable || !fileTablesSet.has(activeTable)) {
-        activeTable = availableTables[0] || '';
-      }
 
-      // الأعمدة بترتيب الأولوية الذكي (اسم التاجر والنشاط والصنف والهاتف أولاً)
-      baseColumns = sortColumnsByPriority(content.columns?.[activeTable] || []);
+      if (isAllTables) {
+        activeTable = 'all';
+        const colsOrder: string[] = [];
+        const colsSeen = new Set<string>();
 
-      // السجلات الأساسية
-      const tableRows = content.tables[activeTable] || [];
-      for (let idx = 0; idx < tableRows.length; idx++) {
-        const row = tableRows[idx];
-        if (!row._adh_file) row._adh_file = requestedFile;
-        if (!row._adh_table) row._adh_table = activeTable;
-        if (!row._adh_id) row._adh_id = `${requestedFile}_${activeTable}_${idx}`;
-        rawRows.push(row);
+        if (content.columns) {
+          for (const [, cols] of Object.entries(content.columns)) {
+            if (Array.isArray(cols)) {
+              for (const col of cols) {
+                if (!colsSeen.has(col)) {
+                  colsSeen.add(col);
+                  colsOrder.push(col);
+                }
+              }
+            }
+          }
+        }
+
+        for (const [tblName, tableRows] of Object.entries(content.tables)) {
+          if (!Array.isArray(tableRows)) continue;
+          for (let idx = 0; idx < tableRows.length; idx++) {
+            const row = tableRows[idx];
+            const rId = row._adh_id || `${requestedFile}_${tblName}_${idx}`;
+            rawRows.push({
+              ...row,
+              _adh_file: row._adh_file || requestedFile,
+              _adh_table: row._adh_table || tblName,
+              _adh_id: rId,
+            });
+          }
+        }
+
+        baseColumns = sortColumnsByPriority(colsOrder);
+      } else {
+        if (!activeTable || !fileTablesSet.has(activeTable)) {
+          activeTable = availableTables[0] || '';
+        }
+
+        // الأعمدة بترتيب الأولوية الذكي (اسم التاجر والنشاط والصنف والهاتف أولاً)
+        baseColumns = sortColumnsByPriority(content.columns?.[activeTable] || []);
+
+        // السجلات الأساسية
+        const tableRows = content.tables[activeTable] || [];
+        for (let idx = 0; idx < tableRows.length; idx++) {
+          const row = tableRows[idx];
+          if (!row._adh_file) row._adh_file = requestedFile;
+          if (!row._adh_table) row._adh_table = activeTable;
+          if (!row._adh_id) row._adh_id = `${requestedFile}_${activeTable}_${idx}`;
+          rawRows.push(row);
+        }
       }
     }
 
@@ -359,12 +514,25 @@ export async function GET(req: NextRequest) {
       actualSortCol = dateColumns[0] || '';
     }
 
-    // تصفية البحث
+    // تصفية البحث الشامل والذكي (يدعم كافة الأصناف وتطابق الأحرف العربية)
     let filteredRows = mergedRows;
     if (search) {
-      filteredRows = mergedRows.filter((row) =>
-        Object.values(row).some((val) => val && String(val).toLowerCase().includes(search))
-      );
+      const searchTokens = search.split(/\s+/).filter(Boolean).map(normalizeArabic);
+
+      filteredRows = mergedRows.filter((row) => {
+        const rowTableNorm = normalizeArabic(row._adh_table);
+        const rowFileNorm = normalizeArabic(row._adh_file);
+
+        const rowValues = Object.entries(row)
+          .filter(([k]) => !k.startsWith('_adh_'))
+          .map(([, v]) => normalizeArabic(v))
+          .filter(Boolean);
+
+        return searchTokens.every((token) => {
+          if (rowTableNorm.includes(token) || rowFileNorm.includes(token)) return true;
+          return rowValues.some((v) => v.includes(token));
+        });
+      });
     }
 
     // تطبيق الترتيب الزمني (من الجديد للقديم أو العكس)

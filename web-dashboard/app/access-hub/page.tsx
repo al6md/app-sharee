@@ -74,6 +74,7 @@ interface ApiResponse {
 }
 
 const TABLE_META: Record<string, { icon: string; title: string }> = {
+  'all': { icon: '🌟', title: 'جميع الأصناف' },
   'التجار': { icon: '👥', title: 'التجار' },
   'الشركات': { icon: '🏢', title: 'الشركات' },
   'الدلالين': { icon: '🤝', title: 'الدلالين' },
@@ -91,7 +92,8 @@ const TABLE_META: Record<string, { icon: string; title: string }> = {
 export default function AccessHubPage() {
   // Navigation & View States
   const [activeFile, setActiveFile] = useState<string>('all');
-  const [activeTable, setActiveTable] = useState<string>('');
+  const [activeTable, setActiveTable] = useState<string>('all');
+  const [addSelectedTable, setAddSelectedTable] = useState<string>('التجار');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [page, setPage] = useState<number>(1);
   const [limit, setLimit] = useState<number>(50);
@@ -487,6 +489,7 @@ export default function AccessHubPage() {
     try {
       const guid = typeof window !== 'undefined' ? localStorage.getItem('sharecoc_device_guid') || '' : '';
       const isAdminSession = typeof window !== 'undefined' && localStorage.getItem('sharecoc_admin_session') === 'true';
+      const targetTable = (activeTable === 'all' ? (addSelectedTable || 'التجار') : activeTable);
       const res = await fetch('/api/access-hub', {
         method: 'POST',
         headers: { 
@@ -496,7 +499,7 @@ export default function AccessHubPage() {
         },
         body: JSON.stringify({
           file: activeFile === 'all' ? (data?.files[0]?.name || '') : activeFile,
-          table: activeTable,
+          table: targetTable,
           record: formData,
           guid,
         }),
@@ -728,8 +731,24 @@ export default function AccessHubPage() {
       }
     }
 
-    // تمييز أسماء التجار والشركات
-    if (['ArabicName', 'اسم التاجر', 'الاسم التجاري', 'الإسم التجاري'].includes(col)) {
+    // تمييز أسماء التجار والشركات والفنادق والمطاعم والصيدليات والمعامل
+    if ([
+      'ArabicName',
+      'اسم التاجر',
+      'الاسم التجاري',
+      'الإسم التجاري',
+      'اسم الشركة',
+      'اسم الفندق',
+      'اسم الصيدلية',
+      'اسم المعمل',
+      'اسم الدلال',
+      'صاحب الاسم التجاري',
+      'اسم صاحب الفندق',
+      'اسم صاحب المعمل',
+      'اسم صاحب المكتب',
+      'اسم صاحب الصيدلية',
+      'اسم صاحب الشركة',
+    ].includes(col)) {
       return <span className="font-bold text-[#14372e] text-[12.5px]">{str}</span>;
     }
 
@@ -741,46 +760,79 @@ export default function AccessHubPage() {
     return str;
   };
 
-  // استخراج الحقول الجوهرية لعرض بطاقة الجوال الذكية
+  // استخراج الحقول الجوهرية لعرض بطاقة الجوال الذكية لكافة الأصناف
   const extractCardFields = (row: any) => {
     const name =
       row.ArabicName ||
       row['اسم التاجر'] ||
+      row['اسم الشركة'] ||
+      row['اسم الفندق'] ||
+      row['اسم الصيدلية'] ||
+      row['اسم المعمل'] ||
+      row['اسم الدلال'] ||
+      row['صاحب الاسم التجاري'] ||
+      row['اسم صاحب الفندق'] ||
+      row['اسم صاحب المعمل'] ||
+      row['اسم صاحب المكتب'] ||
+      row['اسم صاحب الصيدلية'] ||
+      row['اسم صاحب الشركة'] ||
       row['الاسم التجاري'] ||
       row['الإسم التجاري'] ||
       row.Name ||
       'قيد مسجل بدون اسم';
+
     const commercialName =
       (row['الاسم التجاري'] && row['الاسم التجاري'] !== name ? row['الاسم التجاري'] : null) ||
       (row['الإسم التجاري'] && row['الإسم التجاري'] !== name ? row['الإسم التجاري'] : null) ||
+      (row['اسم الفندق'] && row['اسم الفندق'] !== name ? row['اسم الفندق'] : null) ||
+      (row['اسم الشركة'] && row['اسم الشركة'] !== name ? row['اسم الشركة'] : null) ||
+      (row['اسم الصيدلية'] && row['اسم الصيدلية'] !== name ? row['اسم الصيدلية'] : null) ||
+      (row['اسم المعمل'] && row['اسم المعمل'] !== name ? row['اسم المعمل'] : null) ||
+      (row['صاحب الاسم التجاري'] && row['صاحب الاسم التجاري'] !== name ? row['صاحب الاسم التجاري'] : null) ||
       (row.CommercialName && row.CommercialName !== name ? row.CommercialName : null) ||
       row['اسم المحل'] ||
       null;
+
     const activity =
       row['نوع النشاط'] ||
       row['النشاط'] ||
       row.Activity ||
+      row['العمل'] ||
+      row['العمل التجاري'] ||
+      row.SpecificActivity ||
+      row.EnglishActivity ||
       row['نوع المحل'] ||
       null;
+
     const phone =
       row.Mobile ||
       row['الهاتف'] ||
       row['رقم الهاتف'] ||
       row.Phone ||
       null;
+
     const address =
       row['العنوان'] ||
       row['عنوان المحل'] ||
       row.Address ||
       row['المنطقة'] ||
       null;
+
     const dateVal =
       row['تاريخ التسجيل'] ||
       row['تاريخ التجديد'] ||
       row['تاريخ انتهاء الإجازة'] ||
+      row['تأريخه'] ||
+      row['تاريخه'] ||
+      row['تأريحه'] ||
+      row['تاريخ الانتساب'] ||
+      row['تاريخ التعديل'] ||
+      row['تاريخ الشطب'] ||
       row.Date ||
       row.RegDate ||
+      row.AffiliationDate ||
       null;
+
     const grade =
       row.Class ||
       row['الصنف'] ||
@@ -790,43 +842,80 @@ export default function AccessHubPage() {
     return { name, commercialName, activity, phone, address, dateVal, grade };
   };
 
-  // مكون مشترك لرسم أزرار فئات الجداول الـ 11 بالأسماء الكاملة والأيقونات
+  // مكون مشترك لرسم أزرار فئات الجداول الـ 11 بالأسماء الكاملة والأيقونات مع زر "جميع الأصناف" الشامل
   const renderCategoryButtons = () => {
-    return (data?.available_tables || []).map((tbl) => {
-      const isTblActive = activeTable === tbl;
-      const meta = TABLE_META[tbl] || { icon: '🏷️', title: tbl };
-      const count =
-        activeFile === 'all'
-          ? (data?.files || []).reduce((acc, f) => acc + (f.table_counts[tbl] || 0), 0)
-          : data?.files.find((f) => f.name === activeFile)?.table_counts[tbl] || 0;
-      return (
+    const isAllActive = activeTable === 'all' || activeTable === '' || activeTable === 'all_categories';
+    const totalAllCount =
+      activeFile === 'all'
+        ? (data?.total_records || (data?.files || []).reduce((acc, f) => acc + (f.total_rows || 0), 0))
+        : (data?.files.find((f) => f.name === activeFile)?.total_rows || 0);
+
+    return (
+      <>
+        {/* زر صنف "جميع الأصناف" الشامل لكافة الفئات (فنادق، مطاعم، صيدليات، شركات، تجار، معامل، دلالين، إلخ) */}
         <button
-          key={tbl}
+          key="all_categories_btn"
           onClick={() => {
-            setActiveTable(tbl);
+            setActiveTable('all');
             setPage(1);
           }}
-          title={`جدول ${meta.title} (${count.toLocaleString('ar-IQ')} قيد)`}
+          title={`عرض وبحث شامل في جميع الأصناف (${totalAllCount.toLocaleString('ar-IQ')} قيد)`}
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap min-w-max transition cursor-pointer shrink-0 shadow-2xs ${
-            isTblActive
-              ? 'bg-[#14372e] text-white shadow-xs'
+            isAllActive
+              ? 'bg-[#14372e] text-white shadow-xs ring-2 ring-[#c59b27]/60'
               : 'bg-white text-[#344054] hover:bg-[#F2F4F7] border border-[#E4E7EC]'
           }`}
         >
           <span className="flex items-center gap-1">
-            <span>{meta.icon}</span>
-            <span>{meta.title}</span>
+            <span>🌟</span>
+            <span>جميع الأصناف</span>
           </span>
           <span
             className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full ${
-              isTblActive ? 'bg-[#c59b27] text-white' : 'bg-[#F2F4F7] text-[#667085] border border-[#E4E7EC]'
+              isAllActive ? 'bg-[#c59b27] text-white font-bold' : 'bg-[#F2F4F7] text-[#667085] border border-[#E4E7EC]'
             }`}
           >
-            {count.toLocaleString('ar-IQ')}
+            {totalAllCount.toLocaleString('ar-IQ')}
           </span>
         </button>
-      );
-    });
+
+        {(data?.available_tables || []).map((tbl) => {
+          const isTblActive = activeTable === tbl;
+          const meta = TABLE_META[tbl] || { icon: '🏷️', title: tbl };
+          const count =
+            activeFile === 'all'
+              ? (data?.files || []).reduce((acc, f) => acc + (f.table_counts[tbl] || 0), 0)
+              : data?.files.find((f) => f.name === activeFile)?.table_counts[tbl] || 0;
+          return (
+            <button
+              key={tbl}
+              onClick={() => {
+                setActiveTable(tbl);
+                setPage(1);
+              }}
+              title={`جدول ${meta.title} (${count.toLocaleString('ar-IQ')} قيد)`}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap min-w-max transition cursor-pointer shrink-0 shadow-2xs ${
+                isTblActive
+                  ? 'bg-[#14372e] text-white shadow-xs'
+                  : 'bg-white text-[#344054] hover:bg-[#F2F4F7] border border-[#E4E7EC]'
+              }`}
+            >
+              <span className="flex items-center gap-1">
+                <span>{meta.icon}</span>
+                <span>{meta.title}</span>
+              </span>
+              <span
+                className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full ${
+                  isTblActive ? 'bg-[#c59b27] text-white' : 'bg-[#F2F4F7] text-[#667085] border border-[#E4E7EC]'
+                }`}
+              >
+                {count.toLocaleString('ar-IQ')}
+              </span>
+            </button>
+          );
+        })}
+      </>
+    );
   };
 
   if (isSecChecking) {
@@ -1055,7 +1144,7 @@ export default function AccessHubPage() {
             value={activeFile}
             onChange={(e) => {
               setActiveFile(e.target.value);
-              setActiveTable('');
+              setActiveTable(e.target.value === 'all' ? 'all' : '');
               setPage(1);
             }}
             className="bg-[#F7F8FA] border border-[#D0D5DD] rounded-lg px-2.5 py-1 text-xs font-bold text-[#14372e] outline-none hover:border-[#14372e] focus:border-[#14372e] transition cursor-pointer max-w-[260px] truncate"
@@ -1081,7 +1170,7 @@ export default function AccessHubPage() {
             value={activeFile}
             onChange={(e) => {
               setActiveFile(e.target.value);
-              setActiveTable('');
+              setActiveTable(e.target.value === 'all' ? 'all' : '');
               setPage(1);
             }}
             className="w-full bg-[#F7F8FA] border border-[#D0D5DD] rounded-xl px-3 py-1.5 text-xs font-bold text-[#14372e] outline-none appearance-none pr-8 pl-3"
@@ -1376,6 +1465,12 @@ export default function AccessHubPage() {
                             {shortFile}
                           </span>
                         )}
+                        {row._adh_table && (
+                          <span className="text-[10px] font-bold text-amber-900 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-300 flex items-center gap-1">
+                            <span>{TABLE_META[row._adh_table]?.icon || '🏷️'}</span>
+                            <span>{TABLE_META[row._adh_table]?.title || row._adh_table}</span>
+                          </span>
+                        )}
                         {grade && (
                           <span className="text-[10px] font-bold text-amber-900 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-300">
                             ⭐ {grade}
@@ -1624,6 +1719,9 @@ export default function AccessHubPage() {
                     {activeFile === 'all' && (
                       <th data-col="القسم" className="py-2.5 px-3.5 whitespace-nowrap border-l border-[#D0D5DD]/40 bg-[#EDF2EF]">القسم</th>
                     )}
+                    {activeTable === 'all' && (
+                      <th data-col="الصنف" className="py-2.5 px-3.5 whitespace-nowrap border-l border-[#D0D5DD]/40 bg-[#EDF2EF]">الصنف / الجدول</th>
+                    )}
                     {data.columns.map((col) => {
                       const isSorted = sortCol === col || (sortCol === 'date_auto' && data.date_columns?.[0] === col);
                       return (
@@ -1684,6 +1782,15 @@ export default function AccessHubPage() {
                           <td className="py-2.5 px-3.5 whitespace-nowrap border-l border-[#E4E7EC]/60">
                             <span className="inline-flex items-center gap-1 bg-[#14372e]/5 text-[#14372e] font-semibold px-2 py-0.5 rounded text-[11px] border border-[#14372e]/10">
                               {getShortFileName(row._adh_file)}
+                            </span>
+                          </td>
+                        )}
+
+                        {activeTable === 'all' && (
+                          <td className="py-2.5 px-3.5 whitespace-nowrap border-l border-[#E4E7EC]/60">
+                            <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-900 font-bold px-2 py-0.5 rounded text-[11px] border border-amber-300">
+                              <span>{TABLE_META[row._adh_table]?.icon || '🏷️'}</span>
+                              <span>{TABLE_META[row._adh_table]?.title || row._adh_table || 'عام'}</span>
                             </span>
                           </td>
                         )}
@@ -1818,7 +1925,7 @@ export default function AccessHubPage() {
               <div className="flex items-center gap-2">
                 <Plus className="w-5 h-5 text-[#14372e]" />
                 <h3 className="font-bold text-sm text-[#1B1F24]">
-                  إضافة قيد جديد إلى جدول ({activeTable || 'البيانات'})
+                  إضافة قيد جديد {activeTable === 'all' ? '(جميع الأصناف)' : `إلى جدول (${activeTable})`}
                 </h3>
               </div>
               <button onClick={() => setIsAddModalOpen(false)} className="text-[#667085] hover:text-[#1B1F24]">
@@ -1827,6 +1934,23 @@ export default function AccessHubPage() {
             </div>
 
             <form onSubmit={handleAddSubmit} className="flex-1 overflow-y-auto p-5 space-y-3.5">
+              {activeTable === 'all' && (
+                <div className="space-y-1 bg-[#EDF5F2] p-3 rounded-xl border border-[#14372e]/20">
+                  <label className="text-xs font-bold text-[#14372e]">حدد صنف / فئة القيد المراد إضافته:</label>
+                  <select
+                    value={addSelectedTable}
+                    onChange={(e) => setAddSelectedTable(e.target.value)}
+                    className="w-full px-3 py-2 text-xs bg-white border border-[#D0D5DD] rounded-lg text-[#14372e] font-bold outline-none"
+                  >
+                    {(data?.available_tables || []).map((tbl) => (
+                      <option key={tbl} value={tbl}>
+                        {TABLE_META[tbl]?.icon || '🏷️'} {TABLE_META[tbl]?.title || tbl}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
                 {data?.columns.map((col) => (
                   <div key={col} className="space-y-1">
