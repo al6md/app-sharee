@@ -144,6 +144,10 @@ export default function AdminControlPage() {
   const [hubSecPin, setHubSecPin] = useState<string>('');
   const [hubSecEnabled, setHubSecEnabled] = useState<boolean>(false);
   const [savingHubSec, setSavingHubSec] = useState<boolean>(false);
+  const isSavingHubSecRef = useRef<boolean>(false);
+  const lastHubSecSaveRef = useRef<number>(0);
+  const hubSecInitializedRef = useRef<boolean>(false);
+  const hubSecDirtyRef = useRef<boolean>(false);
 
   // اختيارات إدارة الحقول
   const [selectedAccessFile, setSelectedAccessFile] = useState<string>('');
@@ -356,14 +360,23 @@ export default function AdminControlPage() {
           setDevices(permsData.devices);
         }
 
-        if (permsData.accessHubSecurity && !savingHubSec) {
+        if (permsData.accessHubSecurity) {
           const sec = permsData.accessHubSecurity;
           const hasCreds = Boolean(sec.username || sec.password || sec.pinCode);
           setAccessHubSec(sec);
-          setHubSecEnabled(Boolean(sec.enabled || hasCreds));
-          setHubSecUser(sec.username || '');
-          setHubSecPass(sec.password || '');
-          setHubSecPin(sec.pinCode || '');
+
+          const recentlySaved = Date.now() - lastHubSecSaveRef.current < 10000;
+          const shouldUpdateInputs =
+            !hubSecInitializedRef.current ||
+            (!isBackgroundPoll && !hubSecDirtyRef.current && !recentlySaved && !savingHubSec && !isSavingHubSecRef.current);
+
+          if (shouldUpdateInputs) {
+            setHubSecEnabled(Boolean(sec.enabled || hasCreds));
+            setHubSecUser(sec.username || '');
+            setHubSecPass(sec.password || '');
+            setHubSecPin(sec.pinCode || '');
+            hubSecInitializedRef.current = true;
+          }
         }
       }
 
@@ -759,6 +772,8 @@ export default function AdminControlPage() {
     if (e) e.preventDefault();
     try {
       setSavingHubSec(true);
+      isSavingHubSecRef.current = true;
+      lastHubSecSaveRef.current = Date.now();
       const isEnabled = Boolean(hubSecEnabled || hubSecUser.trim() || hubSecPass.trim() || hubSecPin.trim());
       const res = await fetch('/api/drive/permissions', {
         method: 'POST',
@@ -774,8 +789,15 @@ export default function AdminControlPage() {
       const data = await res.json();
       if (data.success && data.accessHubSecurity) {
         setAccessHubSec(data.accessHubSecurity);
+        const sec = data.accessHubSecurity;
+        setHubSecUser(sec.username || '');
+        setHubSecPass(sec.password || '');
+        setHubSecPin(sec.pinCode || '');
+        setHubSecEnabled(Boolean(sec.enabled || sec.username || sec.password || sec.pinCode));
+        hubSecDirtyRef.current = false;
+        hubSecInitializedRef.current = true;
+        lastHubSecSaveRef.current = Date.now();
         setToastMessage({ text: '🔒 تم حفظ وتطبيق إعدادات أمان مركز بيانات Access بنجاح!', type: 'success' });
-        await loadAllData(false);
       } else {
         alert(data.error || 'فشل حفظ إعدادات الأمان');
       }
@@ -783,6 +805,7 @@ export default function AdminControlPage() {
       alert(`خطأ: ${err.message}`);
     } finally {
       setSavingHubSec(false);
+      isSavingHubSecRef.current = false;
     }
   };
 
@@ -2213,7 +2236,11 @@ export default function AdminControlPage() {
                     <input
                       type="checkbox"
                       checked={hubSecEnabled}
-                      onChange={(e) => setHubSecEnabled(e.target.checked)}
+                      onFocus={() => { hubSecDirtyRef.current = true; }}
+                      onChange={(e) => {
+                        hubSecDirtyRef.current = true;
+                        setHubSecEnabled(e.target.checked);
+                      }}
                       className="w-4 h-4 text-[#14372e] rounded accent-[#14372e] cursor-pointer"
                     />
                   </label>
@@ -2228,7 +2255,9 @@ export default function AdminControlPage() {
                       <input
                         type="text"
                         value={hubSecUser}
+                        onFocus={() => { hubSecDirtyRef.current = true; }}
                         onChange={(e) => {
+                          hubSecDirtyRef.current = true;
                           setHubSecUser(e.target.value);
                           if (e.target.value.trim()) setHubSecEnabled(true);
                         }}
@@ -2243,7 +2272,9 @@ export default function AdminControlPage() {
                       <input
                         type="text"
                         value={hubSecPass}
+                        onFocus={() => { hubSecDirtyRef.current = true; }}
                         onChange={(e) => {
+                          hubSecDirtyRef.current = true;
                           setHubSecPass(e.target.value);
                           if (e.target.value.trim()) setHubSecEnabled(true);
                         }}
@@ -2258,7 +2289,9 @@ export default function AdminControlPage() {
                       <input
                         type="text"
                         value={hubSecPin}
+                        onFocus={() => { hubSecDirtyRef.current = true; }}
                         onChange={(e) => {
+                          hubSecDirtyRef.current = true;
                           setHubSecPin(e.target.value);
                           if (e.target.value.trim()) setHubSecEnabled(true);
                         }}

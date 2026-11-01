@@ -339,6 +339,10 @@ export async function ensureCloudFolderPathsBatch(
  * قراءة ملف الإعدادات الإدارية والصلاحيات الكامل (.sharecoc_permissions.json) من Google Drive بشكل موثوق 100%
  */
 export async function getCloudAdminStore(forceRefresh: boolean = false): Promise<CloudAdminStore> {
+  // إذا تم التحديث محلياً في الذاكرة خلال آخر 8 ثوانٍ، نعتمد دائماً على النسخة الأحدث لمنع سباق التزامن مع Google Drive
+  if (_adminStoreCache && Date.now() - _adminStoreCache.ts < 8000) {
+    return _adminStoreCache.store;
+  }
   if (!forceRefresh && _adminStoreCache && Date.now() - _adminStoreCache.ts < PERMISSIONS_CACHE_TTL_MS) {
     return _adminStoreCache.store;
   }
@@ -458,7 +462,7 @@ export async function getCloudAdminStore(forceRefresh: boolean = false): Promise
 
     const rawAccessSec = rawData.accessHubSecurity || rawData.departments?.['مركز بيانات Access'];
     const hubUser = String(rawAccessSec?.username || rawAccessSec?.deptUsername || '').trim();
-    const hubPass = String(rawAccessSec?.password || rawAccessSec?.deptPassword || rawAccessSec?.pinCode || '').trim();
+    const hubPass = String(rawAccessSec?.password || rawAccessSec?.deptPassword || '').trim();
     const hubPin = String(rawAccessSec?.pinCode || '').trim();
     const hasHubCreds = Boolean(hubUser || hubPass || hubPin);
     const accessHubSecurity: AccessHubSecurityConfig = {
