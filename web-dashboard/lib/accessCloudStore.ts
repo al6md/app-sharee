@@ -27,7 +27,8 @@ export interface TrashItem {
 export interface AccessRole {
   guid: string;
   name: string;
-  role: 'admin' | 'data_entry' | 'viewer';
+  role: 'admin' | 'supervisor' | 'data_entry' | 'viewer';
+  allowedSections?: string[];
   lastSeen?: string;
 }
 
@@ -676,7 +677,8 @@ export async function restoreRecordFromTrash(id: string): Promise<boolean> {
 export async function setAccessHubRole(
   guid: string,
   name: string,
-  role: 'admin' | 'data_entry' | 'viewer'
+  role: 'admin' | 'supervisor' | 'data_entry' | 'viewer',
+  allowedSections?: string[]
 ): Promise<AccessRole> {
   const { mutations } = await getAccessHubMutations(true);
   if (!mutations.roles) mutations.roles = {};
@@ -685,6 +687,7 @@ export async function setAccessHubRole(
     guid,
     name: name || 'مستخدم غير مسمى',
     role,
+    allowedSections: Array.isArray(allowedSections) ? allowedSections : mutations.roles[guid]?.allowedSections || [],
     lastSeen: new Date().toISOString(),
   };
 

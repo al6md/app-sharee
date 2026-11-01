@@ -24,7 +24,8 @@ import {
 import { 
   getCloudAdminStore, 
   persistCloudAdminStore, 
-  DEFAULT_ACCESS_HUB_SECURITY 
+  DEFAULT_ACCESS_HUB_SECURITY,
+  isValidAdminToken 
 } from '@/lib/googleDrive';
 
 export const dynamic = 'force-dynamic';
@@ -246,22 +247,23 @@ function parseDateValue(val: any): number | null {
  * 2. data_entry: مدخل بيانات (إضافة وتعديل - الحذف محجوب تماماً)
  * 3. viewer: مستعلم فقط (للقراءة والاستعلام والتصدير - الإضافة والتعديل والحذف محجوبة)
  */
-async function resolveCallerRole(req: NextRequest, body?: any): Promise<'admin' | 'data_entry' | 'viewer'> {
+export interface CallerContext {
+  role: 'admin' | 'supervisor' | 'data_entry' | 'viewer';
+  allowedSections: string[];
+  guid: string;
+}
+
+async function resolveCallerRole(req: NextRequest, body?: any): Promise<'admin' | 'supervisor' | 'data_entry' | 'viewer'> {
+  const ctx = await resolveCallerContext(req, body);
+  return ctx.role;
+}
+
+async function resolveCallerContext(req: NextRequest, body?: any): Promise<CallerContext> {
   try {
-    // 1. فحص جلسة الأدمن في لوحة التحكم
-    const adminHeader = req.headers.get('x-admin-role') || req.headers.get('x-admin-session');
-    if (adminHeader === 'admin' || adminHeader === 'true') {
-      return 'admin';
-    }
-
-    if (body?.isAdmin === true || body?.adminRole === 'admin') {
-      return 'admin';
-    }
-
-    // فحص ما إذا كان الطلب قادماً مباشرة من لوحة الإدارة /admin في المتصفح
-    const referer = req.headers.get('referer') || '';
-    if (referer.includes('/admin')) {
-      return 'admin';
+    // 1. فحص رمز جلسة الأدمن الموثقة في الترويسات أو جسم الطلب
+    const adminToken = req.headers.get('x-admin-token') || req.headers.get('authorization') || body?.adminToken;
+    if (isValidAdminToken(adminToken)) {
+      return { role: 'admin', allowedSections: [], guid: 'admin' };
     }
 
     // 2. استخراج معرف العتاد الفريد (Machine GUID)
@@ -273,37 +275,47 @@ async function resolveCallerRole(req: NextRequest, body?: any): Promise<'admin' 
                  '';
 
     if (!guid) {
-      return 'data_entry';
+      return { role: 'data_entry', allowedSections: [], guid: '' };
     }
 
-    // 3. التحقق من طفرات الصلاحيات السحابية (.sharecoc_access_mutations.json)
+    // 3. التحقق من مستودع الصلاحيات والأجهزة المركزي (.sharecoc_permissions.json)
     try {
-      const { mutations } = await getAccessHubMutations(false);
-      if (mutations.roles && mutations.roles[guid]?.role) {
-        return mutations.roles[guid].role;
+      const store = await getCloudAdminStore(false);
+      const dev = (store.devices || []).find((d) => d.machineGuid === guid);
+      if (dev && dev.isAuthorized) {
+        const role = (dev.accessRole || store.accessHubSecurity?.roles?.[guid] || 'data_entry') as 'admin' | 'supervisor' | 'data_entry' | 'viewer';
+        const allowedSections = dev.allowedAccessSections || store.accessHubSecurity?.allowedSections?.[guid] || [];
+        return { role, allowedSections, guid };
+      }
+      if (store.accessHubSecurity?.roles && store.accessHubSecurity.roles[guid]) {
+        return {
+          role: store.accessHubSecurity.roles[guid] as any,
+          allowedSections: store.accessHubSecurity.allowedSections?.[guid] || [],
+          guid,
+        };
       }
     } catch (e) {
       // fallback
     }
 
-    // 4. التحقق من مستودع الصلاحيات والأجهزة المركزي (.sharecoc_permissions.json)
+    // 4. التحقق من طفرات الصلاحيات السحابية (.sharecoc_access_mutations.json)
     try {
-      const store = await getCloudAdminStore(false);
-      if (store.accessHubSecurity?.roles && store.accessHubSecurity.roles[guid]) {
-        return store.accessHubSecurity.roles[guid];
-      }
-      const dev = (store.devices || []).find((d) => d.machineGuid === guid);
-      if (dev?.accessRole) {
-        return dev.accessRole;
+      const { mutations } = await getAccessHubMutations(false);
+      if (mutations.roles && mutations.roles[guid]?.role) {
+        return {
+          role: mutations.roles[guid].role as any,
+          allowedSections: mutations.roles[guid].allowedSections || [],
+          guid,
+        };
       }
     } catch (e) {
       // fallback
     }
   } catch (err) {
-    console.error('Error resolving caller role:', err);
+    console.error('Error resolving caller context:', err);
   }
 
-  return 'data_entry';
+  return { role: 'data_entry', allowedSections: [], guid: '' };
 }
 
 // GET: الاستعلام عن الجداول والبيانات بالحفاظ التام 100% على ترتيب الحقول + الفرز الزمني + إدارة الحقول
@@ -324,7 +336,8 @@ export async function GET(req: NextRequest) {
     const index = getIndex();
     const { mutations } = await getAccessHubMutations();
     const currentSig = mutations.last_sync || index.last_sync || '1';
-    const callerRole = await resolveCallerRole(req);
+    const callerContext = await resolveCallerContext(req);
+    const callerRole = callerContext.role;
 
     // فحص التحديثات الحية الفوري
     if (checkSig !== null && checkSig !== undefined && checkSig === currentSig) {
@@ -611,7 +624,12 @@ export async function GET(req: NextRequest) {
     const paginatedRows = filteredRows.slice(startIndex, startIndex + limit);
 
     const deletedSections = mutations.deleted_sections || [];
-    const activeFiles = allFiles.filter((f: any) => !deletedSections.includes(f.name));
+    let activeFiles = allFiles.filter((f: any) => !deletedSections.includes(f.name));
+
+    // تقييد الأقسام إذا كان الجهاز مقيداً بأقسام معينة في بيانات Access
+    if (callerRole !== 'admin' && Array.isArray(callerContext.allowedSections) && callerContext.allowedSections.length > 0) {
+      activeFiles = activeFiles.filter((f: any) => callerContext.allowedSections.includes(f.name));
+    }
 
     const grandTotalRecords = (index.total_records || 0) + (mutations.adds?.length || 0) - (mutations.deletes?.length || 0);
 
@@ -649,15 +667,33 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const callerRole = await resolveCallerRole(req, body);
+    const callerContext = await resolveCallerContext(req, body);
+    const callerRole = callerContext.role;
 
-    // العمليات الإدارية الحساسة محصورة حصراً بمدير النظام (Super Admin)
-    const adminActions = [
+    // فحص ما إذا كان القسم المطلوب مسموحاً للجهاز
+    const targetFile = body.file || body.fileName;
+    if (targetFile && callerRole !== 'admin' && Array.isArray(callerContext.allowedSections) && callerContext.allowedSections.length > 0) {
+      if (!callerContext.allowedSections.includes(targetFile)) {
+        return NextResponse.json({
+          success: false,
+          error: `عفواً، هذا الجهاز غير مصرح له بالعمل على القسم "${targetFile}".`,
+        }, { status: 403 });
+      }
+    }
+
+    // إذا كان دور الجهاز مستعرضاً فقط (viewer)
+    if (callerRole === 'viewer') {
+      return NextResponse.json({
+        success: false,
+        error: 'عفواً، الحساب مسجل بدور مستعلم فقط ولا يملك صلاحية الإضافة أو التعديل أو الحذف.',
+      }, { status: 403 });
+    }
+
+    // العمليات الهيكلية المتقدمة محصورة بمدير النظام حصراً
+    const superAdminActions = [
       'ADD_SECTION',
       'DELETE_SECTION',
       'RESTORE_SECTION',
-      'TRASH_RECORD',
-      'RESTORE_RECORD',
       'ADD_COLUMN',
       'DELETE_COLUMN',
       'RENAME_COLUMN',
@@ -667,11 +703,21 @@ export async function POST(req: NextRequest) {
       'DELETE_ROLE',
     ];
 
-    if (body.action && adminActions.includes(body.action)) {
+    if (body.action && superAdminActions.includes(body.action)) {
       if (callerRole !== 'admin') {
         return NextResponse.json({ 
           success: false, 
           error: 'عفواً، تم حجب العملية! تقتصر هذه الإجراءات الإدارية المتقدمة على مدير النظام (Super Admin) حصراً.' 
+        }, { status: 403 });
+      }
+    }
+
+    // حذف واستعادة السجلات مسموح للأدمن والمشرف فقط (محجوب عن مدخل البيانات)
+    if (['TRASH_RECORD', 'RESTORE_RECORD'].includes(body.action)) {
+      if (callerRole !== 'admin' && callerRole !== 'supervisor') {
+        return NextResponse.json({
+          success: false,
+          error: 'عفواً، صلاحية حذف واستعادة السجلات مقتصرة على المشرف ومدير النظام فقط.',
         }, { status: 403 });
       }
     }
@@ -861,13 +907,6 @@ export async function POST(req: NextRequest) {
     }
 
     // 6. إضافة قيد بيانات جديد (Standard Record Add)
-    if (callerRole === 'viewer') {
-      return NextResponse.json({ 
-        success: false, 
-        error: 'عفواً، لا يمكنك إضافة قيود جديدة! حساب هذا الجهاز مفعل بصلاحية (مستعلم فقط - Viewer للقراءة والاستعلام فقط).' 
-      }, { status: 403 });
-    }
-
     const { file, table, record } = body;
     if (!file || !table || !record) {
       return NextResponse.json({ success: false, error: 'بيانات القيد غير مكتملة' }, { status: 400 });

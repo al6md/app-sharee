@@ -12,6 +12,10 @@ import {
   getDefaultDepartmentPermission,
   normalizeDepartmentPermission,
   DepartmentPermissionConfig,
+  isValidAdminToken,
+  createAdminSessionToken,
+  sanitizeAdminStoreForPublic,
+  updateDeviceCustomPermissions,
 } from '@/lib/googleDrive';
 import { setAccessHubRole, deleteAccessHubRole } from '@/lib/accessCloudStore';
 
@@ -21,13 +25,41 @@ export async function GET(req: NextRequest) {
   try {
     const force = req.nextUrl.searchParams.get('force') === '1';
     const store = await getCloudAdminStore(force);
+
+    // فحص ما إذا كان الطلب مصحوباً برمز جلسة إدارية معتمدة
+    const adminToken = req.headers.get('x-admin-token') || req.headers.get('authorization');
+    const isAdmin = isValidAdminToken(adminToken);
+
+    if (isAdmin) {
+      // إرجاع البيانات الكاملة للإدارة مع حجب كلمة المرور المشفرة فقط
+      return NextResponse.json(
+        {
+          success: true,
+          permissions: store.departments,
+          adminCredentials: {
+            username: store.adminCredentials.username,
+            updatedAt: store.adminCredentials.updatedAt,
+          },
+          devices: store.devices,
+          accessHubSecurity: store.accessHubSecurity || DEFAULT_ACCESS_HUB_SECURITY,
+        },
+        {
+          headers: {
+            'Cache-Control': 'no-store, no-cache, must-revalidate',
+          },
+        }
+      );
+    }
+
+    // للطلبات العامة: إرجاع نسخة مطهرة أمنياً لا تحتوي أي كلمات مرور أو رموز PIN
+    const sanitized = sanitizeAdminStoreForPublic(store);
     return NextResponse.json(
       {
         success: true,
-        permissions: store.departments,
-        adminCredentials: store.adminCredentials,
-        devices: store.devices,
-        accessHubSecurity: store.accessHubSecurity || DEFAULT_ACCESS_HUB_SECURITY,
+        permissions: sanitized.departments,
+        adminCredentials: sanitized.adminCredentials,
+        devices: sanitized.devices,
+        accessHubSecurity: sanitized.accessHubSecurity,
       },
       {
         headers: {
@@ -49,9 +81,23 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { action, departmentName, permission, permissions } = body || {};
 
+    const adminToken = req.headers.get('x-admin-token') || req.headers.get('authorization') || body?.adminToken;
+    const isCallerAdmin = isValidAdminToken(adminToken);
+
     if (action === 'UPDATE_CREDENTIALS') {
+      const currentPassword = String(body.currentPassword || '').trim();
       const username = String(body.username || '').trim();
       const password = String(body.password || '').trim();
+
+      const store = await getCloudAdminStore(false);
+      const isPassValid = currentPassword && currentPassword === store.adminCredentials.password;
+      if (!isCallerAdmin && !isPassValid) {
+        return NextResponse.json(
+          { success: false, error: 'غير مصرح: يجب توثيق جلسة المسؤول أو إدخال كلمة المرور الحالية' },
+          { status: 403 }
+        );
+      }
+
       if (!username) {
         return NextResponse.json(
           { success: false, error: 'اسم المستخدم الجديد مطلوب ولا يمكن أن يكون فارغاً' },
@@ -65,9 +111,11 @@ export async function POST(req: NextRequest) {
         );
       }
       const savedCreds = await saveCloudAdminCredentials(username, password);
+      const newToken = createAdminSessionToken(username);
       return NextResponse.json({
         success: true,
-        adminCredentials: savedCreds,
+        adminToken: newToken,
+        adminCredentials: { username: savedCreds.username, updatedAt: savedCreds.updatedAt },
       });
     }
 
@@ -78,14 +126,70 @@ export async function POST(req: NextRequest) {
       const valid =
         u.toLowerCase() === store.adminCredentials.username.toLowerCase() &&
         p === store.adminCredentials.password;
+
+      if (!valid) {
+        return NextResponse.json({
+          success: false,
+          valid: false,
+          error: 'اسم المستخدم أو كلمة المرور غير صحيحة',
+        }, { status: 401 });
+      }
+
+      const token = createAdminSessionToken(store.adminCredentials.username);
       return NextResponse.json({
         success: true,
-        valid,
-        adminCredentials: store.adminCredentials,
+        valid: true,
+        adminToken: token,
+        adminCredentials: {
+          username: store.adminCredentials.username,
+          updatedAt: store.adminCredentials.updatedAt,
+        },
+      });
+    }
+
+    // تحديث الصلاحيات المخصصة لجهاز معين (أقسام المستندات والصلاحيات الـ 9 ودور وأقسام Access)
+    if (action === 'UPDATE_DEVICE_PERMISSIONS') {
+      if (!isCallerAdmin) {
+        return NextResponse.json({ success: false, error: 'غير مصرح: يلزم توثيق جلسة المسؤول لتعديل الصلاحيات' }, { status: 403 });
+      }
+
+      const guid = String(body.machineGuid || body.deviceId || '').trim();
+      if (!guid) {
+        return NextResponse.json({ success: false, error: 'معرّف الجهاز مطلوب' }, { status: 400 });
+      }
+
+      const res = await updateDeviceCustomPermissions(guid, {
+        name: body.name,
+        user: body.user,
+        department: body.department,
+        isAuthorized: body.isAuthorized,
+        authorizedDepts: body.authorizedDepts,
+        accessRole: body.accessRole,
+        allowedAccessSections: body.allowedAccessSections,
+        departmentPermissions: body.departmentPermissions,
+      });
+
+      // مزامنة سجل طفرات Access
+      try {
+        if (body.accessRole) {
+          await setAccessHubRole(guid, body.name || guid, body.accessRole, body.allowedAccessSections);
+        }
+      } catch (err) {
+        console.error('Failed to sync role to accessCloudStore:', err);
+      }
+
+      return NextResponse.json({
+        success: true,
+        message: 'تم تحديث الصلاحيات المخصصة للجهاز بنجاح',
+        device: res.device,
+        devices: res.devices,
       });
     }
 
     if (action === 'SAVE_DEVICES' && Array.isArray(body.devices)) {
+      if (!isCallerAdmin) {
+        return NextResponse.json({ success: false, error: 'غير مصرح' }, { status: 403 });
+      }
       const savedDevices = await saveCloudDevices(body.devices);
       return NextResponse.json({
         success: true,
@@ -302,6 +406,9 @@ export async function POST(req: NextRequest) {
 
     // حذف جهاز وسحب اعتماده فورياً (حصرياً من لوحة تحكم الأدمن)
     if (action === 'DELETE_DEVICE') {
+      if (!isCallerAdmin) {
+        return NextResponse.json({ success: false, error: 'غير مصرح: يجب توثيق جلسة المسؤول لحذف الجهاز' }, { status: 403 });
+      }
       const identifier = String(body.deviceId || body.machineGuid || '').trim();
       if (!identifier) {
         return NextResponse.json({ success: false, error: 'معرّف الجهاز المطلوب حذفه غير متوفر' }, { status: 400 });

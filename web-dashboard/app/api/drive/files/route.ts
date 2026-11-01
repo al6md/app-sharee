@@ -18,6 +18,9 @@ import {
   batchTrashDriveItems,
   batchRestoreDriveItems,
   batchPermanentDeleteDriveItems,
+  getCloudAdminStore,
+  getDeviceEffectiveDeptPerms,
+  isValidAdminToken,
   ROOT_FOLDER_ID 
 } from '@/lib/googleDrive';
 
@@ -25,6 +28,42 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 export const fetchCache = 'force-no-store';
 export const maxDuration = 60;
+
+async function checkOperationPerm(
+  req: NextRequest, 
+  body: any, 
+  actionKey: 'canUpload' | 'canCreateFolder' | 'canEdit' | 'canRename' | 'canMove' | 'canDelete' | 'canPermanentDelete'
+): Promise<{ allowed: boolean; error?: string }> {
+  try {
+    const adminToken = req.headers.get('x-admin-token') || req.headers.get('authorization') || body?.adminToken;
+    if (isValidAdminToken(adminToken)) {
+      return { allowed: true };
+    }
+
+    const guid = req.headers.get('x-machine-guid') || body?.machineGuid;
+    if (!guid) return { allowed: true };
+
+    const store = await getCloudAdminStore(false);
+    const dev = (store.devices || []).find((d) => d.machineGuid === guid);
+    if (!dev) return { allowed: true };
+
+    if (dev.isAuthorized === false) {
+      return { allowed: false, error: 'تم إيقاف صلاحية هذا الجهاز بأمر الإدارة' };
+    }
+
+    const dept = body.departmentName || body.dept || (body.folderPath ? String(body.folderPath).split('/')[0] : '');
+    if (dept) {
+      const baseCfg = store.departments?.[dept];
+      const perms = getDeviceEffectiveDeptPerms(dev, dept, baseCfg);
+      if (perms[actionKey] === false) {
+        return { allowed: false, error: `عفواً، لا يمتلك هذا الجهاز الصلاحية المطلوبة (${actionKey}) في هذا القسم` };
+      }
+    }
+  } catch {
+    // fallback
+  }
+  return { allowed: true };
+}
 
 // GET: جلب شجرة الملفات والأقسام الحية من Google Drive
 export async function GET(req: NextRequest) {
@@ -70,6 +109,9 @@ export async function POST(req: NextRequest) {
       const body = await req.json();
 
       if (body.action === 'CREATE_FOLDER') {
+        const check = await checkOperationPerm(req, body, 'canCreateFolder');
+        if (!check.allowed) return NextResponse.json({ success: false, error: check.error }, { status: 403 });
+
         if (body.folderPath) {
           const folderId = await ensureCloudFolderPath(body.folderPath, body.parentId || ROOT_FOLDER_ID);
           return NextResponse.json({ success: true, folder: { id: folderId, name: body.name || body.folderPath } });
@@ -92,6 +134,9 @@ export async function POST(req: NextRequest) {
       }
 
       if (body.action === 'INIT_UPLOAD') {
+        const check = await checkOperationPerm(req, body, 'canUpload');
+        if (!check.allowed) return NextResponse.json({ success: false, error: check.error }, { status: 403 });
+
         const origin = req.headers.get('origin') || body.origin || undefined;
         const initData = await initResumableUpload({
           fileName: body.fileName,
@@ -114,16 +159,25 @@ export async function POST(req: NextRequest) {
       }
 
       if (body.action === 'RENAME') {
+        const check = await checkOperationPerm(req, body, 'canRename');
+        if (!check.allowed) return NextResponse.json({ success: false, error: check.error }, { status: 403 });
+
         const updated = await renameDriveItem(body.id, body.name);
         return NextResponse.json({ success: true, item: updated });
       }
 
       if (body.action === 'MOVE') {
+        const check = await checkOperationPerm(req, body, 'canMove');
+        if (!check.allowed) return NextResponse.json({ success: false, error: check.error }, { status: 403 });
+
         const moved = await moveDriveItem(body.id, body.targetFolderId || ROOT_FOLDER_ID, body.targetFolderPath);
         return NextResponse.json({ success: true, item: moved });
       }
 
       if (body.action === 'BATCH_MOVE') {
+        const check = await checkOperationPerm(req, body, 'canMove');
+        if (!check.allowed) return NextResponse.json({ success: false, error: check.error }, { status: 403 });
+
         const result = await batchMoveDriveItems(
           Array.isArray(body.ids) ? body.ids : [],
           body.targetFolderId || ROOT_FOLDER_ID,
@@ -143,21 +197,33 @@ export async function POST(req: NextRequest) {
       }
 
       if (body.action === 'DELETE' || body.action === 'TRASH') {
+        const check = await checkOperationPerm(req, body, 'canDelete');
+        if (!check.allowed) return NextResponse.json({ success: false, error: check.error }, { status: 403 });
+
         await deleteDriveItem(body.id);
         return NextResponse.json({ success: true, message: 'تم نقل الملف إلى سلة المحذوفات بنجاح' });
       }
 
       if (body.action === 'BATCH_DELETE' || body.action === 'BATCH_TRASH') {
+        const check = await checkOperationPerm(req, body, 'canDelete');
+        if (!check.allowed) return NextResponse.json({ success: false, error: check.error }, { status: 403 });
+
         const result = await batchTrashDriveItems(Array.isArray(body.ids) ? body.ids : []);
         return NextResponse.json({ success: true, ...result });
       }
 
       if (body.action === 'PERMANENT_DELETE') {
+        const check = await checkOperationPerm(req, body, 'canPermanentDelete');
+        if (!check.allowed) return NextResponse.json({ success: false, error: check.error }, { status: 403 });
+
         await permanentDeleteDriveItem(body.id);
         return NextResponse.json({ success: true, message: 'تم الحذف النهائي بنجاح' });
       }
 
       if (body.action === 'BATCH_PERMANENT_DELETE') {
+        const check = await checkOperationPerm(req, body, 'canPermanentDelete');
+        if (!check.allowed) return NextResponse.json({ success: false, error: check.error }, { status: 403 });
+
         const result = await batchPermanentDeleteDriveItems(Array.isArray(body.ids) ? body.ids : []);
         return NextResponse.json({ success: true, ...result });
       }

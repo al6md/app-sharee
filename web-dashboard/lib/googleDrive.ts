@@ -1,5 +1,6 @@
 import { google } from 'googleapis';
 import { Readable } from 'stream';
+import crypto from 'crypto';
 
 const CLIENT_ID = process.env.GDRIVE_CLIENT_ID;
 const CLIENT_SECRET = process.env.GDRIVE_CLIENT_SECRET;
@@ -60,6 +61,18 @@ export interface AdminCredentialsConfig {
   updatedAt: string;
 }
 
+export interface DeviceDeptPermissionConfig {
+  canView?: boolean;
+  canDownload?: boolean;
+  canUpload?: boolean;
+  canCreateFolder?: boolean;
+  canEdit?: boolean;
+  canRename?: boolean;
+  canMove?: boolean;
+  canDelete?: boolean;
+  canPermanentDelete?: boolean;
+}
+
 export interface AuthorizedDeviceConfig {
   id: string;
   name: string;
@@ -72,7 +85,9 @@ export interface AuthorizedDeviceConfig {
   department?: string;
   authorizedDepts?: string[];
   registeredAt?: string;
-  accessRole?: 'admin' | 'data_entry' | 'viewer';
+  accessRole?: 'admin' | 'supervisor' | 'data_entry' | 'viewer';
+  allowedAccessSections?: string[];
+  departmentPermissions?: Record<string, DeviceDeptPermissionConfig>;
 }
 
 export interface AccessHubSecurityConfig {
@@ -81,8 +96,130 @@ export interface AccessHubSecurityConfig {
   password?: string;
   pinCode?: string;
   authorizedDevices?: string[];
-  roles?: Record<string, 'admin' | 'data_entry' | 'viewer'>;
+  roles?: Record<string, 'admin' | 'supervisor' | 'data_entry' | 'viewer'>;
+  allowedSections?: Record<string, string[]>;
   updatedAt?: string;
+}
+
+const ADMIN_TOKEN_SECRET = process.env.ADMIN_JWT_SECRET || 'sharecoc-admin-secure-token-secret-2026';
+
+export function createAdminSessionToken(username: string): string {
+  const ts = Date.now();
+  const raw = `${username}:${ts}:${ADMIN_TOKEN_SECRET}`;
+  const sig = crypto.createHash('sha256').update(raw).digest('hex').substring(0, 32);
+  const payload = Buffer.from(JSON.stringify({ u: username, ts, sig })).toString('base64url');
+  return payload;
+}
+
+export function isValidAdminToken(tokenOrHeader?: string | null): boolean {
+  if (!tokenOrHeader) return false;
+  const token = String(tokenOrHeader).replace(/^Bearer\s+/i, '').trim();
+  if (!token) return false;
+  try {
+    const jsonStr = Buffer.from(token, 'base64url').toString('utf-8');
+    const obj = JSON.parse(jsonStr);
+    if (!obj || !obj.u || !obj.ts || !obj.sig) return false;
+    // انتهاء الصلاحية بعد 48 ساعة
+    if (Date.now() - Number(obj.ts) > 48 * 60 * 60 * 1000) return false;
+    const expectedRaw = `${obj.u}:${obj.ts}:${ADMIN_TOKEN_SECRET}`;
+    const expectedSig = crypto.createHash('sha256').update(expectedRaw).digest('hex').substring(0, 32);
+    return obj.sig === expectedSig;
+  } catch {
+    return false;
+  }
+}
+
+export function getDeviceEffectiveDeptPerms(
+  device: AuthorizedDeviceConfig | undefined,
+  departmentName: string,
+  baseDeptConfig?: DepartmentPermissionConfig
+): DeviceDeptPermissionConfig {
+  const base: DeviceDeptPermissionConfig = {
+    canView: baseDeptConfig?.canView ?? true,
+    canDownload: baseDeptConfig?.canDownload ?? true,
+    canUpload: baseDeptConfig?.canUpload ?? true,
+    canCreateFolder: baseDeptConfig?.canCreateFolder ?? true,
+    canEdit: baseDeptConfig?.canEdit ?? true,
+    canRename: baseDeptConfig?.canRename ?? true,
+    canMove: baseDeptConfig?.canMove ?? true,
+    canDelete: baseDeptConfig?.canDelete ?? true,
+    canPermanentDelete: baseDeptConfig?.canPermanentDelete ?? true,
+  };
+
+  if (!device || !device.departmentPermissions) {
+    return base;
+  }
+
+  const custom = device.departmentPermissions[departmentName];
+  if (!custom) return base;
+
+  return {
+    canView: custom.canView ?? base.canView,
+    canDownload: custom.canDownload ?? base.canDownload,
+    canUpload: custom.canUpload ?? base.canUpload,
+    canCreateFolder: custom.canCreateFolder ?? base.canCreateFolder,
+    canEdit: custom.canEdit ?? base.canEdit,
+    canRename: custom.canRename ?? base.canRename,
+    canMove: custom.canMove ?? base.canMove,
+    canDelete: custom.canDelete ?? base.canDelete,
+    canPermanentDelete: custom.canPermanentDelete ?? base.canPermanentDelete,
+  };
+}
+
+export function isDeviceAllowedAccessSection(
+  device: AuthorizedDeviceConfig | undefined,
+  sectionName: string
+): boolean {
+  if (!device || !device.isAuthorized) return false;
+  if (device.accessRole === 'admin') return true;
+  if (!Array.isArray(device.allowedAccessSections) || device.allowedAccessSections.length === 0) {
+    return true;
+  }
+  return device.allowedAccessSections.includes(sectionName);
+}
+
+export function sanitizeAdminStoreForPublic(store: CloudAdminStore) {
+  const sanitizedAdminCreds = {
+    username: store.adminCredentials?.username || 'admin',
+    updatedAt: store.adminCredentials?.updatedAt || '',
+  };
+
+  const sanitizedHubSec = {
+    enabled: Boolean(store.accessHubSecurity?.enabled),
+    authorizedDevices: store.accessHubSecurity?.authorizedDevices || [],
+    roles: store.accessHubSecurity?.roles || {},
+    allowedSections: store.accessHubSecurity?.allowedSections || {},
+    updatedAt: store.accessHubSecurity?.updatedAt || '',
+    isProtected: Boolean(store.accessHubSecurity?.username || store.accessHubSecurity?.password || store.accessHubSecurity?.pinCode),
+  };
+
+  const sanitizedDepts: Record<string, any> = {};
+  for (const [dName, dCfg] of Object.entries(store.departments || {})) {
+    sanitizedDepts[dName] = {
+      departmentName: dCfg.departmentName || dName,
+      canView: dCfg.canView,
+      canDownload: dCfg.canDownload,
+      canUpload: dCfg.canUpload,
+      canCreateFolder: dCfg.canCreateFolder,
+      canEdit: dCfg.canEdit,
+      canRename: dCfg.canRename,
+      canMove: dCfg.canMove,
+      canDelete: dCfg.canDelete,
+      canPermanentDelete: dCfg.canPermanentDelete,
+      authorizedDevices: dCfg.authorizedDevices || [],
+      updatedAt: dCfg.updatedAt,
+      isProtected: Boolean(dCfg.pinCode || dCfg.deptUsername || dCfg.deptPassword),
+      hasUserPass: Boolean(dCfg.deptUsername || dCfg.deptPassword),
+      hasPin: Boolean(dCfg.pinCode),
+    };
+  }
+
+  return {
+    departments: sanitizedDepts,
+    devices: store.devices || [],
+    accessHubSecurity: sanitizedHubSec,
+    adminCredentials: sanitizedAdminCreds,
+  };
 }
 
 export interface CloudAdminStore {
@@ -1115,19 +1252,106 @@ export async function getAllCloudFiles(forceRefresh: boolean = false) {
   }
 
   const adminStore = await getCloudAdminStore();
+  const sanitized = sanitizeAdminStoreForPublic(adminStore);
 
   const result = {
     folders: departments,
     allFolders,
     files: [...activeFiles, ...trashFiles],
-    permissions: adminStore.departments,
-    adminCredentials: adminStore.adminCredentials,
-    devices: adminStore.devices,
-    accessHubSecurity: adminStore.accessHubSecurity || DEFAULT_ACCESS_HUB_SECURITY,
+    permissions: sanitized.departments,
+    adminCredentials: sanitized.adminCredentials,
+    devices: sanitized.devices,
+    accessHubSecurity: sanitized.accessHubSecurity,
   };
 
   _cloudFilesCache = { data: result, ts: Date.now() };
   return result;
+}
+
+/**
+ * تحديث الصلاحيات المخصصة لجهاز معين في نظام المستندات وقواعد بيانات Access
+ */
+export async function updateDeviceCustomPermissions(
+  machineGuid: string,
+  updates: {
+    name?: string;
+    user?: string;
+    department?: string;
+    authorizedDepts?: string[];
+    accessRole?: 'admin' | 'supervisor' | 'data_entry' | 'viewer';
+    allowedAccessSections?: string[];
+    departmentPermissions?: Record<string, DeviceDeptPermissionConfig>;
+    isAuthorized?: boolean;
+  }
+): Promise<{ success: boolean; device: AuthorizedDeviceConfig; devices: AuthorizedDeviceConfig[] }> {
+  const cleanGuid = String(machineGuid || '').trim();
+  if (!cleanGuid) throw new Error('معرف الجهاز مطلوب');
+
+  const updated = await persistCloudAdminStore((current) => {
+    const devices = [...(current.devices || [])];
+    const devIdx = devices.findIndex((d) => d.machineGuid === cleanGuid || d.id === cleanGuid);
+    if (devIdx < 0) {
+      throw new Error(`الجهاز ذو المعرف "${cleanGuid}" غير موجود في قائمة الأجهزة`);
+    }
+
+    const cur = devices[devIdx];
+    const updatedDev: AuthorizedDeviceConfig = {
+      ...cur,
+      name: updates.name !== undefined ? updates.name : cur.name,
+      user: updates.user !== undefined ? updates.user : cur.user,
+      department: updates.department !== undefined ? updates.department : cur.department,
+      isAuthorized: updates.isAuthorized !== undefined ? updates.isAuthorized : cur.isAuthorized,
+      authorizedDepts: updates.authorizedDepts !== undefined ? updates.authorizedDepts : cur.authorizedDepts,
+      accessRole: updates.accessRole !== undefined ? updates.accessRole : cur.accessRole,
+      allowedAccessSections: updates.allowedAccessSections !== undefined ? updates.allowedAccessSections : cur.allowedAccessSections,
+      departmentPermissions: updates.departmentPermissions !== undefined ? updates.departmentPermissions : cur.departmentPermissions,
+    };
+    devices[devIdx] = updatedDev;
+
+    // مزامنة أقسام المستندات في departments
+    const departments = { ...(current.departments || {}) };
+    const allowedDepts = new Set(updatedDev.authorizedDepts || []);
+    for (const [dName, dCfg] of Object.entries(departments)) {
+      const curAuthed = new Set(dCfg.authorizedDevices || []);
+      if (allowedDepts.has(dName)) {
+        curAuthed.add(cleanGuid);
+      } else {
+        curAuthed.delete(cleanGuid);
+      }
+      departments[dName] = {
+        ...dCfg,
+        authorizedDevices: Array.from(curAuthed),
+        updatedAt: new Date().toISOString(),
+      };
+    }
+
+    // مزامنة أمان Access Hub
+    let accessHubSecurity = current.accessHubSecurity ? { ...current.accessHubSecurity } : { ...DEFAULT_ACCESS_HUB_SECURITY };
+    const curRoles = { ...(accessHubSecurity.roles || {}) };
+    if (updatedDev.accessRole) {
+      curRoles[cleanGuid] = updatedDev.accessRole;
+    }
+    const curAllowedSections = { ...(accessHubSecurity.allowedSections || {}) };
+    if (updatedDev.allowedAccessSections) {
+      curAllowedSections[cleanGuid] = updatedDev.allowedAccessSections;
+    }
+    accessHubSecurity = {
+      ...accessHubSecurity,
+      roles: curRoles,
+      allowedSections: curAllowedSections,
+      updatedAt: new Date().toISOString(),
+    };
+
+    return {
+      ...current,
+      devices,
+      departments,
+      accessHubSecurity,
+    };
+  });
+
+  const matching = updated.devices.find((d) => d.machineGuid === cleanGuid || d.id === cleanGuid)!;
+  return { success: true, device: matching, devices: updated.devices };
 }
 
 /**

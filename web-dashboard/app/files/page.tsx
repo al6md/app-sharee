@@ -147,6 +147,7 @@ export default function FilesPage() {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [permissionsMap, setPermissionsMap] = useState<Record<string, DepartmentPermConfig>>({});
+  const [cloudDevices, setCloudDevices] = useState<any[]>([]);
   const [unlockedDepts, setUnlockedDepts] = useState<string[]>(() => {
     if (typeof window !== 'undefined') {
       try {
@@ -205,6 +206,20 @@ export default function FilesPage() {
   ): boolean => {
     const dept = resolveDeptName(folderOrDept);
     if (!dept) return true;
+
+    // 1. فحص الصلاحيات المخصصة لهذا الجهاز بالتحديد (Custom RBAC overrides)
+    const currentGuid = deviceGuid || (typeof window !== 'undefined' ? localStorage.getItem('sharecoc_device_guid') || '' : '');
+    if (currentGuid && cloudDevices.length > 0) {
+      const myDev = cloudDevices.find((d: any) => d.machineGuid === currentGuid || d.id === currentGuid);
+      if (myDev?.departmentPermissions && myDev.departmentPermissions[dept]) {
+        const custom = myDev.departmentPermissions[dept];
+        if (custom[key] !== undefined && custom[key] !== null) {
+          return custom[key] !== false;
+        }
+      }
+    }
+
+    // 2. فحص الصلاحية الأساسية للقسم ككل
     const perm = permissionsMap[dept];
     if (!perm) return true;
     return perm[key] !== false;
@@ -215,12 +230,13 @@ export default function FilesPage() {
     if (!dept) return false;
     const perm = permissionsMap[dept];
     if (!perm) return false;
-    const hasPin = Boolean(perm.pinCode && String(perm.pinCode).trim().length > 0);
+    const hasPin = Boolean((perm.pinCode && String(perm.pinCode).trim().length > 0) || (perm as any).hasPin);
     const hasUserPass = Boolean(
       (perm.deptUsername && perm.deptUsername.trim().length > 0) ||
-      (perm.deptPassword && perm.deptPassword.trim().length > 0)
+      (perm.deptPassword && perm.deptPassword.trim().length > 0) ||
+      (perm as any).hasUserPass
     );
-    return hasPin || hasUserPass;
+    return hasPin || hasUserPass || Boolean((perm as any).isProtected);
   };
   const isDeptPinProtected = isDeptProtected;
 
@@ -229,9 +245,18 @@ export default function FilesPage() {
     if (!dept) return true;
     if (!isDeptProtected(dept)) return true;
 
+    const currentGuid = deviceGuid || (typeof window !== 'undefined' ? localStorage.getItem('sharecoc_device_guid') || '' : '');
+
+    // 0. التحقق هل حظر الأدمن هذا القسم تحديداً عن هذا الجهاز في مصفوفة الصلاحيات؟
+    if (currentGuid && cloudDevices.length > 0) {
+      const myDev = cloudDevices.find((d: any) => d.machineGuid === currentGuid || d.id === currentGuid);
+      if (myDev?.departmentPermissions?.[dept]?.allowed === false) {
+        return false;
+      }
+    }
+
     // 1. التحقق السحابي الفوري: هل بصمة هذا الجهاز مسجلة ومعتمدة لدى القسم في لوحة الأدمن؟
     const perm = permissionsMap[dept];
-    const currentGuid = deviceGuid || (typeof window !== 'undefined' ? localStorage.getItem('sharecoc_device_guid') || '' : '');
     if (perm && Array.isArray(perm.authorizedDevices) && currentGuid && perm.authorizedDevices.includes(currentGuid)) {
       return true;
     }
@@ -309,6 +334,7 @@ export default function FilesPage() {
           localStorage.setItem('sharecoc_device_guid', currentGuid);
           localStorage.setItem('sharecoc_device_name', finalDeviceName);
           localStorage.setItem('sharecoc_device_registered', 'true');
+          localStorage.setItem('sharecoc_reg_time', String(Date.now()));
         }
         setDeviceGuid(currentGuid);
         setDeviceName(finalDeviceName);
@@ -722,14 +748,27 @@ export default function FilesPage() {
       if (data.success) {
         const myGuid = deviceGuid || (typeof window !== 'undefined' ? localStorage.getItem('sharecoc_device_guid') || '' : '');
 
-        // فحص ما إذا كان الأدمن قد قام صراحةً بحذف هذا الجهاز من لوحة التحكم
-        if (myGuid && Array.isArray(data.devices)) {
-          const isRegistered = typeof window !== 'undefined' && localStorage.getItem('sharecoc_device_registered') === 'true';
+        if (Array.isArray(data.devices)) {
+          setCloudDevices(data.devices);
+        }
+
+        // فحص ما إذا كان الأدمن قد قام صراحةً بحذف هذا الجهاز من لوحة التحكم (مع منع الـ Race Condition)
+        if (myGuid && Array.isArray(data.devices) && data.devices.length > 0) {
+          const isConfirmed = typeof window !== 'undefined' && localStorage.getItem('sharecoc_device_confirmed') === 'true';
+          const regTime = typeof window !== 'undefined' ? Number(localStorage.getItem('sharecoc_reg_time') || '0') : 0;
+          const isRecentReg = Date.now() - regTime < 60000;
           const stillInDevices = data.devices.some((d: any) => d.machineGuid === myGuid || d.id === myGuid);
-          if (isRegistered && !stillInDevices) {
+
+          if (stillInDevices) {
+            if (typeof window !== 'undefined') {
+              localStorage.setItem('sharecoc_device_confirmed', 'true');
+            }
+          } else if (isConfirmed && !isRecentReg) {
             if (typeof window !== 'undefined') {
               localStorage.removeItem('sharecoc_unlocked_depts');
               localStorage.removeItem('sharecoc_device_registered');
+              localStorage.removeItem('sharecoc_device_confirmed');
+              localStorage.removeItem('sharecoc_reg_time');
             }
             setUnlockedDepts([]);
           }

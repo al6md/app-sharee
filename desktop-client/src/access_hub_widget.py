@@ -1229,6 +1229,11 @@ class AccessHubWidget(QWidget):
             self.role_badge.setStyleSheet("background: #FEF3C7; color: #92400E; border: 1px solid #FCD34D; border-radius: 6px; padding: 4px 10px; font-weight: bold; font-size: 11px;")
             self.btn_add.show()
             self.btn_edit.show()
+        elif role == "supervisor":
+            self.role_badge.setText("🛡️ مشرف تدقيق (تعديل واسترجاع وحذف)")
+            self.role_badge.setStyleSheet("background: #EDE9FE; color: #5B21B6; border: 1px solid #C4B5FD; border-radius: 6px; padding: 4px 10px; font-weight: bold; font-size: 11px;")
+            self.btn_add.show()
+            self.btn_edit.show()
         elif role == "viewer":
             self.role_badge.setText("👁️ مستعلم فقط (للقراءة والاستعلام)")
             self.role_badge.setStyleSheet("background: #DBEAFE; color: #1E40AF; border: 1px solid #93C5FD; border-radius: 6px; padding: 4px 10px; font-weight: bold; font-size: 11px;")
@@ -1293,12 +1298,14 @@ class AccessHubWidget(QWidget):
         self.current_data = data
 
         # تحديد وتطبيق الصلاحية المؤسسية لهذا الجهاز (RBAC Engine)
-        role = data.get("current_role")
+        role = data.get("currentRole") or data.get("current_role")
         if not role:
             my_guid = get_desktop_machine_guid()
             roles_map = data.get("roles", {})
             if my_guid in roles_map and isinstance(roles_map[my_guid], dict):
                 role = roles_map[my_guid].get("role", "data_entry")
+            elif my_guid in roles_map and isinstance(roles_map[my_guid], str):
+                role = roles_map[my_guid]
             else:
                 role = "data_entry"
         self.user_role = role
@@ -1306,6 +1313,9 @@ class AccessHubWidget(QWidget):
 
         # 1. تحديث قائمة الأقسام (الملفات) في الـ ComboBox مرة واحدة
         files = data.get("files", [])
+        allowed_sections = data.get("allowedSections") or data.get("allowed_sections")
+        if allowed_sections and isinstance(allowed_sections, list) and len(allowed_sections) > 0:
+            files = [f for f in files if f.get("name") in allowed_sections]
         if files and self.combo_file.count() == 0:
             self.combo_file.blockSignals(True)
             for f in files:

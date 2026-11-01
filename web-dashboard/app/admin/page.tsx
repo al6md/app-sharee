@@ -73,7 +73,9 @@ interface DeviceRecord {
   department?: string;
   authorizedDepts?: string[];
   registeredAt?: string;
-  accessRole?: 'admin' | 'data_entry' | 'viewer';
+  accessRole?: 'admin' | 'supervisor' | 'data_entry' | 'viewer';
+  allowedAccessSections?: string[];
+  departmentPermissions?: Record<string, any>;
 }
 
 interface FileRecord {
@@ -102,6 +104,7 @@ export default function AdminControlPage() {
   const [showLoginPass, setShowLoginPass] = useState<boolean>(false);
   const [loginError, setLoginError] = useState<string>('');
   const [loggingIn, setLoggingIn] = useState<boolean>(false);
+  const [adminToken, setAdminToken] = useState<string>(() => (typeof window !== 'undefined' ? sessionStorage.getItem('sharecoc_admin_token') || '' : ''));
 
   // نافذة وتبويب تعديل بيانات الدخول (اليوزر والباسورد)
   const [showCredentialsModal, setShowCredentialsModal] = useState<boolean>(false);
@@ -211,6 +214,16 @@ export default function AdminControlPage() {
   const [newDeviceUser, setNewDeviceUser] = useState('');
   const [newDeviceOs, setNewDeviceOs] = useState('Windows 11 Pro');
 
+  // نافذة تخصيص صلاحيات جهاز محدد (RBAC Modal)
+  const [showDevicePermsModal, setShowDevicePermsModal] = useState(false);
+  const [permsModalTab, setPermsModalTab] = useState<'DOCUMENTS' | 'ACCESS'>('DOCUMENTS');
+  const [selectedDeviceForPerms, setSelectedDeviceForPerms] = useState<any | null>(null);
+  const [permsModalAuthorizedDepts, setPermsModalAuthorizedDepts] = useState<string[]>([]);
+  const [permsModalAccessRole, setPermsModalAccessRole] = useState<'admin' | 'supervisor' | 'data_entry' | 'viewer'>('data_entry');
+  const [permsModalAllowedSections, setPermsModalAllowedSections] = useState<string[]>([]);
+  const [permsModalDeptActions, setPermsModalDeptActions] = useState<Record<string, any>>({});
+  const [permsModalSelectedDept, setPermsModalSelectedDept] = useState<string>('');
+
   // دمج كافة الأجهزة المعروفة والمعتمدة دون استثناء لضمان ظهورها 100%
   const allKnownDevices = useMemo(() => {
     const map = new Map<
@@ -221,10 +234,13 @@ export default function AdminControlPage() {
         name: string;
         user: string;
         os: string;
-        role: 'admin' | 'data_entry' | 'viewer';
+        role: 'admin' | 'supervisor' | 'data_entry' | 'viewer';
         isAuthorized: boolean;
         registeredAt?: string;
         lastSeen?: string;
+        authorizedDepts?: string[];
+        allowedAccessSections?: string[];
+        departmentPermissions?: Record<string, any>;
       }
     >();
 
@@ -240,6 +256,9 @@ export default function AdminControlPage() {
           isAuthorized: d.isAuthorized !== false,
           registeredAt: d.registeredAt,
           lastSeen: d.lastSeen || 'متصل الآن',
+          authorizedDepts: d.authorizedDepts,
+          allowedAccessSections: d.allowedAccessSections,
+          departmentPermissions: d.departmentPermissions,
         });
       }
     });
@@ -256,7 +275,7 @@ export default function AdminControlPage() {
             name: `جهاز معتمد (${guid.substring(0, 8)})`,
             user: 'موظف مصرح',
             os: 'Windows 11 / Web',
-            role: accessRoles[guid]?.role || 'data_entry',
+            role: (accessRoles[guid]?.role || 'data_entry') as any,
             isAuthorized: true,
             lastSeen: 'متصل الآن',
           });
@@ -279,7 +298,7 @@ export default function AdminControlPage() {
             name: r.name || `جهاز (${guid.substring(0, 8)})`,
             user: r.name || 'موظف',
             os: 'Windows 11 / Web',
-            role: r.role || 'data_entry',
+            role: (r.role || 'data_entry') as any,
             isAuthorized: true,
             lastSeen: 'متصل الآن',
           });
@@ -525,8 +544,11 @@ export default function AdminControlPage() {
   // ترويسات الصلاحية الإدارية الكاملة لمركز بيانات Access
   const getAdminHeaders = () => {
     const guid = typeof window !== 'undefined' ? localStorage.getItem('sharecoc_device_guid') || '' : '';
+    const token = adminToken || (typeof window !== 'undefined' ? sessionStorage.getItem('sharecoc_admin_token') || '' : '');
     return {
       'Content-Type': 'application/json',
+      'x-admin-token': token,
+      'Authorization': `Bearer ${token}`,
       'x-admin-role': 'admin',
       'x-admin-session': 'true',
       ...(guid ? { 'x-machine-guid': guid } : {}),
@@ -942,26 +964,24 @@ export default function AdminControlPage() {
       });
       const data = await res.json();
 
-      if (data.success && data.adminCredentials) {
-        const cUser = data.adminCredentials.username || 'admin';
-        const cPass = data.adminCredentials.password || 'admin1234';
-        setAdminUsername(cUser);
-        setAdminPassword(cPass);
-        localStorage.setItem('sharecoc_admin_username', cUser);
-        localStorage.setItem('sharecoc_admin_password', cPass);
-
-        if (data.valid) {
-          setIsAuthenticated(true);
+      if (data.success && data.valid && data.adminToken) {
+        setAdminToken(data.adminToken);
+        if (typeof window !== 'undefined') {
+          sessionStorage.setItem('sharecoc_admin_token', data.adminToken);
           localStorage.setItem('sharecoc_admin_session', 'true');
-          setNewUserInput(cUser);
-          setLoginPass('');
-          setLoginError('');
-          setToastMessage({
-            text: `✅ مرحباً بك يا ${cUser}، تم تسجيل الدخول إلى لوحة التحكم بنجاح!`,
-            type: 'success',
-          });
-          return;
         }
+        setIsAuthenticated(true);
+        const cUser = data.adminCredentials?.username || inputUser;
+        setAdminUsername(cUser);
+        setNewUserInput(cUser);
+        setLoginPass('');
+        setLoginError('');
+        setToastMessage({
+          text: `✅ مرحباً بك يا ${cUser}، تم تسجيل الدخول بنجاح!`,
+          type: 'success',
+        });
+        await Promise.all([loadAllData(false), loadAccessHubData()]);
+        return;
       }
 
       // التحقق الاحتياطي المحلي في حال تعذر الاتصال اللحظي
@@ -1000,7 +1020,11 @@ export default function AdminControlPage() {
   const handleLogout = () => {
     if (confirm('هل تود تسجيل الخروج من لوحة تحكم الأدمن؟')) {
       setIsAuthenticated(false);
-      localStorage.removeItem('sharecoc_admin_session');
+      setAdminToken('');
+      if (typeof window !== 'undefined') {
+        sessionStorage.removeItem('sharecoc_admin_token');
+        localStorage.removeItem('sharecoc_admin_session');
+      }
       setLoginUser('');
       setLoginPass('');
     }
@@ -1586,7 +1610,7 @@ export default function AdminControlPage() {
       setActionLoading(true);
       const res = await fetch('/api/drive/permissions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAdminHeaders(),
         body: JSON.stringify({
           action: 'DELETE_DEVICE',
           deviceId,
@@ -1605,6 +1629,147 @@ export default function AdminControlPage() {
     } finally {
       setActionLoading(false);
     }
+  };
+
+  const ACTION_LABELS: { key: string; label: string; icon: string; desc: string }[] = [
+    { key: 'canView', label: 'عرض وتصفح القسم', icon: '👁️', desc: 'إمكانية فتح القسم ورؤية محتوياته' },
+    { key: 'canDownload', label: 'فتح وتنزيل الملفات', icon: '📥', desc: 'تنزيل أو قراءة المستندات على الحاسوب' },
+    { key: 'canUpload', label: 'رفع مستندات جديدة', icon: '📤', desc: 'إضافة ملفات جديدة داخل القسم' },
+    { key: 'canCreateFolder', label: 'إنشاء مجلدات فرعية', icon: '📁', desc: 'إنشاء تقسيمات ومجلدات جديدة' },
+    { key: 'canEdit', label: 'تعديل الملفات', icon: '✏️', desc: 'حفظ وتحديث المستندات الموجودة' },
+    { key: 'canRename', label: 'إعادة التسمية', icon: '🏷️', desc: 'تغيير أسماء الملفات أو المجلدات' },
+    { key: 'canMove', label: 'نقل الملفات والمجلدات', icon: '↔️', desc: 'نقل الملفات بين المجلدات الفرعية' },
+    { key: 'canDelete', label: 'الحذف لسلة المهملات', icon: '🗑️', desc: 'نقل الملفات أو المجلدات إلى السلة' },
+    { key: 'canPermanentDelete', label: 'الحذف النهائي', icon: '🔥', desc: 'شطب الملفات نهائياً من النظام' },
+  ];
+
+  // فتح نافذة تخصيص الصلاحيات للجهاز
+  const handleOpenDevicePermsModal = (dev: any) => {
+    setSelectedDeviceForPerms(dev);
+    const targetGuid = dev.guid || dev.id;
+    const foundDev = devices.find((d) => d.machineGuid === targetGuid || d.id === targetGuid);
+    
+    // الأقسام المصرح بها للجهاز
+    const allDeptNames = departments.map((d) => d.name);
+    const authDepts: string[] = foundDev?.authorizedDepts && Array.isArray(foundDev.authorizedDepts) && foundDev.authorizedDepts.length > 0
+      ? [...foundDev.authorizedDepts]
+      : (foundDev?.department ? [foundDev.department] : [...allDeptNames]);
+    setPermsModalAuthorizedDepts(authDepts);
+
+    // دور وأقسام Access
+    setPermsModalAccessRole((foundDev?.accessRole || dev.role || 'data_entry') as any);
+    setPermsModalAllowedSections(foundDev?.allowedAccessSections || []);
+
+    // الصلاحيات الـ 9 المفصلة لكل قسم
+    setPermsModalDeptActions(foundDev?.departmentPermissions || {});
+    setPermsModalSelectedDept(authDepts[0] || allDeptNames[0] || '');
+    setPermsModalTab('DOCUMENTS');
+    setShowDevicePermsModal(true);
+  };
+
+  // حفظ وتطبيق الصلاحيات المخصصة سحابياً
+  const handleSaveDeviceCustomPerms = async () => {
+    if (!selectedDeviceForPerms) return;
+    try {
+      setActionLoading(true);
+      const targetGuid = selectedDeviceForPerms.guid || selectedDeviceForPerms.id;
+      const res = await fetch('/api/drive/permissions', {
+        method: 'POST',
+        headers: getAdminHeaders(),
+        body: JSON.stringify({
+          action: 'UPDATE_DEVICE_PERMISSIONS',
+          machineGuid: targetGuid,
+          name: selectedDeviceForPerms.name,
+          user: selectedDeviceForPerms.user,
+          authorizedDepts: permsModalAuthorizedDepts,
+          accessRole: permsModalAccessRole,
+          allowedAccessSections: permsModalAllowedSections,
+          departmentPermissions: permsModalDeptActions,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setToastMessage({
+          text: `✅ تم حفظ وتطبيق صلاحيات الجهاز "${selectedDeviceForPerms.name}" سحابياً فوراً!`,
+          type: 'success',
+        });
+        setShowDevicePermsModal(false);
+        await Promise.all([loadAllData(false), loadAccessHubData()]);
+      } else {
+        alert(data.error || 'فشل حفظ الصلاحيات المخصصة');
+      }
+    } catch (err: any) {
+      alert(`خطأ: ${err.message}`);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const setPresetForDept = (deptName: string, preset: 'full' | 'data_entry' | 'viewer') => {
+    let updated: any;
+    if (preset === 'full') {
+      updated = {
+        canView: true,
+        canDownload: true,
+        canUpload: true,
+        canCreateFolder: true,
+        canEdit: true,
+        canRename: true,
+        canMove: true,
+        canDelete: true,
+        canPermanentDelete: true,
+      };
+    } else if (preset === 'data_entry') {
+      updated = {
+        canView: true,
+        canDownload: true,
+        canUpload: true,
+        canCreateFolder: true,
+        canEdit: true,
+        canRename: false,
+        canMove: false,
+        canDelete: false,
+        canPermanentDelete: false,
+      };
+    } else { // viewer
+      updated = {
+        canView: true,
+        canDownload: true,
+        canUpload: false,
+        canCreateFolder: false,
+        canEdit: false,
+        canRename: false,
+        canMove: false,
+        canDelete: false,
+        canPermanentDelete: false,
+      };
+    }
+    setPermsModalDeptActions((prev) => ({
+      ...prev,
+      [deptName]: updated,
+    }));
+  };
+
+  const toggleDeptAction = (deptName: string, actionKey: string) => {
+    const current = permsModalDeptActions[deptName] || {
+      canView: true,
+      canDownload: true,
+      canUpload: true,
+      canCreateFolder: true,
+      canEdit: true,
+      canRename: true,
+      canMove: true,
+      canDelete: true,
+      canPermanentDelete: true,
+    };
+    const currentVal = current[actionKey] !== false;
+    setPermsModalDeptActions((prev) => ({
+      ...prev,
+      [deptName]: {
+        ...current,
+        [actionKey]: !currentVal,
+      },
+    }));
   };
 
   // تصفية الملفات في تبويب الملفات
@@ -2524,13 +2689,23 @@ export default function AdminControlPage() {
                                 </div>
                               </td>
                               <td className="p-3 text-center">
-                                <button
-                                  onClick={() => handleDeleteDevice(dev.id || dev.guid, dev.name)}
-                                  className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-rose-50 text-rose-600 hover:bg-rose-100 transition cursor-pointer border border-rose-200"
-                                  title="سحب الاعتماد وقفل مركز بيانات Access فورياً بوجه هذا الجهاز"
-                                >
-                                  سحب الاعتماد وقفل المركز 🗑️
-                                </button>
+                                <div className="flex items-center justify-center gap-1.5">
+                                  <button
+                                    onClick={() => handleOpenDevicePermsModal(dev)}
+                                    className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-[#14372e]/10 text-[#14372e] hover:bg-[#14372e]/20 transition cursor-pointer border border-[#14372e]/30 flex items-center gap-1"
+                                    title="تخصيص صلاحيات هذا الجهاز في المستندات وبيانات Access"
+                                  >
+                                    <Settings className="w-3.5 h-3.5" />
+                                    <span>تخصيص الصلاحيات</span>
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeleteDevice(dev.id || dev.guid, dev.name)}
+                                    className="px-2 py-1 rounded-lg text-[11px] font-bold bg-rose-50 text-rose-600 hover:bg-rose-100 transition cursor-pointer border border-rose-200"
+                                    title="سحب الاعتماد وقفل مركز بيانات Access فورياً بوجه هذا الجهاز"
+                                  >
+                                    سحب الاعتماد 🗑️
+                                  </button>
+                                </div>
                               </td>
                             </tr>
                           );
@@ -3333,13 +3508,23 @@ export default function AdminControlPage() {
                   <button
                     onClick={() => handleToggleDeviceAuth(dev)}
                     disabled={actionLoading}
-                    className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
                       dev.isAuthorized
                         ? 'bg-amber-100 text-amber-900 hover:bg-amber-200'
                         : 'bg-emerald-600 text-white hover:bg-emerald-700'
                     }`}
                   >
-                    {dev.isAuthorized ? 'إيقاف الصلاحية مؤقتاً' : 'تفعيل واعتماد الجهاز'}
+                    {dev.isAuthorized ? 'تعليق' : 'تفعيل'}
+                  </button>
+
+                  <button
+                    onClick={() => handleOpenDevicePermsModal(dev)}
+                    disabled={actionLoading}
+                    className="px-3 py-1.5 rounded-xl text-xs font-bold bg-[#14372e] text-white hover:bg-[#1b493d] transition cursor-pointer flex items-center gap-1.5 shadow-xs"
+                    title="تخصيص الصلاحيات المفصلة للجهاز"
+                  >
+                    <Settings className="w-3.5 h-3.5" />
+                    <span>تخصيص الصلاحيات</span>
                   </button>
 
                   <button
@@ -3958,6 +4143,378 @@ export default function AdminControlPage() {
                 className="px-6 py-2.5 text-sm font-bold bg-[#14372e] text-white rounded-xl hover:bg-[#1a473b] transition cursor-pointer"
               >
                 إغلاق وتم الحفظ
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* نافذة تخصيص الصلاحيات المتقدمة للجهاز (RBAC Modal) */}
+      {showDevicePermsModal && selectedDeviceForPerms && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-3xl w-full p-6 space-y-5 shadow-2xl border border-slate-200 my-6">
+            {/* رأس النافذة */}
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-[#14372e]/10 text-[#14372e] flex items-center justify-center">
+                  <Laptop className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-black text-base text-slate-900 flex items-center gap-2">
+                    <span>تخصيص صلاحيات الجهاز: {selectedDeviceForPerms.name}</span>
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold">
+                      {selectedDeviceForPerms.os}
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-500 font-mono">
+                    بصمة العتاد (GUID): {selectedDeviceForPerms.guid || selectedDeviceForPerms.id}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowDevicePermsModal(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* أزرار التبديل بين نظام المستندات ونظام Access */}
+            <div className="flex gap-2 p-1.5 bg-slate-100 rounded-2xl">
+              <button
+                type="button"
+                onClick={() => setPermsModalTab('DOCUMENTS')}
+                className={`flex-1 py-2 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-2 cursor-pointer ${
+                  permsModalTab === 'DOCUMENTS'
+                    ? 'bg-white text-[#14372e] shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Folder className="w-4 h-4" />
+                <span>1. صلاحيات نظام المستندات والأقسام</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPermsModalTab('ACCESS')}
+                className={`flex-1 py-2 px-3 rounded-xl font-bold text-xs transition flex items-center justify-center gap-2 cursor-pointer ${
+                  permsModalTab === 'ACCESS'
+                    ? 'bg-white text-[#14372e] shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Database className="w-4 h-4" />
+                <span>2. صلاحيات نظام بيانات Access</span>
+              </button>
+            </div>
+
+            {/* محتوى تبويب المستندات */}
+            {permsModalTab === 'DOCUMENTS' && (
+              <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1">
+                {/* 1. الأقسام المصرح بها لهذا الجهاز */}
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200/80 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="font-bold text-sm text-slate-900">الأقسام المصرح لهذا الجهاز بدخولها:</h4>
+                      <p className="text-[11px] text-slate-500">اختر الأقسام التي يُسمح لهذا الجهاز بفتحها وتصفحها</p>
+                    </div>
+                    <div className="flex gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setPermsModalAuthorizedDepts(departments.map((d) => d.name))}
+                        className="px-2.5 py-1 text-[11px] font-bold bg-[#14372e]/10 text-[#14372e] rounded-lg hover:bg-[#14372e]/20 transition cursor-pointer"
+                      >
+                        تحديد الكل
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPermsModalAuthorizedDepts([])}
+                        className="px-2.5 py-1 text-[11px] font-bold bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 transition cursor-pointer"
+                      >
+                        إلغاء التحديد
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                    {departments.map((dept) => {
+                      const deptName = dept.name;
+                      const isChecked = permsModalAuthorizedDepts.includes(deptName);
+                      return (
+                        <label
+                          key={dept.id || deptName}
+                          className={`flex items-center gap-2.5 p-2.5 rounded-xl border text-xs font-bold cursor-pointer transition ${
+                            isChecked
+                              ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
+                              : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setPermsModalAuthorizedDepts((prev) => [...prev, deptName]);
+                              } else {
+                                setPermsModalAuthorizedDepts((prev) => prev.filter((d) => d !== deptName));
+                              }
+                            }}
+                            className="rounded text-[#14372e] focus:ring-[#14372e] w-4 h-4 cursor-pointer"
+                          />
+                          <span>📁 {deptName}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 2. الصلاحيات الـ 9 المفصلة داخل الأقسام */}
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200/80 space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div>
+                      <h4 className="font-bold text-sm text-slate-900">الصلاحيات الـ 9 التفصيلية للجهاز:</h4>
+                      <p className="text-[11px] text-slate-500">تخصيص أزرار العرض، الرفع، التعديل والحذف للقسم المحدد</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <label className="text-xs font-bold text-slate-700 shrink-0">القسم المستهدف:</label>
+                      <select
+                        value={permsModalSelectedDept}
+                        onChange={(e) => setPermsModalSelectedDept(e.target.value)}
+                        className="px-3 py-1.5 text-xs font-bold bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14372e]"
+                      >
+                        {departments.map((dept) => (
+                          <option key={dept.id || dept.name} value={dept.name}>
+                            📁 {dept.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* أزرار القوالب الجاهزة */}
+                  {permsModalSelectedDept && (
+                    <div className="flex items-center gap-2 pt-1 border-t border-slate-200">
+                      <span className="text-[11px] font-bold text-slate-600 shrink-0">قوالب سريعة:</span>
+                      <button
+                        type="button"
+                        onClick={() => setPresetForDept(permsModalSelectedDept, 'full')}
+                        className="px-2.5 py-1 text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-200 rounded-lg hover:bg-amber-100 transition cursor-pointer"
+                      >
+                        👑 كامل الصلاحيات
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPresetForDept(permsModalSelectedDept, 'data_entry')}
+                        className="px-2.5 py-1 text-[11px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition cursor-pointer"
+                      >
+                        ✏️ مدخل بيانات (بدون حذف)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPresetForDept(permsModalSelectedDept, 'viewer')}
+                        className="px-2.5 py-1 text-[11px] font-bold bg-blue-50 text-blue-800 border border-blue-200 rounded-lg hover:bg-blue-100 transition cursor-pointer"
+                      >
+                        👁️ مشاهد فقط
+                      </button>
+                    </div>
+                  )}
+
+                  {/* شبكة الصلاحيات الـ 9 */}
+                  {permsModalSelectedDept && (
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-2">
+                      {ACTION_LABELS.map((item) => {
+                        const currentDeptPerms = permsModalDeptActions[permsModalSelectedDept] || {
+                          canView: true,
+                          canDownload: true,
+                          canUpload: true,
+                          canCreateFolder: true,
+                          canEdit: true,
+                          canRename: true,
+                          canMove: true,
+                          canDelete: true,
+                          canPermanentDelete: true,
+                        };
+                        const isActionEnabled = currentDeptPerms[item.key] !== false;
+                        return (
+                          <div
+                            key={item.key}
+                            onClick={() => toggleDeptAction(permsModalSelectedDept, item.key)}
+                            className={`p-3 rounded-xl border transition cursor-pointer flex items-start gap-2.5 ${
+                              isActionEnabled
+                                ? 'bg-white border-emerald-300 shadow-xs'
+                                : 'bg-slate-100/80 border-slate-200 opacity-60'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isActionEnabled}
+                              onChange={() => {}} // onClick handled on wrapper
+                              className="mt-0.5 rounded text-[#14372e] focus:ring-[#14372e] w-4 h-4 cursor-pointer"
+                            />
+                            <div>
+                              <div className="font-bold text-xs text-slate-900 flex items-center gap-1.5">
+                                <span>{item.icon}</span>
+                                <span>{item.label}</span>
+                              </div>
+                              <p className="text-[10px] text-slate-500 mt-0.5 leading-tight">{item.desc}</p>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* محتوى تبويب Access */}
+            {permsModalTab === 'ACCESS' && (
+              <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1">
+                {/* 1. الدور المؤسسي في Access */}
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200/80 space-y-3">
+                  <div>
+                    <h4 className="font-bold text-sm text-slate-900">الدور المؤسسي للجهاز في قواعد بيانات Access:</h4>
+                    <p className="text-[11px] text-slate-500">يحدد مستوى صلاحيات الموظف على السجلات والجداول</p>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    {[
+                      {
+                        role: 'admin',
+                        title: '👑 مدير نظام (Super Admin)',
+                        desc: 'كامل الصلاحيات بما فيها حذف السجلات، إنشاء الأقسام وحذفها، وتعديل بنية الجداول.',
+                        color: 'border-amber-300 bg-amber-50/60 text-amber-950',
+                      },
+                      {
+                        role: 'supervisor',
+                        title: '🛡️ مشرف تدقيق (Supervisor)',
+                        desc: 'إضافة وتعديل السجلات، وحذف السجلات ونقلها للمهملات، بدون صلاحية حذف الأقسام.',
+                        color: 'border-purple-300 bg-purple-50/60 text-purple-950',
+                      },
+                      {
+                        role: 'data_entry',
+                        title: '✏️ مدخل بيانات (Data Entry)',
+                        desc: 'إضافة قيود جديدة وتعديل قيوده فقط. الحذف محجوب بالكامل وتعديل قيود الآخرين محجوب.',
+                        color: 'border-emerald-300 bg-emerald-50/60 text-emerald-950',
+                      },
+                      {
+                        role: 'viewer',
+                        title: '👁️ مستعلم وقارئ فقط (Viewer)',
+                        desc: 'البحث والاستعلام والطباعة والتصدير لـ Excel فقط. الإضافة والتعديل والحذف محجوبة.',
+                        color: 'border-blue-300 bg-blue-50/60 text-blue-950',
+                      },
+                    ].map((item) => {
+                      const isSelected = permsModalAccessRole === item.role;
+                      return (
+                        <div
+                          key={item.role}
+                          onClick={() => setPermsModalAccessRole(item.role as any)}
+                          className={`p-3.5 rounded-xl border transition cursor-pointer flex items-start gap-3 ${
+                            isSelected
+                              ? `${item.color} ring-2 ring-[#14372e]`
+                              : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="access_role_radio"
+                            checked={isSelected}
+                            onChange={() => {}}
+                            className="mt-0.5 text-[#14372e] focus:ring-[#14372e] cursor-pointer"
+                          />
+                          <div>
+                            <div className="font-black text-xs">{item.title}</div>
+                            <p className="text-[11px] text-slate-500 mt-1 leading-snug">{item.desc}</p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 2. تقييد أقسام Access لهذا الجهاز */}
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200/80 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="font-bold text-sm text-slate-900">أقسام بيانات Access المسموحة لهذا الجهاز:</h4>
+                      <p className="text-[11px] text-slate-500">إذا اخترت "كافة الأقسام" يتمكن من فتح كل قواعد البيانات المتاحة لدوره</p>
+                    </div>
+                    <div className="flex gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setPermsModalAllowedSections([])}
+                        className={`px-2.5 py-1 text-[11px] font-bold rounded-lg transition cursor-pointer ${
+                          permsModalAllowedSections.length === 0
+                            ? 'bg-[#14372e] text-white shadow-xs'
+                            : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+                        }`}
+                      >
+                        كافة الأقسام (مفتوح)
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                    {accessAllFiles.map((fileObj) => {
+                      const fName = fileObj.name;
+                      const isChecked = permsModalAllowedSections.length === 0 || permsModalAllowedSections.includes(fName);
+                      return (
+                        <label
+                          key={fName}
+                          className={`flex items-center gap-2.5 p-2.5 rounded-xl border text-xs font-bold cursor-pointer transition ${
+                            isChecked
+                              ? 'bg-amber-50/70 border-amber-300 text-amber-950'
+                              : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                if (permsModalAllowedSections.length === 0) {
+                                  // كان مفتوحاً على الكل، نثبت الكل
+                                  setPermsModalAllowedSections(accessAllFiles.map((f) => f.name));
+                                } else {
+                                  setPermsModalAllowedSections((prev) => [...prev, fName]);
+                                }
+                              } else {
+                                const currentAll = permsModalAllowedSections.length === 0
+                                  ? accessAllFiles.map((f) => f.name)
+                                  : permsModalAllowedSections;
+                                setPermsModalAllowedSections(currentAll.filter((n) => n !== fName));
+                              }
+                            }}
+                            className="rounded text-[#14372e] focus:ring-[#14372e] w-4 h-4 cursor-pointer"
+                          />
+                          <span>🏛️ {fName}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* أزرار الحفظ والإغلاق */}
+            <div className="flex items-center justify-between pt-4 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setShowDevicePermsModal(false)}
+                className="px-5 py-2.5 text-xs font-bold bg-slate-100 text-slate-700 rounded-xl hover:bg-slate-200 transition cursor-pointer"
+              >
+                إلغاء
+              </button>
+
+              <button
+                type="button"
+                onClick={handleSaveDeviceCustomPerms}
+                disabled={actionLoading}
+                className="px-6 py-2.5 text-xs font-bold bg-[#14372e] text-white rounded-xl hover:bg-[#1b493d] transition cursor-pointer shadow-md flex items-center gap-2"
+              >
+                {actionLoading && <RefreshCw className="w-4 h-4 animate-spin" />}
+                <Save className="w-4 h-4" />
+                <span>حفظ وتطبيق الصلاحيات سحابياً فوراً</span>
               </button>
             </div>
           </div>

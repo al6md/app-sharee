@@ -2834,6 +2834,27 @@ class FileExchangeMainWindow(QMainWindow):
                         # تحديث فوري للأيقونات في القائمة الجانبية (إظهار 🔓)
                         self._refresh_departments_sidebar()
 
+                    # 1.5 دمج الصلاحيات المخصصة لهذا الجهاز بالتحديد (Per-device Granular Permissions)
+                    my_dev_custom = None
+                    if hasattr(self, 'client') and self.client:
+                        raw_devs = getattr(self.client, '_raw_cloud_devices', []) or []
+                        my_dev_custom = next((d for d in raw_devs if isinstance(d, dict) and (d.get('machineGuid') == my_guid or d.get('id') == my_guid)), None)
+                    if my_dev_custom and isinstance(my_dev_custom.get('departmentPermissions'), dict):
+                        dept_custom = my_dev_custom['departmentPermissions'].get(target_dept)
+                        if isinstance(dept_custom, dict):
+                            if dept_custom.get('allowed') is False:
+                                QMessageBox.warning(
+                                    self,
+                                    f"قسم محظور 🛡️ ({target_dept})",
+                                    f"تم تقييد وصول هذا الحاسوب إلى قسم ({target_dept}) بواسطة مسؤول النظام."
+                                )
+                                return False
+                            for k, v in dept_custom.items():
+                                if v is not None:
+                                    rule[k] = v
+                                    s_key = "".join(["_" + c.lower() if c.isupper() else c for c in k]).lstrip("_")
+                                    rule[s_key] = v
+
                     # 2. فحص الصلاحيات التسع التفصيلية
                     action_checks = {
                         'view': (
