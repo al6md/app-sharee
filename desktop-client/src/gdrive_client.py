@@ -762,8 +762,14 @@ class GoogleDriveClient:
                 hub_user = str(hub_sec.get("username", "") or "")
                 hub_pass = str(hub_sec.get("password", "") or "")
                 hub_pin = str(hub_sec.get("pinCode", "") or "")
-                has_hub_creds = bool(hub_user or hub_pass or hub_pin)
-                is_enabled = bool((hub_sec.get("enabled", False) or has_hub_creds) and has_hub_creds)
+                sec_epoch = int(hub_sec.get("securityEpoch", 0) or hub_sec.get("security_epoch", 0) or 0)
+                is_protected = bool(
+                    hub_sec.get("isProtected") or 
+                    hub_sec.get("is_protected") or 
+                    hub_sec.get("enabled") or 
+                    hub_sec.get("hasCreds") or 
+                    hub_user or hub_pass or hub_pin
+                )
                 normalized["مركز بيانات Access"] = {
                     "can_view": True,
                     "can_download": True,
@@ -783,7 +789,11 @@ class GoogleDriveClient:
                     "deptUsername": hub_user,
                     "deptPassword": hub_pass,
                     "authorizedDevices": hub_auths,
-                    "enabled": is_enabled,
+                    "enabled": is_protected,
+                    "is_protected": is_protected,
+                    "isProtected": is_protected,
+                    "security_epoch": sec_epoch,
+                    "securityEpoch": sec_epoch,
                 }
             self._perms_cache_data = normalized
             self._perms_cache_ts = now

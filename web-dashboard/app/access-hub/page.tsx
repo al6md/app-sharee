@@ -125,8 +125,7 @@ export default function AccessHubPage() {
         setAccessHubSec(json.accessHubSecurity);
         const sec = json.accessHubSecurity;
         const guid = typeof window !== 'undefined' ? localStorage.getItem('sharecoc_device_guid') || '' : '';
-        const hasCreds = Boolean(sec.username || sec.password || sec.pinCode);
-        const isProtected = Boolean(sec.enabled !== false && hasCreds);
+        const isProtected = Boolean(sec.isProtected || sec.enabled || sec.hasCreds || sec.username || sec.password || sec.pinCode);
         if (!isProtected) {
           setIsUnlocked(true);
         } else {
@@ -409,6 +408,9 @@ export default function AccessHubPage() {
           setActiveTable(json.active_table);
         }
       } else {
+        if ((json as any).locked) {
+          setIsUnlocked(false);
+        }
         setError(json.error || 'فشل جلب البيانات');
       }
     } catch (err: any) {

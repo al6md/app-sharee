@@ -98,6 +98,7 @@ export interface AccessHubSecurityConfig {
   authorizedDevices?: string[];
   roles?: Record<string, 'admin' | 'supervisor' | 'data_entry' | 'viewer'>;
   allowedSections?: Record<string, string[]>;
+  securityEpoch?: number;
   updatedAt?: string;
 }
 
@@ -184,13 +185,22 @@ export function sanitizeAdminStoreForPublic(store: CloudAdminStore) {
     updatedAt: store.adminCredentials?.updatedAt || '',
   };
 
+  const isHubProtected = Boolean(
+    store.accessHubSecurity?.enabled ||
+    store.accessHubSecurity?.username ||
+    store.accessHubSecurity?.password ||
+    store.accessHubSecurity?.pinCode
+  );
+
   const sanitizedHubSec = {
-    enabled: Boolean(store.accessHubSecurity?.enabled),
+    enabled: isHubProtected,
     authorizedDevices: store.accessHubSecurity?.authorizedDevices || [],
     roles: store.accessHubSecurity?.roles || {},
     allowedSections: store.accessHubSecurity?.allowedSections || {},
+    securityEpoch: store.accessHubSecurity?.securityEpoch || 0,
     updatedAt: store.accessHubSecurity?.updatedAt || '',
-    isProtected: Boolean(store.accessHubSecurity?.username || store.accessHubSecurity?.password || store.accessHubSecurity?.pinCode),
+    isProtected: isHubProtected,
+    hasCreds: Boolean(store.accessHubSecurity?.username || store.accessHubSecurity?.password || store.accessHubSecurity?.pinCode),
   };
 
   const sanitizedDepts: Record<string, any> = {};
@@ -212,6 +222,13 @@ export function sanitizeAdminStoreForPublic(store: CloudAdminStore) {
       hasUserPass: Boolean(dCfg.deptUsername || dCfg.deptPassword),
       hasPin: Boolean(dCfg.pinCode),
     };
+  }
+
+  if (sanitizedDepts['مركز بيانات Access']) {
+    sanitizedDepts['مركز بيانات Access'].isProtected = isHubProtected;
+    sanitizedDepts['مركز بيانات Access'].enabled = isHubProtected;
+    sanitizedDepts['مركز بيانات Access'].securityEpoch = store.accessHubSecurity?.securityEpoch || 0;
+    sanitizedDepts['مركز بيانات Access'].authorizedDevices = store.accessHubSecurity?.authorizedDevices || [];
   }
 
   return {
@@ -239,6 +256,7 @@ export const DEFAULT_ACCESS_HUB_SECURITY: AccessHubSecurityConfig = {
   password: '',
   pinCode: '',
   authorizedDevices: [],
+  securityEpoch: 0,
   updatedAt: new Date(0).toISOString(),
 };
 
@@ -968,7 +986,7 @@ export async function revokeOrDeleteDevice(
  * حفظ إعدادات أمان مركز بيانات Access وتحديث كلمة المرور واسم المستخدم وقائمة الأجهزة
  */
 export async function saveAccessHubSecurity(
-  secInput: Partial<AccessHubSecurityConfig>
+  secInput: Partial<AccessHubSecurityConfig> & { resetAuthorizedDevices?: boolean }
 ): Promise<AccessHubSecurityConfig> {
   const updated = await persistCloudAdminStore((current) => {
     const curSec = current.accessHubSecurity || { ...DEFAULT_ACCESS_HUB_SECURITY };
@@ -977,7 +995,13 @@ export async function saveAccessHubSecurity(
     const pinCode = secInput.pinCode !== undefined ? String(secInput.pinCode).trim() : curSec.pinCode;
     const hasCredentials = Boolean(username || password || pinCode);
     const enabled = secInput.enabled !== undefined ? (Boolean(secInput.enabled) || hasCredentials) : (curSec.enabled || hasCredentials);
-    const authDevs = Array.isArray(secInput.authorizedDevices) ? secInput.authorizedDevices : curSec.authorizedDevices || [];
+
+    // إذا تغيرت كلمة المرور أو اسم المستخدم أو طلب الأدمن صراحة إعادة ضبط الاعتماد
+    const credsChanged = (username !== curSec.username) || (password !== curSec.password) || (pinCode !== curSec.pinCode);
+    let authDevs = Array.isArray(secInput.authorizedDevices) ? secInput.authorizedDevices : curSec.authorizedDevices || [];
+    if (secInput.resetAuthorizedDevices || (credsChanged && hasCredentials)) {
+      authDevs = [];
+    }
 
     const roles = secInput.roles !== undefined ? secInput.roles : curSec.roles || {};
 
@@ -988,6 +1012,8 @@ export async function saveAccessHubSecurity(
       pinCode,
       authorizedDevices: authDevs,
       roles,
+      allowedSections: secInput.allowedSections || curSec.allowedSections || {},
+      securityEpoch: Date.now(),
       updatedAt: new Date().toISOString(),
     };
 

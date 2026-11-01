@@ -279,7 +279,7 @@ async function resolveCallerContext(req: NextRequest, body?: any): Promise<Calle
     const guid = req.headers.get('x-machine-guid') || 
                  url.searchParams.get('guid') || 
                  (!isTargetRoleAction ? body?.guid : '') || 
-                 body?.machineGuid || 
+                 (!isTargetRoleAction ? body?.machineGuid : '') || 
                  '';
 
     if (!guid) {
@@ -346,6 +346,27 @@ export async function GET(req: NextRequest) {
     const currentSig = mutations.last_sync || index.last_sync || '1';
     const callerContext = await resolveCallerContext(req);
     const callerRole = callerContext.role;
+
+    // فحص حماية وقفل مركز بيانات Access لكافة الأجهزة
+    const store = await getCloudAdminStore(false);
+    const hubSec = store.accessHubSecurity || DEFAULT_ACCESS_HUB_SECURITY;
+    const hasCreds = Boolean(hubSec.username || hubSec.password || hubSec.pinCode);
+    const isProtected = Boolean(hubSec.enabled !== false && hasCreds);
+
+    if (isProtected && callerRole !== 'admin') {
+      const isDeviceAuthed = Boolean(
+        callerContext.guid &&
+        Array.isArray(hubSec.authorizedDevices) &&
+        hubSec.authorizedDevices.includes(callerContext.guid)
+      );
+      if (!isDeviceAuthed) {
+        return NextResponse.json({
+          success: false,
+          locked: true,
+          error: 'مركز بيانات Access محمي برمز مرور، يرجى تسجيل واعتماد هذا الجهاز أولاً.',
+        }, { status: 403 });
+      }
+    }
 
     // فحص التحديثات الحية الفوري
     if (checkSig !== null && checkSig !== undefined && checkSig === currentSig) {
@@ -677,6 +698,27 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const callerContext = await resolveCallerContext(req, body);
     const callerRole = callerContext.role;
+
+    // فحص حماية وقفل مركز بيانات Access لكافة الأجهزة
+    const store = await getCloudAdminStore(false);
+    const hubSec = store.accessHubSecurity || DEFAULT_ACCESS_HUB_SECURITY;
+    const hasCreds = Boolean(hubSec.username || hubSec.password || hubSec.pinCode);
+    const isProtected = Boolean(hubSec.enabled !== false && hasCreds);
+
+    if (isProtected && callerRole !== 'admin') {
+      const isDeviceAuthed = Boolean(
+        callerContext.guid &&
+        Array.isArray(hubSec.authorizedDevices) &&
+        hubSec.authorizedDevices.includes(callerContext.guid)
+      );
+      if (!isDeviceAuthed) {
+        return NextResponse.json({
+          success: false,
+          locked: true,
+          error: 'مركز بيانات Access محمي، يرجى تسجيل واعتماد هذا الجهاز أولاً.',
+        }, { status: 403 });
+      }
+    }
 
     // فحص ما إذا كان القسم المطلوب مسموحاً للجهاز
     const targetFile = body.file || body.fileName;

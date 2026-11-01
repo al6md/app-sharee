@@ -2431,8 +2431,23 @@ class FileExchangeMainWindow(QMainWindow):
         except Exception:
             pass
 
-    def _is_access_hub_locally_unlocked(self):
-        """فحص هل مركز بيانات Access معتمد ومسجل محلياً على هذا الحاسوب"""
+    def _is_access_hub_locally_unlocked(self, min_epoch=0):
+        """فحص هل مركز بيانات Access معتمد ومسجل محلياً على هذا الحاسوب مع مطابقة إصدار الأمان"""
+        try:
+            folder = Path(os.environ.get('APPDATA', os.environ.get('USERPROFILE', 'C:'))) / "ShareCOC"
+            f = folder / "access_hub_unlocked.json"
+            if f and f.exists():
+                try:
+                    data = json.loads(f.read_text(encoding="utf-8"))
+                    saved_epoch = int(data.get("security_epoch", 0) or 0)
+                    if min_epoch > 0 and saved_epoch < min_epoch:
+                        return False
+                    return bool(data.get("unlocked"))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         try:
             if hasattr(self, 'state_mgr') and self.state_mgr:
                 val = self.state_mgr.get_setting("access_hub_unlocked")
@@ -2440,18 +2455,10 @@ class FileExchangeMainWindow(QMainWindow):
                     return True
         except Exception:
             pass
-
-        try:
-            folder = Path(os.environ.get('APPDATA', os.environ.get('USERPROFILE', 'C:'))) / "ShareCOC"
-            f = folder / "access_hub_unlocked.json"
-            if f and f.exists():
-                return True
-        except Exception:
-            pass
         return False
 
-    def _save_access_hub_local_unlock(self):
-        """حفظ اعتماد مركز بيانات Access لهذا الحاسوب للأبد"""
+    def _save_access_hub_local_unlock(self, epoch=0):
+        """حفظ اعتماد مركز بيانات Access لهذا الحاسوب للأبد مع رقم إصدار الأمان"""
         try:
             if hasattr(self, 'state_mgr') and self.state_mgr:
                 self.state_mgr.set_setting("access_hub_unlocked", "1")
@@ -2461,12 +2468,12 @@ class FileExchangeMainWindow(QMainWindow):
             folder = Path(os.environ.get('APPDATA', os.environ.get('USERPROFILE', 'C:'))) / "ShareCOC"
             folder.mkdir(parents=True, exist_ok=True)
             f = folder / "access_hub_unlocked.json"
-            f.write_text(json.dumps({"unlocked": True, "saved_at": time.time()}, ensure_ascii=False), encoding="utf-8")
+            f.write_text(json.dumps({"unlocked": True, "security_epoch": epoch, "saved_at": time.time()}, ensure_ascii=False), encoding="utf-8")
         except Exception:
             pass
 
     def _remove_access_hub_local_unlock(self):
-        """سحب اعتماد مركز بيانات Access عند حذفه من قِبل الأدمن"""
+        """سحب اعتماد مركز بيانات Access عند حذفه أو تغيير كلمة المرور من قِبل الأدمن"""
         try:
             if hasattr(self, 'state_mgr') and self.state_mgr:
                 self.state_mgr.set_setting("access_hub_unlocked", "0")
@@ -2498,146 +2505,106 @@ class FileExchangeMainWindow(QMainWindow):
             perms_map = {}
 
         rule = perms_map.get("مركز بيانات Access") or perms_map.get("__ACCESS_HUB__") or {}
-        pin_code = str(rule.get('pinCode') or rule.get('pin_code') or '').strip()
-        dept_user = str(rule.get('deptUsername') or rule.get('dept_username') or '').strip()
-        dept_pass = str(rule.get('deptPassword') or rule.get('dept_password') or pin_code).strip()
+        cloud_epoch = int(rule.get('security_epoch') or rule.get('securityEpoch') or 0)
         authed_devices = rule.get('authorizedDevices') or rule.get('authorized_devices') or []
-        has_hub_creds = bool(dept_user or dept_pass or pin_code)
-        enabled = rule.get('enabled', True if has_hub_creds else False)
+        is_protected = bool(
+            rule.get('is_protected') or 
+            rule.get('isProtected') or 
+            rule.get('enabled') or 
+            rule.get('hasCreds') or
+            rule.get('pinCode') or
+            rule.get('deptUsername') or
+            rule.get('deptPassword')
+        )
 
-        is_protected = bool((enabled or has_hub_creds) and has_hub_creds)
         if not is_protected:
             return True
 
         is_cloud_authed = my_guid in authed_devices
-        is_locally_authed = self._is_access_hub_locally_unlocked()
+        is_locally_authed = self._is_access_hub_locally_unlocked(min_epoch=cloud_epoch)
 
-        # التحقق الفوري من سحب الاعتماد في حال قام الأدمن بحذف الجهاز
+        # التحقق الفوري من سحب الاعتماد في حال قام الأدمن بحذف الجهاز أو تحديث الرمز السحابي
         if is_locally_authed:
             if isinstance(authed_devices, list) and authed_devices and my_guid not in authed_devices:
                 self._remove_access_hub_local_unlock()
                 is_locally_authed = False
-            elif not is_cloud_authed:
-                try:
-                    import requests
-                    r = requests.post(
-                        "https://web-dashboard-pi-self.vercel.app/api/drive/permissions",
-                        json={"action": "CHECK_ACCESS_HUB_DEVICE", "machineGuid": my_guid},
-                        timeout=3
-                    )
-                    if r.status_code == 200:
-                        res_data = r.json()
-                        if res_data.get("enabled") and not res_data.get("authorized"):
-                            self._remove_access_hub_local_unlock()
-                            is_locally_authed = False
-                        elif res_data.get("authorized"):
-                            is_cloud_authed = True
-                except Exception:
-                    pass
 
-        # إذا كان معتمداً سحابياً، نثبّته محلياً للأبد
-        if is_cloud_authed and not is_locally_authed:
-            self._save_access_hub_local_unlock()
-            is_locally_authed = True
-
-        if is_cloud_authed or is_locally_authed:
+        if is_cloud_authed and is_locally_authed:
             return True
 
         # مطالبة المستخدم بإدخال بيانات الأمان لمرة واحدة فقط
-        if dept_user:
-            dialog = QDialog(self)
-            dialog.setWindowTitle("🔒 أمان مركز بيانات Access")
-            dialog.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-            dialog.setFixedWidth(380)
-            vbox = QVBoxLayout(dialog)
+        dialog = QDialog(self)
+        dialog.setWindowTitle("🔒 أمان مركز بيانات Access")
+        dialog.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        dialog.setFixedWidth(390)
+        vbox = QVBoxLayout(dialog)
 
-            lbl_info = QLabel(f"مركز بيانات Access محمي بحساب خاص من إدارة الغرفة.\nيرجى تسجيل الدخول لمرة واحدة لاعتماد هذا الحاسوب ({computer_name}) للأبد:", dialog)
-            lbl_info.setWordWrap(True)
-            vbox.addWidget(lbl_info)
+        lbl_info = QLabel(f"مركز بيانات Access محمي برمز مرور وحساب خاص من إدارة الغرفة.\nيرجى تسجيل الدخول لمرة واحدة لاعتماد هذا الحاسوب ({computer_name}) للأبد:", dialog)
+        lbl_info.setWordWrap(True)
+        vbox.addWidget(lbl_info)
 
-            vbox.addWidget(QLabel("اسم مستخدم مركز Access:", dialog))
-            txt_u = QLineEdit(dialog)
-            txt_u.setPlaceholderText("أدخل اسم المستخدم...")
-            vbox.addWidget(txt_u)
+        vbox.addWidget(QLabel("اسم مستخدم مركز Access:", dialog))
+        txt_u = QLineEdit(dialog)
+        txt_u.setPlaceholderText("أدخل اسم المستخدم...")
+        vbox.addWidget(txt_u)
 
-            vbox.addWidget(QLabel("رمز / كلمة مرور مركز Access:", dialog))
-            txt_p = QLineEdit(dialog)
-            txt_p.setEchoMode(QLineEdit.EchoMode.Password)
-            txt_p.setPlaceholderText("أدخل كلمة المرور أو الرمز...")
-            vbox.addWidget(txt_p)
+        vbox.addWidget(QLabel("رمز / كلمة مرور مركز Access:", dialog))
+        txt_p = QLineEdit(dialog)
+        txt_p.setEchoMode(QLineEdit.EchoMode.Password)
+        txt_p.setPlaceholderText("أدخل كلمة المرور أو الرمز السري...")
+        vbox.addWidget(txt_p)
 
-            btn_box = QHBoxLayout()
-            btn_ok = QPushButton("اعتماد الحاسوب ودخول المركز", dialog)
-            btn_cancel = QPushButton("إلغاء", dialog)
-            btn_box.addWidget(btn_ok)
-            btn_box.addWidget(btn_cancel)
-            vbox.addLayout(btn_box)
+        btn_box = QHBoxLayout()
+        btn_ok = QPushButton("اعتماد الحاسوب ودخول المركز", dialog)
+        btn_cancel = QPushButton("إلغاء", dialog)
+        btn_box.addWidget(btn_ok)
+        btn_box.addWidget(btn_cancel)
+        vbox.addLayout(btn_box)
 
-            btn_ok.clicked.connect(dialog.accept)
-            btn_cancel.clicked.connect(dialog.reject)
+        btn_ok.clicked.connect(dialog.accept)
+        btn_cancel.clicked.connect(dialog.reject)
 
-            if dialog.exec() != QDialog.DialogCode.Accepted:
-                return False
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
 
-            ent_u = txt_u.text().strip()
-            ent_p = txt_p.text().strip()
+        ent_u = txt_u.text().strip()
+        ent_p = txt_p.text().strip()
 
-            if ent_u.lower() != dept_user.lower() or ent_p != dept_pass:
-                QMessageBox.critical(self, "خطأ في تسجيل الدخول ❌", "اسم المستخدم أو كلمة المرور الخاصة بمركز Access غير صحيحة.")
-                return False
-        else:
-            entered_pin, ok = QInputDialog.getText(
-                self,
-                "🔒 أمان مركز بيانات Access",
-                f"مركز بيانات Access محمي برمز مرور خاص من الإدارة.\nيرجى إدخال الرمز السري لاعتماد هذا الحاسوب ({computer_name}) للأبد:",
-                QLineEdit.EchoMode.Password
+        if not ent_p:
+            QMessageBox.critical(self, "تنبيه ⚠️", "يرجى إدخال كلمة المرور أو الرمز السري لمركز بيانات Access.")
+            return False
+
+        # التحقق المباشر عبر السحابة لضمان دقة الرمز وتسجيل الجهاز فورياً
+        try:
+            import requests
+            r = requests.post(
+                "https://web-dashboard-pi-self.vercel.app/api/drive/permissions",
+                json={
+                    "action": "REGISTER_ACCESS_HUB_DEVICE",
+                    "username": ent_u,
+                    "password": ent_p,
+                    "machineGuid": my_guid,
+                    "deviceName": computer_name,
+                    "os": "Windows 11 Desktop",
+                    "user": computer_name
+                },
+                timeout=12
             )
-            if not ok:
+            data = r.json()
+            if r.status_code == 200 and data.get("success") and data.get("authorized"):
+                # نجاح التحقق والاعتماد
+                self._save_access_hub_local_unlock(epoch=cloud_epoch)
+                if my_guid not in authed_devices:
+                    authed_devices.append(my_guid)
+                QMessageBox.information(self, "تم الاعتماد بنجاح ✅", f"تم اعتماد هذا الحاسوب ({computer_name}) وتوثيقه لدى مسؤول النظام بنجاح!")
+                return True
+            else:
+                err_msg = data.get("error") or "بيانات الدخول لمركز بيانات Access غير صحيحة، يرجى مراجعة إدارة الغرفة."
+                QMessageBox.critical(self, "خطأ في تسجيل الدخول ❌", err_msg)
                 return False
-            clean_entered = entered_pin.strip()
-            if clean_entered not in (pin_code, dept_pass):
-                QMessageBox.critical(self, "رمز خاطئ ❌", "الرمز السري الخاص بمركز بيانات Access غير صحيح.")
-                return False
-
-        # حفظ دائم على القرص المحلي للأبد
-        self._save_access_hub_local_unlock()
-
-        # رفع التسجيل سحابياً إلى Google Drive في خيط خلفي
-        import threading
-        if hasattr(self, 'client') and self.client:
-            rule.setdefault('authorized_devices', [])
-            if my_guid not in rule['authorized_devices']:
-                rule['authorized_devices'].append(my_guid)
-            if 'authorizedDevices' in rule and my_guid not in rule['authorizedDevices']:
-                rule['authorizedDevices'].append(my_guid)
-
-            threading.Thread(
-                target=self.client.authorize_device_for_dept,
-                args=("مركز بيانات Access", my_guid, computer_name, "Windows Desktop"),
-                daemon=True
-            ).start()
-
-        # المزامنة المباشرة عبر API الويب لضمان تسجيل وظهور الجهاز في لوحة الأدمن للأبد
-        def _sync_hub_reg_to_web():
-            try:
-                import requests
-                requests.post(
-                    "https://web-dashboard-pi-self.vercel.app/api/drive/permissions",
-                    json={
-                        "action": "REGISTER_ACCESS_HUB_DEVICE",
-                        "username": ent_u if dept_user else "",
-                        "password": ent_p if dept_user else clean_entered,
-                        "machineGuid": my_guid,
-                        "deviceName": computer_name,
-                        "os": "Windows 11 Desktop",
-                        "user": computer_name
-                    },
-                    timeout=8
-                )
-            except Exception:
-                pass
-
-        threading.Thread(target=_sync_hub_reg_to_web, daemon=True).start()
+        except Exception as e:
+            QMessageBox.critical(self, "خطأ في الاتصال ❌", f"تعذر الاتصال بالسحابة للتحقق من الاعتماد:\n{e}")
+            return False
 
         return True
 

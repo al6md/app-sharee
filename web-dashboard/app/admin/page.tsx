@@ -360,7 +360,10 @@ export default function AdminControlPage() {
         }
 
         // جلب بيانات الاعتماد الحقيقية المحفوظة في السحابة
-        const res = await fetch('/api/drive/permissions?force=1', { cache: 'no-store' });
+        const res = await fetch('/api/drive/permissions?force=1&admin=1', {
+          headers: getAdminHeaders(),
+          cache: 'no-store',
+        });
         const data = await res.json();
         if (mounted && data.success && data.adminCredentials) {
           const cloudUser = data.adminCredentials.username || 'admin';
@@ -405,8 +408,8 @@ export default function AdminControlPage() {
       }
 
       const [filesRes, permsRes] = await Promise.all([
-        fetch('/api/drive/files', { cache: 'no-store' }),
-        fetch('/api/drive/permissions?force=1', { cache: 'no-store' }),
+        fetch('/api/drive/files', { headers: getAdminHeaders(), cache: 'no-store' }),
+        fetch('/api/drive/permissions?force=1&admin=1', { headers: getAdminHeaders(), cache: 'no-store' }),
       ]);
       const data = await filesRes.json();
       const permsData = await permsRes.json().catch(() => ({}));
@@ -430,6 +433,7 @@ export default function AdminControlPage() {
         if (permsData.accessHubSecurity) {
           const sec = permsData.accessHubSecurity;
           const hasCreds = Boolean(sec.username || sec.password || sec.pinCode);
+          const isSecProtected = Boolean(sec.enabled || sec.isProtected || hasCreds);
           setAccessHubSec(sec);
 
           const recentlySaved = Date.now() - lastHubSecSaveRef.current < 10000;
@@ -438,10 +442,10 @@ export default function AdminControlPage() {
             (!isBackgroundPoll && !hubSecDirtyRef.current && !recentlySaved && !savingHubSec && !isSavingHubSecRef.current);
 
           if (shouldUpdateInputs) {
-            setHubSecEnabled(Boolean(sec.enabled || hasCreds));
-            setHubSecUser(sec.username || '');
-            setHubSecPass(sec.password || '');
-            setHubSecPin(sec.pinCode || '');
+            setHubSecEnabled(isSecProtected);
+            if (sec.username !== undefined && sec.username !== '') setHubSecUser(sec.username);
+            if (sec.password !== undefined && sec.password !== '') setHubSecPass(sec.password);
+            if (sec.pinCode !== undefined && sec.pinCode !== '') setHubSecPin(sec.pinCode);
             hubSecInitializedRef.current = true;
           }
         }
@@ -910,13 +914,16 @@ export default function AdminControlPage() {
       const isEnabled = Boolean(hubSecEnabled || hubSecUser.trim() || hubSecPass.trim() || hubSecPin.trim());
       const res = await fetch('/api/drive/permissions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAdminHeaders(),
         body: JSON.stringify({
           action: 'SAVE_ACCESS_HUB_SECURITY',
           enabled: isEnabled,
           username: hubSecUser.trim(),
           password: hubSecPass.trim(),
           pinCode: hubSecPin.trim(),
+          isAdmin: true,
+          adminPassword: adminPassword || (typeof window !== 'undefined' ? localStorage.getItem('sharecoc_admin_password') || '' : ''),
+          resetAuthorizedDevices: true,
         }),
       });
       const data = await res.json();
@@ -926,11 +933,12 @@ export default function AdminControlPage() {
         setHubSecUser(sec.username || '');
         setHubSecPass(sec.password || '');
         setHubSecPin(sec.pinCode || '');
-        setHubSecEnabled(Boolean(sec.enabled || sec.username || sec.password || sec.pinCode));
+        setHubSecEnabled(Boolean(sec.enabled || sec.isProtected || sec.username || sec.password || sec.pinCode));
         hubSecDirtyRef.current = false;
         hubSecInitializedRef.current = true;
         lastHubSecSaveRef.current = Date.now();
-        setToastMessage({ text: '🔒 تم حفظ وتطبيق إعدادات أمان مركز بيانات Access بنجاح!', type: 'success' });
+        setToastMessage({ text: '🔒 تم حفظ وتطبيق أمان مركز بيانات Access وقفله فورياً بوجه كافة الأجهزة!', type: 'success' });
+        await loadAllData(false);
       } else {
         alert(data.error || 'فشل حفظ إعدادات الأمان');
       }
@@ -1620,6 +1628,8 @@ export default function AdminControlPage() {
         body: JSON.stringify({
           action: 'DELETE_DEVICE',
           deviceId,
+          isAdmin: true,
+          adminPassword: adminPassword || (typeof window !== 'undefined' ? localStorage.getItem('sharecoc_admin_password') || '' : ''),
         }),
       });
       const data = await res.json();
@@ -1718,6 +1728,8 @@ export default function AdminControlPage() {
         headers: getAdminHeaders(token),
         body: JSON.stringify({
           action: 'UPDATE_DEVICE_PERMISSIONS',
+          isAdmin: true,
+          adminPassword: adminPassword || (typeof window !== 'undefined' ? localStorage.getItem('sharecoc_admin_password') || '' : ''),
           machineGuid: targetGuid,
           name: selectedDeviceForPerms.name,
           user: selectedDeviceForPerms.user,
