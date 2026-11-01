@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Shield,
   Folder,
@@ -73,6 +73,7 @@ interface DeviceRecord {
   department?: string;
   authorizedDepts?: string[];
   registeredAt?: string;
+  accessRole?: 'admin' | 'data_entry' | 'viewer';
 }
 
 interface FileRecord {
@@ -128,6 +129,7 @@ export default function AdminControlPage() {
   const [accessRoles, setAccessRoles] = useState<Record<string, any>>({});
   const [accessTotalRecords, setAccessTotalRecords] = useState<number>(88987);
   const [accessLoading, setAccessLoading] = useState<boolean>(false);
+
 
   // إعدادات أمان مركز بيانات Access واعتماد الأجهزة
   const [accessHubSec, setAccessHubSec] = useState<any>({
@@ -191,6 +193,54 @@ export default function AdminControlPage() {
   const [newDeviceName, setNewDeviceName] = useState('');
   const [newDeviceUser, setNewDeviceUser] = useState('');
   const [newDeviceOs, setNewDeviceOs] = useState('Windows 11 Pro');
+
+  // دمج كافة الأجهزة المعروفة والمعتمدة دون استثناء لضمان ظهورها 100%
+  const allKnownDevices = useMemo(() => {
+    const map = new Map<string, { guid: string; name: string; user: string; role: 'admin' | 'data_entry' | 'viewer' }>();
+
+    (devices || []).forEach((d) => {
+      if (d.machineGuid) {
+        map.set(d.machineGuid, {
+          guid: d.machineGuid,
+          name: d.name || 'حاسوب الموظف',
+          user: d.user || 'موظف',
+          role: accessRoles[d.machineGuid]?.role || (d.accessRole as any) || 'data_entry',
+        });
+      }
+    });
+
+    (accessHubSec?.authorizedDevices || []).forEach((guid: string) => {
+      if (guid && !map.has(guid)) {
+        map.set(guid, {
+          guid,
+          name: `جهاز معتمد (${guid.substring(0, 8)})`,
+          user: 'موظف مصرح',
+          role: accessRoles[guid]?.role || 'data_entry',
+        });
+      }
+    });
+
+    Object.entries(accessRoles || {}).forEach(([guid, r]: [string, any]) => {
+      if (guid) {
+        const existing = map.get(guid);
+        if (existing) {
+          existing.role = r.role || existing.role;
+          if (r.name && (!existing.name || existing.name.startsWith('جهاز معتمد'))) {
+            existing.name = r.name;
+          }
+        } else {
+          map.set(guid, {
+            guid,
+            name: r.name || `جهاز (${guid.substring(0, 8)})`,
+            user: r.name || 'موظف',
+            role: r.role || 'data_entry',
+          });
+        }
+      }
+    });
+
+    return Array.from(map.values());
+  }, [devices, accessHubSec, accessRoles]);
 
   // إشعار عائم
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
@@ -283,12 +333,17 @@ export default function AdminControlPage() {
         setLoading(true);
       }
 
-      const res = await fetch('/api/drive/files', { cache: 'no-store' });
-      const data = await res.json();
-      if (data.success) {
-        if (data.adminCredentials && !savingCredentials) {
-          const cUser = data.adminCredentials.username || 'admin';
-          const cPass = data.adminCredentials.password || 'admin1234';
+      const [filesRes, permsRes] = await Promise.all([
+        fetch('/api/drive/files', { cache: 'no-store' }),
+        fetch('/api/drive/permissions?force=1', { cache: 'no-store' }),
+      ]);
+      const data = await filesRes.json();
+      const permsData = await permsRes.json().catch(() => ({}));
+
+      if (permsData && permsData.success) {
+        if (permsData.adminCredentials && !savingCredentials) {
+          const cUser = permsData.adminCredentials.username || 'admin';
+          const cPass = permsData.adminCredentials.password || 'admin1234';
           setAdminUsername(cUser);
           setAdminPassword(cPass);
           if (typeof window !== 'undefined') {
@@ -297,12 +352,12 @@ export default function AdminControlPage() {
           }
         }
 
-        if (Array.isArray(data.devices) && !actionLoading) {
-          setDevices(data.devices);
+        if (Array.isArray(permsData.devices) && !actionLoading) {
+          setDevices(permsData.devices);
         }
 
-        if (data.accessHubSecurity && !savingHubSec) {
-          const sec = data.accessHubSecurity;
+        if (permsData.accessHubSecurity && !savingHubSec) {
+          const sec = permsData.accessHubSecurity;
           const hasCreds = Boolean(sec.username || sec.password || sec.pinCode);
           setAccessHubSec(sec);
           setHubSecEnabled(Boolean(sec.enabled || hasCreds));
@@ -310,6 +365,9 @@ export default function AdminControlPage() {
           setHubSecPass(sec.password || '');
           setHubSecPin(sec.pinCode || '');
         }
+      }
+
+      if (data.success) {
 
         const folderMap = new Map<string, DepartmentItem>();
         (data.folders || []).forEach((f: any) => {
@@ -367,7 +425,7 @@ export default function AdminControlPage() {
         // عدم الكتابة فوق الصلاحيات أثناء الحفظ أو بعده مباشرة لمنع رجوع الأزرار لحالتها القديمة
         const recentlySaved = Date.now() - lastPermSaveRef.current < 8000;
         if (!isSavingPermsRef.current && (!isBackgroundPoll || !recentlySaved)) {
-          const cloudPerms = data.permissions || {};
+          const cloudPerms = (permsData && permsData.permissions) || data.permissions || {};
           const permsList: PermissionRule[] = deptsList.map((dept) => {
             const saved = cloudPerms[dept.name] || {};
             return {
@@ -1838,7 +1896,7 @@ export default function AdminControlPage() {
               { id: 'SECTIONS', label: '📁 إدارة الأقسام والملفات', count: accessFiles.length },
               { id: 'FIELDS', label: '📋 إدارة الحقول والهياكل', count: accessColumnsList.length },
               { id: 'SECURITY', label: '🔒 أمان المركز والأجهزة المعتمدة', count: accessHubSec?.authorizedDevices?.length || 0 },
-              { id: 'ROLES', label: '👥 مصفوفة الصلاحيات والأجهزة', count: Object.keys(accessRoles).length },
+              { id: 'ROLES', label: '👥 مصفوفة الصلاحيات والأجهزة', count: allKnownDevices.length },
               { id: 'TRASH', label: '🗑️ سلة المحذوفات الإدارية', count: accessTrashBin.length },
             ].map((sub) => (
               <button
@@ -2342,53 +2400,61 @@ export default function AdminControlPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {devices.map((d: DeviceRecord, idx: number) => {
-                        const currentRole = accessRoles[d.machineGuid]?.role || 'data_entry';
-                        return (
-                          <tr key={idx} className="hover:bg-slate-50/80 transition">
-                            <td className="p-3 font-bold text-slate-900">💻 {d.name}</td>
-                            <td className="p-3 font-mono text-[11px] text-slate-500">{d.machineGuid}</td>
-                            <td className="p-3 text-slate-700">{d.user}</td>
-                            <td className="p-3">
-                              <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
-                                currentRole === 'admin' ? 'bg-amber-100 text-amber-800 border border-amber-300' :
-                                currentRole === 'viewer' ? 'bg-blue-100 text-blue-800 border border-blue-300' :
-                                'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                              }`}>
-                                {currentRole === 'admin' ? '👑 مدير نظام' : currentRole === 'viewer' ? '👁️ مستعلم فقط' : '✏️ مدخل بيانات'}
-                              </span>
-                            </td>
-                            <td className="p-3 text-center">
-                              <div className="flex items-center justify-center gap-1.5">
-                                <button
-                                  onClick={() => handleSaveAccessRole(d.machineGuid, d.name, 'data_entry')}
-                                  className={`px-2 py-1 rounded text-[10px] font-bold transition cursor-pointer ${
-                                    currentRole === 'data_entry' ? 'bg-[#14372e] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                                  }`}
-                                >
-                                  مدخل بيانات
-                                </button>
-                                <button
-                                  onClick={() => handleSaveAccessRole(d.machineGuid, d.name, 'viewer')}
-                                  className={`px-2 py-1 rounded text-[10px] font-bold transition cursor-pointer ${
-                                    currentRole === 'viewer' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                                  }`}
-                                >
-                                  مستعلم فقط
-                                </button>
-                                <button
-                                  onClick={() => handleSaveAccessRole(d.machineGuid, d.name, 'admin')}
-                                  className={`px-2 py-1 rounded text-[10px] font-bold transition cursor-pointer ${
-                                    currentRole === 'admin' ? 'bg-amber-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                                  }`}
-                                >
-                                  مدير
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
+                      {allKnownDevices.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="p-8 text-center text-slate-500 font-semibold">
+                            لا توجد أجهزة مسجلة حالياً. بمجرد تسجيل أي جهاز من شاشة تسجيل الدخول سيظهر هنا فورياً للتحكم بصلاحياته.
+                          </td>
+                        </tr>
+                      ) : (
+                        allKnownDevices.map((d, idx: number) => {
+                          const currentRole = d.role || 'data_entry';
+                          return (
+                            <tr key={idx} className="hover:bg-slate-50/80 transition">
+                              <td className="p-3 font-bold text-slate-900">💻 {d.name}</td>
+                              <td className="p-3 font-mono text-[11px] text-slate-500">{d.guid}</td>
+                              <td className="p-3 text-slate-700">{d.user}</td>
+                              <td className="p-3">
+                                <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
+                                  currentRole === 'admin' ? 'bg-amber-100 text-amber-800 border border-amber-300' :
+                                  currentRole === 'viewer' ? 'bg-blue-100 text-blue-800 border border-blue-300' :
+                                  'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                }`}>
+                                  {currentRole === 'admin' ? '👑 مدير نظام' : currentRole === 'viewer' ? '👁️ مستعلم فقط' : '✏️ مدخل بيانات'}
+                                </span>
+                              </td>
+                              <td className="p-3 text-center">
+                                <div className="flex items-center justify-center gap-1.5">
+                                  <button
+                                    onClick={() => handleSaveAccessRole(d.guid, d.name, 'data_entry')}
+                                    className={`px-2 py-1 rounded text-[10px] font-bold transition cursor-pointer ${
+                                      currentRole === 'data_entry' ? 'bg-[#14372e] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                    }`}
+                                  >
+                                    مدخل بيانات
+                                  </button>
+                                  <button
+                                    onClick={() => handleSaveAccessRole(d.guid, d.name, 'viewer')}
+                                    className={`px-2 py-1 rounded text-[10px] font-bold transition cursor-pointer ${
+                                      currentRole === 'viewer' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                    }`}
+                                  >
+                                    مستعلم فقط
+                                  </button>
+                                  <button
+                                    onClick={() => handleSaveAccessRole(d.guid, d.name, 'admin')}
+                                    className={`px-2 py-1 rounded text-[10px] font-bold transition cursor-pointer ${
+                                      currentRole === 'admin' ? 'bg-amber-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                    }`}
+                                  >
+                                    مدير
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
                     </tbody>
                   </table>
                 </div>
