@@ -793,12 +793,18 @@ export async function revokeOrDeleteDevice(
       }
     }
 
-    // 3. إزالة بصمة الجهاز من أمان مركز بيانات Access
+    // 3. إزالة بصمة الجهاز من أمان مركز بيانات Access وصلاحياته
     let accessHubSecurity = current.accessHubSecurity ? { ...current.accessHubSecurity } : undefined;
-    if (accessHubSecurity && Array.isArray(accessHubSecurity.authorizedDevices) && accessHubSecurity.authorizedDevices.includes(targetGuid)) {
+    if (accessHubSecurity) {
+      const curRoles = { ...(accessHubSecurity.roles || {}) };
+      delete curRoles[targetGuid];
+      const curAuths = Array.isArray(accessHubSecurity.authorizedDevices)
+        ? accessHubSecurity.authorizedDevices.filter((g) => g !== targetGuid)
+        : [];
       accessHubSecurity = {
         ...accessHubSecurity,
-        authorizedDevices: accessHubSecurity.authorizedDevices.filter((g) => g !== targetGuid),
+        authorizedDevices: curAuths,
+        roles: curRoles,
         updatedAt: new Date().toISOString(),
       };
     }
@@ -905,6 +911,7 @@ export async function authorizeDeviceForAccessHub(deviceInfo: {
         isAuthorized: true,
         lastSeen: 'متصل الآن',
         status: 'متصل الآن',
+        accessRole: existing.accessRole || 'data_entry',
       };
       devices[devIndex] = devRecord;
     } else {
@@ -919,6 +926,7 @@ export async function authorizeDeviceForAccessHub(deviceInfo: {
         status: 'متصل الآن',
         department: 'مركز بيانات Access',
         authorizedDepts: ['مركز بيانات Access'],
+        accessRole: 'data_entry',
         registeredAt: new Date().toISOString(),
       };
       devices.push(devRecord);
@@ -927,10 +935,15 @@ export async function authorizeDeviceForAccessHub(deviceInfo: {
     const curSec = current.accessHubSecurity || { ...DEFAULT_ACCESS_HUB_SECURITY };
     const curAuthed = new Set<string>(curSec.authorizedDevices || []);
     curAuthed.add(cleanGuid);
+    const curRoles = { ...(curSec.roles || {}) };
+    if (!curRoles[cleanGuid]) {
+      curRoles[cleanGuid] = 'data_entry';
+    }
 
     const newSec: AccessHubSecurityConfig = {
       ...curSec,
       authorizedDevices: Array.from(curAuthed),
+      roles: curRoles,
       updatedAt: new Date().toISOString(),
     };
 

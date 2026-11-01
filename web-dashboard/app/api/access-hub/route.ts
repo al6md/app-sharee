@@ -15,6 +15,8 @@ import {
   getCustomColumns,
   deleteAccessSection,
   restoreAccessSection,
+  addAccessSection,
+  deleteAccessHubRole,
   deleteRecordToTrash,
   restoreRecordFromTrash,
   setAccessHubRole
@@ -334,11 +336,28 @@ export async function GET(req: NextRequest) {
     let availableTables: string[] = [];
     let activeTable = requestedTable;
 
+    // دمج الأقسام وقواعد البيانات المخصصة مع فهرس البيانات
+    const customSections = mutations.custom_sections || [];
+    const mergedFilesMap = new Map<string, any>();
+    (index.files || []).forEach((f: any) => {
+      mergedFilesMap.set(f.name, f);
+    });
+    customSections.forEach((cs) => {
+      mergedFilesMap.set(cs.name, {
+        name: cs.name,
+        tables: cs.tables || [],
+        table_counts: cs.table_counts || {},
+        total_rows: cs.total_rows || 0,
+        size_kb: cs.size_kb || 0.1,
+        is_custom: true,
+      });
+    });
+    const allFiles = Array.from(mergedFilesMap.values());
+
     const isAllTables = requestedTable === 'all' || requestedTable === 'all_categories' || (!requestedTable && requestedFile === 'all');
 
     if (requestedFile === 'all') {
       // 🌐 وضع الدمج الشامل (كافة الملفات مدمجة)
-      const allFiles = index.files || [];
       const tablesSet = new Set<string>();
       allFiles.forEach((f: any) => {
         (f.tables || []).forEach((t: string) => tablesSet.add(t));
@@ -427,9 +446,35 @@ export async function GET(req: NextRequest) {
       }
     } else {
       // 📁 وضع خانة ملف محدد باسمه الحقيقي
-      const content = getFileContent(requestedFile);
-      if (!content) {
-        return NextResponse.json({ success: false, error: 'الملف غير موجود' }, { status: 404 });
+      let content = getFileContent(requestedFile);
+      const isCustomSec = !content && (mutations.custom_sections || []).some((s) => s.name === requestedFile);
+      if (!content && !isCustomSec) {
+        return NextResponse.json({ success: false, error: 'الملف أو القسم غير موجود' }, { status: 404 });
+      }
+
+      if (!content && isCustomSec) {
+        const customSec = (mutations.custom_sections || []).find((s) => s.name === requestedFile)!;
+        const tables = customSec.tables && customSec.tables.length > 0
+          ? customSec.tables
+          : ['التجار', 'الشركات', 'الدلالين', 'التعديل', 'الشطب'];
+        content = {
+          tables: {},
+          columns: {},
+        };
+        tables.forEach((t) => {
+          content.tables[t] = [];
+          content.columns[t] = [
+            'اسم التاجر',
+            'الاسم التجاري',
+            'صاحب الاسم التجاري',
+            'العمل',
+            'الصنف',
+            'الدرجة',
+            'الهاتف',
+            'العنوان',
+            'تاريخ التسجيل',
+          ];
+        });
       }
 
       const fileTables = Object.keys(content.tables || {});
@@ -566,7 +611,7 @@ export async function GET(req: NextRequest) {
     const paginatedRows = filteredRows.slice(startIndex, startIndex + limit);
 
     const deletedSections = mutations.deleted_sections || [];
-    const activeFiles = (index.files || []).filter((f: any) => !deletedSections.includes(f.name));
+    const activeFiles = allFiles.filter((f: any) => !deletedSections.includes(f.name));
 
     const grandTotalRecords = (index.total_records || 0) + (mutations.adds?.length || 0) - (mutations.deletes?.length || 0);
 
@@ -575,8 +620,9 @@ export async function GET(req: NextRequest) {
       sig: currentSig,
       current_role: callerRole,
       files: activeFiles,
-      all_files: index.files || [],
+      all_files: allFiles,
       deleted_sections: deletedSections,
+      custom_sections: customSections,
       trash_bin: mutations.trash_bin || [],
       roles: mutations.roles || {},
       total_records: Math.max(0, grandTotalRecords),
@@ -607,6 +653,7 @@ export async function POST(req: NextRequest) {
 
     // العمليات الإدارية الحساسة محصورة حصراً بمدير النظام (Super Admin)
     const adminActions = [
+      'ADD_SECTION',
       'DELETE_SECTION',
       'RESTORE_SECTION',
       'TRASH_RECORD',
@@ -617,6 +664,7 @@ export async function POST(req: NextRequest) {
       'MOVE_COLUMN',
       'REORDER_COLUMNS',
       'SET_ROLE',
+      'DELETE_ROLE',
     ];
 
     if (body.action && adminActions.includes(body.action)) {
@@ -628,7 +676,24 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 0. إدارة الأقسام (حذف أو استعادة)
+    // 0. إدارة الأقسام (إضافة، حذف أو استعادة)
+    if (body.action === 'ADD_SECTION') {
+      const { name, tables, createdBy } = body;
+      if (!name || !String(name).trim()) {
+        return NextResponse.json({ success: false, error: 'اسم القسم الجديد مطلوب' }, { status: 400 });
+      }
+      const sections = await addAccessSection({
+        name: String(name).trim(),
+        tables: Array.isArray(tables) ? tables : [],
+        created_by: createdBy || 'إدارة النظام',
+      });
+      return NextResponse.json({
+        success: true,
+        message: `تم إنشاء وإضافة القسم "${name}" بنجاح في بيانات Access وتعميمه سحابياً فوراً`,
+        custom_sections: sections,
+      });
+    }
+
     if (body.action === 'DELETE_SECTION') {
       const { fileName } = body;
       if (!fileName) return NextResponse.json({ success: false, error: 'اسم القسم مطلوب' }, { status: 400 });
@@ -671,17 +736,41 @@ export async function POST(req: NextRequest) {
           const sec = cur.accessHubSecurity || { ...DEFAULT_ACCESS_HUB_SECURITY };
           const curRoles = { ...(sec.roles || {}) };
           curRoles[guid] = role;
-          const updatedDevices = (cur.devices || []).map((d) => {
-            if (d.machineGuid === guid) {
-              return { ...d, accessRole: role };
-            }
-            return d;
-          });
+
+          const authDevs = new Set<string>(sec.authorizedDevices || []);
+          authDevs.add(guid);
+
+          const updatedDevices = [...(cur.devices || [])];
+          const devIdx = updatedDevices.findIndex((d) => d.machineGuid === guid);
+          if (devIdx >= 0) {
+            updatedDevices[devIdx] = {
+              ...updatedDevices[devIdx],
+              accessRole: role,
+              isAuthorized: true,
+              name: name || updatedDevices[devIdx].name,
+            };
+          } else {
+            updatedDevices.push({
+              id: `dev-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+              name: name || `حاسوب معتمد (${guid.substring(0, 6)})`,
+              user: name || 'موظف مصرح',
+              os: 'Windows/Web',
+              machineGuid: guid,
+              isAuthorized: true,
+              lastSeen: 'متصل الآن',
+              department: 'مركز بيانات Access',
+              authorizedDepts: ['مركز بيانات Access'],
+              accessRole: role,
+              registeredAt: new Date().toISOString(),
+            });
+          }
+
           return {
             ...cur,
             devices: updatedDevices,
             accessHubSecurity: {
               ...sec,
+              authorizedDevices: Array.from(authDevs),
               roles: curRoles,
               updatedAt: new Date().toISOString(),
             },
@@ -692,6 +781,13 @@ export async function POST(req: NextRequest) {
       }
 
       return NextResponse.json({ success: true, message: 'تم تحديث وتطبيق صلاحية الجهاز بنجاح وتعميمها', roleRecord: record });
+    }
+
+    if (body.action === 'DELETE_ROLE') {
+      const { guid } = body;
+      if (!guid) return NextResponse.json({ success: false, error: 'معرف الجهاز مطلوب' }, { status: 400 });
+      await deleteAccessHubRole(guid);
+      return NextResponse.json({ success: true, message: 'تم حذف صلاحية الجهاز سحابياً بنجاح' });
     }
 
     // 4. إضافة حقل جديد للجدول

@@ -2512,17 +2512,33 @@ class FileExchangeMainWindow(QMainWindow):
         is_cloud_authed = my_guid in authed_devices
         is_locally_authed = self._is_access_hub_locally_unlocked()
 
-        # إذا كان معتمداً سحابياً، نثبّته محلياً للأبد
-        if is_cloud_authed:
-            if not is_locally_authed:
-                self._save_access_hub_local_unlock()
-                is_locally_authed = True
-        elif is_locally_authed:
-            # سحب الاعتماد فقط إذا كنا متصلين بالسحابة وتم جلب البيانات الحية بنجاح من Google Drive
-            has_live_cloud = getattr(self.client, '_has_fetched_cloud_perms', False)
-            if has_live_cloud and isinstance(authed_devices, list):
+        # التحقق الفوري من سحب الاعتماد في حال قام الأدمن بحذف الجهاز
+        if is_locally_authed:
+            if isinstance(authed_devices, list) and authed_devices and my_guid not in authed_devices:
                 self._remove_access_hub_local_unlock()
                 is_locally_authed = False
+            elif not is_cloud_authed:
+                try:
+                    import requests
+                    r = requests.post(
+                        "https://web-dashboard-pi-self.vercel.app/api/drive/permissions",
+                        json={"action": "CHECK_ACCESS_HUB_DEVICE", "machineGuid": my_guid},
+                        timeout=3
+                    )
+                    if r.status_code == 200:
+                        res_data = r.json()
+                        if res_data.get("enabled") and not res_data.get("authorized"):
+                            self._remove_access_hub_local_unlock()
+                            is_locally_authed = False
+                        elif res_data.get("authorized"):
+                            is_cloud_authed = True
+                except Exception:
+                    pass
+
+        # إذا كان معتمداً سحابياً، نثبّته محلياً للأبد
+        if is_cloud_authed and not is_locally_authed:
+            self._save_access_hub_local_unlock()
+            is_locally_authed = True
 
         if is_cloud_authed or is_locally_authed:
             return True
@@ -2587,6 +2603,7 @@ class FileExchangeMainWindow(QMainWindow):
         self._save_access_hub_local_unlock()
 
         # رفع التسجيل سحابياً إلى Google Drive في خيط خلفي
+        import threading
         if hasattr(self, 'client') and self.client:
             rule.setdefault('authorized_devices', [])
             if my_guid not in rule['authorized_devices']:
@@ -2594,12 +2611,33 @@ class FileExchangeMainWindow(QMainWindow):
             if 'authorizedDevices' in rule and my_guid not in rule['authorizedDevices']:
                 rule['authorizedDevices'].append(my_guid)
 
-            import threading
             threading.Thread(
                 target=self.client.authorize_device_for_dept,
                 args=("مركز بيانات Access", my_guid, computer_name, "Windows Desktop"),
                 daemon=True
             ).start()
+
+        # المزامنة المباشرة عبر API الويب لضمان تسجيل وظهور الجهاز في لوحة الأدمن للأبد
+        def _sync_hub_reg_to_web():
+            try:
+                import requests
+                requests.post(
+                    "https://web-dashboard-pi-self.vercel.app/api/drive/permissions",
+                    json={
+                        "action": "REGISTER_ACCESS_HUB_DEVICE",
+                        "username": ent_u if dept_user else "",
+                        "password": ent_p if dept_user else clean_entered,
+                        "machineGuid": my_guid,
+                        "deviceName": computer_name,
+                        "os": "Windows 11 Desktop",
+                        "user": computer_name
+                    },
+                    timeout=8
+                )
+            except Exception:
+                pass
+
+        threading.Thread(target=_sync_hub_reg_to_web, daemon=True).start()
 
         return True
 

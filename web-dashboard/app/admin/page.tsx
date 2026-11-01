@@ -163,6 +163,19 @@ export default function AdminControlPage() {
   const [newRoleName, setNewRoleName] = useState<string>('');
   const [newRoleType, setNewRoleType] = useState<'admin' | 'data_entry' | 'viewer'>('data_entry');
 
+  // نافذة إضافة قسم جديد لمركز بيانات Access
+  const [showAddAccessSectionModal, setShowAddAccessSectionModal] = useState<boolean>(false);
+  const [newAccessSectionName, setNewAccessSectionName] = useState<string>('');
+  const [selectedAccessTables, setSelectedAccessTables] = useState<string[]>([
+    'التجار',
+    'الشركات',
+    'الدلالين',
+    'التعديل',
+    'الشطب',
+  ]);
+  const [customAccessTableInput, setCustomAccessTableInput] = useState<string>('');
+  const [creatingAccessSection, setCreatingAccessSection] = useState<boolean>(false);
+
   // بيانات الأقسام
   const [departments, setDepartments] = useState<DepartmentItem[]>([]);
   const [showAddDeptModal, setShowAddDeptModal] = useState(false);
@@ -200,27 +213,54 @@ export default function AdminControlPage() {
 
   // دمج كافة الأجهزة المعروفة والمعتمدة دون استثناء لضمان ظهورها 100%
   const allKnownDevices = useMemo(() => {
-    const map = new Map<string, { guid: string; name: string; user: string; role: 'admin' | 'data_entry' | 'viewer' }>();
+    const map = new Map<
+      string,
+      {
+        id: string;
+        guid: string;
+        name: string;
+        user: string;
+        os: string;
+        role: 'admin' | 'data_entry' | 'viewer';
+        isAuthorized: boolean;
+        registeredAt?: string;
+        lastSeen?: string;
+      }
+    >();
 
     (devices || []).forEach((d) => {
       if (d.machineGuid) {
         map.set(d.machineGuid, {
+          id: d.id || d.machineGuid,
           guid: d.machineGuid,
           name: d.name || 'حاسوب الموظف',
-          user: d.user || 'موظف',
+          user: d.user || 'موظف الغرفة',
+          os: d.os || 'Windows 11 / Web',
           role: accessRoles[d.machineGuid]?.role || (d.accessRole as any) || 'data_entry',
+          isAuthorized: d.isAuthorized !== false,
+          registeredAt: d.registeredAt,
+          lastSeen: d.lastSeen || 'متصل الآن',
         });
       }
     });
 
     (accessHubSec?.authorizedDevices || []).forEach((guid: string) => {
-      if (guid && !map.has(guid)) {
-        map.set(guid, {
-          guid,
-          name: `جهاز معتمد (${guid.substring(0, 8)})`,
-          user: 'موظف مصرح',
-          role: accessRoles[guid]?.role || 'data_entry',
-        });
+      if (guid) {
+        const existing = map.get(guid);
+        if (existing) {
+          existing.isAuthorized = true;
+        } else {
+          map.set(guid, {
+            id: guid,
+            guid,
+            name: `جهاز معتمد (${guid.substring(0, 8)})`,
+            user: 'موظف مصرح',
+            os: 'Windows 11 / Web',
+            role: accessRoles[guid]?.role || 'data_entry',
+            isAuthorized: true,
+            lastSeen: 'متصل الآن',
+          });
+        }
       }
     });
 
@@ -234,10 +274,14 @@ export default function AdminControlPage() {
           }
         } else {
           map.set(guid, {
+            id: guid,
             guid,
             name: r.name || `جهاز (${guid.substring(0, 8)})`,
             user: r.name || 'موظف',
+            os: 'Windows 11 / Web',
             role: r.role || 'data_entry',
+            isAuthorized: true,
+            lastSeen: 'متصل الآن',
           });
         }
       }
@@ -540,6 +584,48 @@ export default function AdminControlPage() {
       }
     } catch (err) {
       console.error('Failed to fetch columns:', err);
+    }
+  };
+
+  // إضافة قسم / قاعدة بيانات جديدة في مركز بيانات Access
+  const handleAddAccessSection = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanName = newAccessSectionName.trim();
+    if (!cleanName) {
+      alert('يرجى كتابة اسم القسم أو قاعدة البيانات الجديدة');
+      return;
+    }
+    if (selectedAccessTables.length === 0) {
+      alert('يرجى اختيار جدول واحد على الأقل للقسم الجديد');
+      return;
+    }
+    try {
+      setCreatingAccessSection(true);
+      const res = await fetch('/api/access-hub', {
+        method: 'POST',
+        headers: getAdminHeaders(),
+        body: JSON.stringify({
+          action: 'ADD_SECTION',
+          name: cleanName,
+          tables: selectedAccessTables,
+          createdBy: adminUsername || 'مدير النظام',
+          isAdmin: true,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setToastMessage({ text: `✅ تم إنشاء وإضافة القسم "${cleanName}" بنجاح في بيانات Access!`, type: 'success' });
+        setShowAddAccessSectionModal(false);
+        setNewAccessSectionName('');
+        setSelectedAccessTables(['التجار', 'الشركات', 'الدلالين', 'التعديل', 'الشطب']);
+        await loadAccessHubData();
+      } else {
+        alert(data.error || 'فشل إنشاء القسم');
+      }
+    } catch (err: any) {
+      alert(`خطأ: ${err.message}`);
+    } finally {
+      setCreatingAccessSection(false);
     }
   };
 
@@ -1510,7 +1596,7 @@ export default function AdminControlPage() {
       if (data.success) {
         setDevices(data.devices || []);
         setToastMessage({ text: `🗑️ تم حذف الجهاز "${deviceName}" وسحب اعتماده فورياً من كافة الأقسام!`, type: 'success' });
-        await loadAllData(false);
+        await Promise.all([loadAllData(false), loadAccessHubData()]);
       } else {
         alert(data.error || 'فشل حذف الجهاز');
       }
@@ -1939,7 +2025,7 @@ export default function AdminControlPage() {
             {[
               { id: 'SECTIONS', label: '📁 إدارة الأقسام والملفات', count: accessFiles.length },
               { id: 'FIELDS', label: '📋 إدارة الحقول والهياكل', count: accessColumnsList.length },
-              { id: 'SECURITY', label: '🔒 أمان المركز والأجهزة المعتمدة', count: accessHubSec?.authorizedDevices?.length || 0 },
+              { id: 'SECURITY', label: '🔒 أمان المركز والأجهزة المعتمدة', count: allKnownDevices.length },
               { id: 'ROLES', label: '👥 مصفوفة الصلاحيات والأجهزة', count: allKnownDevices.length },
               { id: 'TRASH', label: '🗑️ سلة المحذوفات الإدارية', count: accessTrashBin.length },
             ].map((sub) => (
@@ -1967,9 +2053,16 @@ export default function AdminControlPage() {
                 <div>
                   <h4 className="font-bold text-base text-slate-900">الأقسام وملفات Access المدمجة</h4>
                   <p className="text-xs text-slate-600 mt-0.5">
-                    يمكن للمدير حذف أو أرشفة أي قسم، وعند الحذف يتم إخفاؤه فوراً عن كافة حواسيب الموظفين لمنع العبث.
+                    يمكن للمدير إضافة أقسام جديدة، أو حذف وأرشفة أي قسم، وعند الحذف يتم إخفاؤه فوراً عن كافة حواسيب الموظفين لمنع العبث.
                   </p>
                 </div>
+                <button
+                  onClick={() => setShowAddAccessSectionModal(true)}
+                  className="flex items-center justify-center gap-2 px-5 py-2.5 bg-[#14372e] hover:bg-[#1a473b] text-white text-xs font-bold rounded-xl transition shadow-xs active:scale-95 cursor-pointer shrink-0"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>إضافة قسم جديد في بيانات Access</span>
+                </button>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -2350,22 +2443,22 @@ export default function AdminControlPage() {
                   <div>
                     <h4 className="font-bold text-base text-slate-900 flex items-center gap-2">
                       <Laptop className="w-5 h-5 text-[#14372e]" />
-                      <span>الأجهزة المعتمدة لمركز بيانات Access حالياً ({accessHubSec?.authorizedDevices?.length || 0})</span>
+                      <span>الأجهزة المعتمدة لمركز بيانات Access حالياً ({allKnownDevices.length})</span>
                     </h4>
                     <p className="text-xs text-slate-600 mt-1">
-                      هذه الحواسيب والأجهزة قامت بإدخال بيانات تسجيل الدخول لمرة واحدة وتملك صلاحية دائمة. عند حذف أي جهاز سيتم قفل مركز Access بوجهه فوراً.
+                      هذه الحواسيب والأجهزة قامت بإدخال بيانات تسجيل الدخول لمرة واحدة وتملك صلاحية دائمة وموثقة. يمكنك تحديد صلاحية كل جهاز بنقرة واحدة، وعند حذف أي جهاز سيتم قفل مركز Access بوجهه فوراً.
                     </p>
                   </div>
                 </div>
 
-                {(!accessHubSec?.authorizedDevices || accessHubSec.authorizedDevices.length === 0) ? (
+                {allKnownDevices.length === 0 ? (
                   <div className="text-center py-12 px-4">
                     <div className="w-14 h-14 bg-emerald-50 rounded-2xl flex items-center justify-center mx-auto mb-3 text-2xl border border-emerald-100">
                       💻
                     </div>
-                    <p className="text-sm font-bold text-slate-800">لا توجد أجهزة معتمدة لمركز بيانات Access حتى الآن</p>
+                    <p className="text-sm font-bold text-slate-800">لا توجد أجهزة مسجلة لمركز بيانات Access حتى الآن</p>
                     <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
-                      بمجرد قيام أي موظف أو حاسوب بإدخال اسم المستخدم ورمز المرور لمركز بيانات Access من تطبيق الحاسوب أو الويب أو الأندرويد، سيتم تثبيت الجهاز هنا للأبد.
+                      بمجرد قيام أي موظف أو حاسوب بإدخال اسم المستخدم ورمز المرور لمركز بيانات Access من تطبيق الحاسوب أو الويب أو الأندرويد، سيتم تثبيت جهازه هنا للأبد.
                     </p>
                   </div>
                 ) : (
@@ -2377,28 +2470,62 @@ export default function AdminControlPage() {
                           <th className="p-3">معرّف العتاد (Machine GUID)</th>
                           <th className="p-3">نظام التشغيل</th>
                           <th className="p-3">المستخدم المعتمد</th>
+                          <th className="p-3 text-center">الصلاحية (RBAC)</th>
                           <th className="p-3 text-center">الإجراء</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {accessHubSec.authorizedDevices.map((guid: string, idx: number) => {
-                          const dev = devices.find((d) => d.machineGuid === guid);
-                          const devName = dev?.name || `جهاز معتمد (${guid.substring(0, 8)})`;
-                          const devOs = dev?.os || 'نظام غير معروف';
-                          const devUser = dev?.user || 'موظف مصرح';
-                          const devId = dev?.id || guid;
+                        {allKnownDevices.map((dev, idx: number) => {
+                          const currentRole = dev.role || 'data_entry';
                           return (
                             <tr key={idx} className="hover:bg-slate-50/80 transition">
                               <td className="p-3 font-bold text-slate-900 flex items-center gap-2">
                                 <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>
-                                <span>💻 {devName}</span>
+                                <span>💻 {dev.name}</span>
                               </td>
-                              <td className="p-3 font-mono text-[11px] text-slate-500">{guid}</td>
-                              <td className="p-3 text-slate-600">{devOs}</td>
-                              <td className="p-3 text-slate-700">{devUser}</td>
+                              <td className="p-3 font-mono text-[11px] text-slate-500">{dev.guid}</td>
+                              <td className="p-3 text-slate-600">{dev.os}</td>
+                              <td className="p-3 text-slate-700">{dev.user}</td>
+                              <td className="p-3 text-center">
+                                <div className="flex items-center justify-center gap-1">
+                                  <button
+                                    onClick={() => handleSaveAccessRole(dev.guid, dev.name, 'data_entry')}
+                                    className={`px-2 py-1 rounded text-[10px] font-bold transition cursor-pointer ${
+                                      currentRole === 'data_entry'
+                                        ? 'bg-[#14372e] text-white shadow-xs'
+                                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                    }`}
+                                    title="صلاحية إدخال وتعديل البيانات"
+                                  >
+                                    ✏️ مدخل
+                                  </button>
+                                  <button
+                                    onClick={() => handleSaveAccessRole(dev.guid, dev.name, 'viewer')}
+                                    className={`px-2 py-1 rounded text-[10px] font-bold transition cursor-pointer ${
+                                      currentRole === 'viewer'
+                                        ? 'bg-blue-600 text-white shadow-xs'
+                                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                    }`}
+                                    title="صلاحية استعلام وقراءة وتصدير فقط"
+                                  >
+                                    👁️ مستعلم
+                                  </button>
+                                  <button
+                                    onClick={() => handleSaveAccessRole(dev.guid, dev.name, 'admin')}
+                                    className={`px-2 py-1 rounded text-[10px] font-bold transition cursor-pointer ${
+                                      currentRole === 'admin'
+                                        ? 'bg-amber-600 text-white shadow-xs'
+                                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                    }`}
+                                    title="مدير نظام بكامل الصلاحيات"
+                                  >
+                                    👑 مدير
+                                  </button>
+                                </div>
+                              </td>
                               <td className="p-3 text-center">
                                 <button
-                                  onClick={() => handleDeleteDevice(devId, devName)}
+                                  onClick={() => handleDeleteDevice(dev.id || dev.guid, dev.name)}
                                   className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-rose-50 text-rose-600 hover:bg-rose-100 transition cursor-pointer border border-rose-200"
                                   title="سحب الاعتماد وقفل مركز بيانات Access فورياً بوجه هذا الجهاز"
                                 >
@@ -2502,6 +2629,13 @@ export default function AdminControlPage() {
                                     }`}
                                   >
                                     مدير
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeleteDevice(d.id || d.guid, d.name)}
+                                    className="p-1.5 rounded text-rose-600 hover:bg-rose-50 transition cursor-pointer"
+                                    title="حذف الجهاز وسحب اعتماده نهائياً"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
                                   </button>
                                 </div>
                               </td>
@@ -3224,6 +3358,147 @@ export default function AdminControlPage() {
       )}
 
       {/* 5. النوافذ المنبثقة (Modals) */}
+
+      {/* نافذة إضافة قسم / قاعدة بيانات جديدة لمركز Access */}
+      {showAddAccessSectionModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl border border-slate-200">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <h3 className="font-black text-base text-slate-900 flex items-center gap-2">
+                <Folder className="w-5 h-5 text-[#14372e]" />
+                <span>إضافة قسم / قاعدة بيانات جديدة في بيانات Access</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowAddAccessSectionModal(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleAddAccessSection} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  اسم القسم الجديد:
+                </label>
+                <input
+                  type="text"
+                  placeholder="مثال: الاسم التجاري 2027 أو قسم العقود والشركات 2026"
+                  value={newAccessSectionName}
+                  onChange={(e) => setNewAccessSectionName(e.target.value)}
+                  className="w-full px-4 py-2.5 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#14372e]"
+                  autoFocus
+                  required
+                />
+                <p className="text-[11px] text-slate-500 mt-1">
+                  💡 سيظهر هذا القسم فورياً في قائمة الأقسام المتاحة للموظفين وتطبيقات سطح المكتب.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  الجداول المضمنة في هذا القسم:
+                </label>
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2.5">
+                  <p className="text-[11px] text-slate-600 font-medium">
+                    حدد الجداول التي يحتوي عليها هذا القسم:
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {['التجار', 'الشركات', 'الدلالين', 'التعديل', 'الشطب', 'الصيدليات', 'الفنادق', 'المطاعم', 'المعامل', 'الساحات'].map((tbl) => {
+                      const isSelected = selectedAccessTables.includes(tbl);
+                      return (
+                        <button
+                          key={tbl}
+                          type="button"
+                          onClick={() => {
+                            if (isSelected) {
+                              if (selectedAccessTables.length > 1) {
+                                setSelectedAccessTables(selectedAccessTables.filter((t) => t !== tbl));
+                              }
+                            } else {
+                              setSelectedAccessTables([...selectedAccessTables, tbl]);
+                            }
+                          }}
+                          className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer border ${
+                            isSelected
+                              ? 'bg-[#14372e] text-white border-[#14372e]'
+                              : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                          }`}
+                        >
+                          {isSelected ? '✓ ' : '+ '}
+                          {tbl}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* إضافة جدول مخصص */}
+                  <div className="flex items-center gap-2 pt-2 border-t border-slate-200">
+                    <input
+                      type="text"
+                      placeholder="اسم جدول مخصص آخر..."
+                      value={customAccessTableInput}
+                      onChange={(e) => setCustomAccessTableInput(e.target.value)}
+                      className="flex-1 px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-[#14372e]"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const val = customAccessTableInput.trim();
+                          if (val && !selectedAccessTables.includes(val)) {
+                            setSelectedAccessTables([...selectedAccessTables, val]);
+                            setCustomAccessTableInput('');
+                          }
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const val = customAccessTableInput.trim();
+                        if (val && !selectedAccessTables.includes(val)) {
+                          setSelectedAccessTables([...selectedAccessTables, val]);
+                          setCustomAccessTableInput('');
+                        }
+                      }}
+                      className="px-3 py-1.5 text-xs font-bold bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-lg transition cursor-pointer"
+                    >
+                      إضافة جدول
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowAddAccessSectionModal(false)}
+                  className="px-4 py-2 text-sm font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition cursor-pointer"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  disabled={creatingAccessSection || !newAccessSectionName.trim()}
+                  className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold bg-[#14372e] text-white rounded-xl hover:bg-[#1a473b] transition shadow-sm disabled:opacity-50 cursor-pointer"
+                >
+                  {creatingAccessSection ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>جاري الإنشاء والمزامنة...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Plus className="w-4 h-4" />
+                      <span>إنشاء القسم الآن</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* نافذة إضافة جهاز جديد */}
       {showAddDeviceModal && (

@@ -13,6 +13,7 @@ import {
   normalizeDepartmentPermission,
   DepartmentPermissionConfig,
 } from '@/lib/googleDrive';
+import { setAccessHubRole, deleteAccessHubRole } from '@/lib/accessCloudStore';
 
 export const dynamic = 'force-dynamic';
 
@@ -266,6 +267,13 @@ export async function POST(req: NextRequest) {
         user: userInfo,
       });
 
+      // مزامنة الدور الافتراضي في طفرات مركز Access أيضاً
+      try {
+        await setAccessHubRole(guid, devName, 'data_entry');
+      } catch (e) {
+        console.error('Failed to sync default role in accessCloudStore:', e);
+      }
+
       return NextResponse.json({
         success: true,
         authorized: true,
@@ -284,7 +292,12 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ success: true, authorized: true, enabled: false });
       }
       const isAuthed = Boolean(guid && Array.isArray(hubSec.authorizedDevices) && hubSec.authorizedDevices.includes(guid));
-      return NextResponse.json({ success: true, authorized: isAuthed, enabled: true });
+      return NextResponse.json({
+        success: true,
+        authorized: isAuthed,
+        enabled: true,
+        role: hubSec.roles?.[guid] || 'data_entry',
+      });
     }
 
     // حذف جهاز وسحب اعتماده فورياً (حصرياً من لوحة تحكم الأدمن)
@@ -294,6 +307,14 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ success: false, error: 'معرّف الجهاز المطلوب حذفه غير متوفر' }, { status: 400 });
       }
       const res = await revokeOrDeleteDevice(identifier);
+
+      // شطب الدور تماماً من سجل الطفرات السحابية لمنع ظهوره أو استمراره
+      try {
+        await deleteAccessHubRole(identifier);
+      } catch (e) {
+        console.error('Failed to purge role in accessCloudStore:', e);
+      }
+
       return NextResponse.json({
         success: true,
         message: 'تم حذف الجهاز وسحب اعتماده نهائياً من كافة الأقسام ومركز Access',

@@ -31,6 +31,16 @@ export interface AccessRole {
   lastSeen?: string;
 }
 
+export interface AccessCustomSection {
+  name: string;
+  tables: string[];
+  table_counts?: Record<string, number>;
+  total_rows?: number;
+  size_kb?: number;
+  created_at?: string;
+  created_by?: string;
+}
+
 export interface AccessMutations {
   adds: AccessRecord[];
   updates: Record<string, Record<string, any>>;
@@ -40,6 +50,7 @@ export interface AccessMutations {
   renamed_columns?: Record<string, Record<string, string>>;
   column_orders?: Record<string, string[]>;
   deleted_sections?: string[];
+  custom_sections?: AccessCustomSection[];
   trash_bin?: TrashItem[];
   roles?: Record<string, AccessRole>;
   last_sync: string;
@@ -54,6 +65,7 @@ const DEFAULT_MUTATIONS: AccessMutations = {
   renamed_columns: {},
   column_orders: {},
   deleted_sections: [],
+  custom_sections: [],
   trash_bin: [],
   roles: {},
   last_sync: new Date().toISOString(),
@@ -680,4 +692,74 @@ export async function setAccessHubRole(
   mutations.last_sync = new Date().toISOString();
   await saveAccessHubMutations(mutations);
   return record;
+}
+
+/**
+ * حذف وسحب صلاحية جهاز بالكامل من سجل الطفرات السحابية
+ */
+export async function deleteAccessHubRole(guid: string): Promise<boolean> {
+  const cleanGuid = String(guid || '').trim();
+  if (!cleanGuid) return false;
+  const { mutations } = await getAccessHubMutations(true);
+  if (mutations.roles && mutations.roles[cleanGuid]) {
+    delete mutations.roles[cleanGuid];
+    mutations.last_sync = new Date().toISOString();
+    await saveAccessHubMutations(mutations);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * إضافة قسم / قاعدة بيانات جديدة في مركز بيانات Access سحابياً
+ */
+export async function addAccessSection(section: {
+  name: string;
+  tables: string[];
+  created_by?: string;
+}): Promise<AccessCustomSection[]> {
+  const cleanName = String(section.name || '').trim();
+  if (!cleanName) throw new Error('اسم القسم الجديد مطلوب');
+
+  const { mutations } = await getAccessHubMutations(true);
+  if (!mutations.custom_sections) mutations.custom_sections = [];
+
+  // إذا كان القسم موجوداً مسبقاً في سلة المحذوفات أو الأرشيف، نخرجه منها
+  if (mutations.deleted_sections) {
+    mutations.deleted_sections = mutations.deleted_sections.filter((s) => s !== cleanName);
+  }
+
+  const cleanTables = Array.isArray(section.tables) && section.tables.length > 0
+    ? section.tables.map((t) => String(t).trim()).filter(Boolean)
+    : ['التجار', 'الشركات', 'الدلالين', 'التعديل', 'الشطب'];
+
+  const tableCounts: Record<string, number> = {};
+  cleanTables.forEach((t) => {
+    tableCounts[t] = 0;
+  });
+
+  const existingIdx = mutations.custom_sections.findIndex((s) => s.name === cleanName);
+  const newSec: AccessCustomSection = {
+    name: cleanName,
+    tables: cleanTables,
+    table_counts: tableCounts,
+    total_rows: 0,
+    size_kb: 0.1,
+    created_at: new Date().toISOString(),
+    created_by: section.created_by || 'الإدارة',
+  };
+
+  if (existingIdx >= 0) {
+    mutations.custom_sections[existingIdx] = {
+      ...mutations.custom_sections[existingIdx],
+      tables: cleanTables,
+      table_counts: { ...tableCounts, ...(mutations.custom_sections[existingIdx].table_counts || {}) },
+    };
+  } else {
+    mutations.custom_sections.push(newSec);
+  }
+
+  mutations.last_sync = new Date().toISOString();
+  await saveAccessHubMutations(mutations);
+  return mutations.custom_sections;
 }
