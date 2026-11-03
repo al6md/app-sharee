@@ -841,9 +841,19 @@ export default function FilesPage() {
           modifiedTime: f.modifiedTime,
         }));
         setFiles(mapped);
+      } else {
+        const errMsg = String(data.error || 'تعذر الاتصال بالسحابة');
+        setMicroSyncInfo({
+          status: 'error',
+          message: errMsg.includes('invalid_grant') ? 'انتهت صلاحية رمز السحابة (Refresh Token)' : errMsg
+        });
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error fetching files:', err);
+      setMicroSyncInfo({
+        status: 'error',
+        message: 'فشل جلب ملفات السحابة'
+      });
     } finally {
       if (!silent) {
         setLoading(false);
@@ -3605,17 +3615,30 @@ export default function FilesPage() {
       {/* 5. عرض الملفات (الاسم الكامل دائماً + الأيقونات الواضحة + وضع القائمة أو الشبكة) */}
       {displayedList.length === 0 ? (
         visibleSubfolders.length === 0 ? (
-          <div className="bg-white rounded-xl border border-[#E4E7EC] p-12 text-center flex flex-col items-center justify-center space-y-3">
-            <div className="w-14 h-14 bg-[#F7F8FA] rounded-full text-[#667085] flex items-center justify-center border border-[#E4E7EC]">
-              <Inbox className="w-7 h-7" />
+          microSyncInfo.status === 'error' ? (
+            <div className="bg-red-50/70 rounded-xl border border-red-200 p-10 text-center flex flex-col items-center justify-center space-y-3">
+              <div className="w-14 h-14 bg-red-100 rounded-full text-red-600 flex items-center justify-center border border-red-200">
+                <AlertCircle className="w-7 h-7" />
+              </div>
+              <h4 className="text-[15px] font-bold text-red-900">تعذر الاتصال بسحابة Google Drive</h4>
+              <p className="text-[13px] text-red-700 max-w-md leading-relaxed">
+                انتهت صلاحية رمز الربط السحابي (Google OAuth Token Expired).<br />
+                <span className="font-semibold text-red-950">ملفاتكم آمنة وموجودة بالكامل في السحابة</span>، ولكن النظام يحتاج لتجديد رمز الربط من قِبل مسؤول النظام لتظهر الملفات مجدداً.
+              </p>
             </div>
-            <h4 className="text-[15px] font-semibold text-[#1B1F24]">لا توجد ملفات في هذا العرض</h4>
-            <p className="text-[13px] text-[#667085] max-w-sm leading-relaxed">
-              {activeTab === 'TRASH'
-                ? 'سلة المحذوفات فارغة حالياً.'
-                : 'يمكنك رفع ملفات جديدة أو إنشاء مجلد فرعي باستخدام الأزرار في الأعلى.'}
-            </p>
-          </div>
+          ) : (
+            <div className="bg-white rounded-xl border border-[#E4E7EC] p-12 text-center flex flex-col items-center justify-center space-y-3">
+              <div className="w-14 h-14 bg-[#F7F8FA] rounded-full text-[#667085] flex items-center justify-center border border-[#E4E7EC]">
+                <Inbox className="w-7 h-7" />
+              </div>
+              <h4 className="text-[15px] font-semibold text-[#1B1F24]">لا توجد ملفات في هذا العرض</h4>
+              <p className="text-[13px] text-[#667085] max-w-sm leading-relaxed">
+                {activeTab === 'TRASH'
+                  ? 'سلة المحذوفات فارغة حالياً.'
+                  : 'يمكنك رفع ملفات جديدة أو إنشاء مجلد فرعي باستخدام الأزرار في الأعلى.'}
+              </p>
+            </div>
+          )
         ) : null
       ) : viewMode === 'GRID' ? (
         /* =========================================================
