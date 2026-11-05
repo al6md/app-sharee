@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDriveFileStreamResponse, drive } from '@/lib/googleDrive';
+import { getDriveFileStreamResponse, getCachedDriveFileMeta } from '@/lib/googleDrive';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -61,11 +61,7 @@ export async function HEAD(req: NextRequest) {
       return new NextResponse(null, { status: 400 });
     }
 
-    const metaRes = await drive.files.get({
-      fileId,
-      fields: 'id, name, mimeType, size',
-    });
-    const meta = metaRes.data;
+    const meta = await getCachedDriveFileMeta(fileId);
 
     const fileName = meta.name || 'file';
     const ext = fileName.includes('.') ? fileName.split('.').pop()?.toLowerCase() || '' : '';

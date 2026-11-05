@@ -28,6 +28,36 @@ oauth2Client.setCredentials({ refresh_token: REFRESH_TOKEN });
 
 export const drive = google.drive({ version: 'v3', auth: oauth2Client });
 
+// كاش قصير لبيانات الملف (الاسم/النوع/الحجم): Office يرسل عدة طلبات (HEAD/GET/Range) لكل فتح،
+// وكل طلب كان يستدعي files.get من جديد مما يبطئ فتح الملف.
+const FILE_META_TTL_MS = 30_000;
+const fileMetaCache = new Map<string, { at: number; data: any; pending?: Promise<any> }>();
+
+export async function getCachedDriveFileMeta(fileId: string) {
+  const now = Date.now();
+  const hit = fileMetaCache.get(fileId);
+  if (hit && !hit.pending && now - hit.at < FILE_META_TTL_MS) return hit.data;
+  if (hit?.pending) return hit.pending;
+
+  const pending = drive.files
+    .get({ fileId, fields: 'id, name, mimeType, size' })
+    .then((res) => {
+      fileMetaCache.set(fileId, { at: Date.now(), data: res.data });
+      return res.data;
+    })
+    .catch((err) => {
+      fileMetaCache.delete(fileId);
+      throw err;
+    });
+  fileMetaCache.set(fileId, { at: now, data: hit?.data, pending });
+  return pending;
+}
+
+export function invalidateDriveFileMeta(fileId?: string) {
+  if (fileId) fileMetaCache.delete(fileId);
+  else fileMetaCache.clear();
+}
+
 export interface CloudFolderItem {
   id: string;
   name: string;
@@ -1446,6 +1476,7 @@ export async function updateDriveFileContent(
   stream.push(null);
 
   invalidateCloudFilesCache();
+  invalidateDriveFileMeta(fileId);
   const res = await drive.files.update({
     fileId,
     media: {
@@ -1807,11 +1838,7 @@ export async function batchPermanentDeleteDriveItems(fileIds: string[]) {
  * جلب استجابة بث مباشر (Stream) لملف من Google Drive لدعم عارض الصور والوسائط وملفات PDF والتنزيل المباشر
  */
 export async function getDriveFileStreamResponse(fileId: string, rangeHeader?: string | null) {
-  const metaRes = await drive.files.get({
-    fileId,
-    fields: 'id, name, mimeType, size',
-  });
-  const meta = metaRes.data;
+  const meta = await getCachedDriveFileMeta(fileId);
 
   const tokenRes = await oauth2Client.getAccessToken();
   const accessToken = typeof tokenRes === 'string' ? tokenRes : tokenRes?.token;

@@ -2266,7 +2266,10 @@ export default function FilesPage() {
     }
 
     // 1. محاولة فتح الملف عبر تطبيق سطح المكتب المرافق وجسره المحلي لضمان المزامنة الفورية عند الحفظ Ctrl+S
-    try {
+    // إذا فشل الجسر المحلي مؤخراً نتخطاه فوراً (بدل انتظار المهلة في كل فتح) ونفتح الملف مباشرة
+    const bridgeDownUntil: number = (window as any).__shareCocBridgeDownUntil || 0;
+    const bridgeSkipped = Date.now() < bridgeDownUntil;
+    if (!bridgeSkipped) try {
       const bridgeUrl = `http://127.0.0.1:18290/open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}&storage_path=${encodeURIComponent(file.storagePath || file.id || '')}`;
       const bridgeRes = await fetch(bridgeUrl, {
         method: 'GET',
@@ -2286,6 +2289,7 @@ export default function FilesPage() {
         }
       }
     } catch {
+      (window as any).__shareCocBridgeDownUntil = Date.now() + 60_000;
       // إذا كان المتصفح يمنع طلبات HTTP من HTTPS، نمرر عبر بروتوكول sharecoc:// المسجل بنظام ويندوز
       try {
         const shareCocUri = `sharecoc://open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}&storage_path=${encodeURIComponent(file.storagePath || file.id || '')}`;
