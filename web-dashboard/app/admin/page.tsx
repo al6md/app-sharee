@@ -586,11 +586,8 @@ export default function AdminControlPage() {
           const firstFile = activeFiles[0];
           setSelectedAccessFile(firstFile.name);
           setAccessTablesList(firstFile.tables || []);
-          if (firstFile.tables && firstFile.tables.length > 0) {
-            const firstTable = firstFile.tables[0];
-            setSelectedAccessTable(firstTable);
-            fetchColumnsForTable(firstFile.name, firstTable);
-          }
+          setSelectedAccessTable('all');
+          fetchColumnsForTable(firstFile.name, 'all');
         }
       }
     } catch (err) {
@@ -2399,9 +2396,10 @@ export default function AdminControlPage() {
                         setSelectedAccessFile(fname);
                         const match = accessFiles.find((f: any) => f.name === fname);
                         if (match && match.tables && match.tables.length > 0) {
-                          setSelectedAccessTable(match.tables[0]);
                           setAccessTablesList(match.tables);
-                          fetchColumnsForTable(fname, match.tables[0]);
+                          const nextTable = selectedAccessTable === 'all' ? 'all' : match.tables[0];
+                          setSelectedAccessTable(nextTable);
+                          fetchColumnsForTable(fname, nextTable);
                         }
                       }}
                       className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 outline-none focus:border-[#14372e]"
@@ -2423,6 +2421,7 @@ export default function AdminControlPage() {
                       }}
                       className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 outline-none focus:border-[#14372e]"
                     >
+                      <option value="all">🌟 جميع الأصناف (تعميم الحقل على كافة الجداول)</option>
                       {accessTablesList.map((t: string, i: number) => (
                         <option key={i} value={t}>{t}</option>
                       ))}
@@ -2433,10 +2432,18 @@ export default function AdminControlPage() {
                 {/* نموذج إضافة حقل جديد */}
                 <div className="p-4 bg-emerald-50/60 border border-emerald-100 rounded-xl flex flex-col sm:flex-row items-center gap-3">
                   <div className="flex-1 w-full">
-                    <label className="block text-xs font-bold text-[#14372e] mb-1">➕ إضافة حقل جديد لهذا الجدول:</label>
+                    <label className="block text-xs font-bold text-[#14372e] mb-1">
+                      {selectedAccessTable === 'all'
+                        ? '🌟 إضافة حقل جديد وتعميمه على جميع الأصناف:'
+                        : `➕ إضافة حقل جديد لجدول (${selectedAccessTable}):`}
+                    </label>
                     <input
                       type="text"
-                      placeholder="اكتب اسم الحقل الجديد (مثال: البريد الإلكتروني، رقم الهوية، ملاحظات)..."
+                      placeholder={
+                        selectedAccessTable === 'all'
+                          ? 'اكتب اسم الحقل المراد تعميمه على كافة الأصناف (مثال: رقم الهاتف، اسم الزوجة، ملاحظات)...'
+                          : 'اكتب اسم الحقل الجديد (مثال: البريد الإلكتروني، رقم الهوية، ملاحظات)...'
+                      }
                       value={newColNameInput}
                       onChange={(e) => setNewColNameInput(e.target.value)}
                       onKeyDown={(e) => e.key === 'Enter' && handleAddAccessColumn()}
@@ -2448,7 +2455,9 @@ export default function AdminControlPage() {
                     disabled={actionLoading || !newColNameInput.trim()}
                     className="w-full sm:w-auto px-5 py-2.5 bg-[#14372e] hover:bg-[#1a473b] disabled:opacity-50 text-white text-xs font-bold rounded-lg transition shrink-0 cursor-pointer"
                   >
-                    ➕ إضافة الحقل وتعميمه
+                    {selectedAccessTable === 'all'
+                      ? '🌟 إضافة الحقل وتعميمه على كافة الأصناف'
+                      : '➕ إضافة الحقل وتعميمه'}
                   </button>
                 </div>
               </div>
@@ -2456,7 +2465,11 @@ export default function AdminControlPage() {
               {/* قائمة الحقول المعروضة للجدول */}
               <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
                 <h5 className="font-bold text-sm text-slate-900 mb-3 flex items-center justify-between">
-                  <span>الحقول النشطة في جدول ({selectedAccessTable}):</span>
+                  <span>
+                    {selectedAccessTable === 'all'
+                      ? 'الحقول النشطة في (جميع الأصناف - عام لكافة الجداول):'
+                      : `الحقول النشطة في جدول (${selectedAccessTable}):`}
+                  </span>
                   <span className="text-xs text-slate-500 font-mono">إجمالي: {accessColumnsList.length} حقل</span>
                 </h5>
 

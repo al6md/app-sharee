@@ -42,6 +42,137 @@ export interface AccessCustomSection {
   created_by?: string;
 }
 
+export interface DynamicFileStats {
+  name: string;
+  tables: string[];
+  table_counts: Record<string, number>;
+  total_rows: number;
+  size_kb: number;
+  is_custom?: boolean;
+}
+
+/**
+ * حساب الإحصائيات والأعداد بدقة حية لحظية لكافة الأقسام والجداول والفئات
+ * تتغير فوراً وبشكل تلقائي عند إضافة قيد جديد أو حذفه
+ */
+export function computeDynamicStats(
+  baseFiles: any[],
+  customSections: AccessCustomSection[],
+  mutations: AccessMutations
+): { files: DynamicFileStats[]; total_records: number } {
+  const deletedSet = new Set(mutations.deletes || []);
+  const addsIdSet = new Set((mutations.adds || []).map((a) => a._adh_id));
+
+  // خريطة إحصائيات الأقسام
+  const fileMap = new Map<string, DynamicFileStats>();
+
+  // 1. تهيئة الأقسام الأساسية من الفهرس
+  for (const f of baseFiles || []) {
+    fileMap.set(f.name, {
+      name: f.name,
+      tables: Array.isArray(f.tables) ? [...f.tables] : [],
+      table_counts: { ...(f.table_counts || {}) },
+      total_rows: Number(f.total_rows) || 0,
+      size_kb: Number(f.size_kb) || 0.1,
+      is_custom: false,
+    });
+  }
+
+  // 2. دمج الأقسام المخصصة المنشأة إدارياً
+  for (const cs of customSections || []) {
+    if (!fileMap.has(cs.name)) {
+      fileMap.set(cs.name, {
+        name: cs.name,
+        tables: Array.isArray(cs.tables) ? [...cs.tables] : [],
+        table_counts: { ...(cs.table_counts || {}) },
+        total_rows: Number(cs.total_rows) || 0,
+        size_kb: Number(cs.size_kb) || 0.1,
+        is_custom: true,
+      });
+    }
+  }
+
+  // 3. تطبيق الإضافات: زيادة عداد القسم والجدول
+  for (const add of mutations.adds || []) {
+    if (!add || !add._adh_file || !add._adh_table) continue;
+    if (deletedSet.has(add._adh_id)) continue;
+
+    let fObj = fileMap.get(add._adh_file);
+    if (!fObj) {
+      fObj = {
+        name: add._adh_file,
+        tables: [],
+        table_counts: {},
+        total_rows: 0,
+        size_kb: 0.1,
+        is_custom: true,
+      };
+      fileMap.set(add._adh_file, fObj);
+    }
+
+    if (!fObj.tables.includes(add._adh_table)) {
+      fObj.tables.push(add._adh_table);
+    }
+
+    fObj.table_counts[add._adh_table] = (fObj.table_counts[add._adh_table] || 0) + 1;
+    fObj.total_rows = (fObj.total_rows || 0) + 1;
+  }
+
+  // 4. خريطة سريعة لسلة المهملات لمعرفة ملف وجدول القيود المحذوفة بدقة
+  const trashLookup = new Map<string, { file: string; table: string }>();
+  for (const t of mutations.trash_bin || []) {
+    if (t && t.id) {
+      trashLookup.set(t.id, { file: t.file, table: t.table });
+    }
+  }
+
+  // 5. تطبيق المحذوفات: إنقاص عداد القسم والجدول للقيود الأساسية الأصلية
+  // (القيود المضافة المحذوفة تم استثناؤها تلقائياً في الخطوة 3)
+  const delList = Array.from(deletedSet);
+  const allFileObjects = Array.from(fileMap.values());
+
+  for (const delId of delList) {
+    if (addsIdSet.has(delId)) continue;
+
+    let fName: string | null = null;
+    let tName: string | null = null;
+
+    if (trashLookup.has(delId)) {
+      const t = trashLookup.get(delId)!;
+      fName = t.file;
+      tName = t.table;
+    } else {
+      for (const f of allFileObjects) {
+        const prefix = f.name + '_';
+        if (delId.startsWith(prefix)) {
+          const rest = delId.slice(prefix.length);
+          for (const tbl of f.tables) {
+            if (rest.startsWith(tbl + '_') || rest === tbl) {
+              fName = f.name;
+              tName = tbl;
+              break;
+            }
+          }
+          if (fName) break;
+        }
+      }
+    }
+
+    if (fName && fileMap.has(fName)) {
+      const fObj = fileMap.get(fName)!;
+      if (tName && fObj.table_counts[tName] !== undefined) {
+        fObj.table_counts[tName] = Math.max(0, fObj.table_counts[tName] - 1);
+      }
+      fObj.total_rows = Math.max(0, fObj.total_rows - 1);
+    }
+  }
+
+  const allFiles = Array.from(fileMap.values());
+  const grandTotal = allFiles.reduce((acc, f) => acc + (f.total_rows || 0), 0);
+
+  return { files: allFiles, total_records: grandTotal };
+}
+
 export interface AccessMutations {
   adds: AccessRecord[];
   updates: Record<string, Record<string, any>>;
@@ -312,9 +443,14 @@ export async function deleteAccessRecord(id: string): Promise<boolean> {
 }
 
 /**
- * إضافة حقل جديد سحابياً لجدول معين وتعميمه على جميع الموظفين
+ * إضافة حقل جديد سحابياً لجدول معين أو تعميمه على جميع الأصناف
  */
-export async function addColumnToTable(file: string, table: string, columnName: string): Promise<string[]> {
+export async function addColumnToTable(
+  file: string,
+  table: string,
+  columnName: string,
+  allTablesInFile?: string[]
+): Promise<string[]> {
   const cleanCol = columnName.trim();
   if (!cleanCol) throw new Error('اسم الحقل مطلوب');
 
@@ -322,26 +458,45 @@ export async function addColumnToTable(file: string, table: string, columnName: 
   if (!mutations.added_columns) mutations.added_columns = {};
   if (!mutations.deleted_columns) mutations.deleted_columns = {};
 
-  const key = `${file}_${table}`;
-  const currentAdded = mutations.added_columns[key] || [];
-  if (!currentAdded.includes(cleanCol)) {
-    mutations.added_columns[key] = [...currentAdded, cleanCol];
+  const isAllTables = table === 'all' || table === 'all_categories' || table === 'جميع الأصناف';
+  const targetKeys: string[] = [];
+
+  if (isAllTables) {
+    targetKeys.push(`${file}_all`);
+    targetKeys.push(`all_all`);
+    const tables = allTablesInFile && allTablesInFile.length > 0 ? allTablesInFile : [];
+    tables.forEach((t) => {
+      targetKeys.push(`${file}_${t}`);
+    });
+  } else {
+    targetKeys.push(`${file}_${table}`);
   }
 
-  // إذا كان الحقل في المحذوفات نزيله منها
-  const currentDeleted = mutations.deleted_columns[key] || [];
-  if (currentDeleted.includes(cleanCol)) {
-    mutations.deleted_columns[key] = currentDeleted.filter((c) => c !== cleanCol);
+  for (const key of targetKeys) {
+    const currentAdded = mutations.added_columns[key] || [];
+    if (!currentAdded.includes(cleanCol)) {
+      mutations.added_columns[key] = [...currentAdded, cleanCol];
+    }
+    // إذا كان الحقل في المحذوفات نزيله منها
+    const currentDeleted = mutations.deleted_columns[key] || [];
+    if (currentDeleted.includes(cleanCol)) {
+      mutations.deleted_columns[key] = currentDeleted.filter((c) => c !== cleanCol);
+    }
   }
 
   await saveAccessHubMutations(mutations);
-  return mutations.added_columns[key];
+  return mutations.added_columns[targetKeys[0]] || [cleanCol];
 }
 
 /**
- * حذف حقل سحابياً من جدول معين وتعميم الحذف على جميع الموظفين
+ * حذف حقل سحابياً من جدول معين أو من جميع الأصناف
  */
-export async function deleteColumnFromTable(file: string, table: string, columnName: string): Promise<string[]> {
+export async function deleteColumnFromTable(
+  file: string,
+  table: string,
+  columnName: string,
+  allTablesInFile?: string[]
+): Promise<string[]> {
   const cleanCol = columnName.trim();
   if (!cleanCol) throw new Error('اسم الحقل مطلوب');
 
@@ -349,27 +504,41 @@ export async function deleteColumnFromTable(file: string, table: string, columnN
   if (!mutations.added_columns) mutations.added_columns = {};
   if (!mutations.deleted_columns) mutations.deleted_columns = {};
 
-  const key = `${file}_${table}`;
+  const isAllTables = table === 'all' || table === 'all_categories' || table === 'جميع الأصناف';
+  const targetKeys: string[] = [];
 
-  // إزالته من الحقول المضافة إن وجد
-  const currentAdded = mutations.added_columns[key] || [];
-  if (currentAdded.includes(cleanCol)) {
-    mutations.added_columns[key] = currentAdded.filter((c) => c !== cleanCol);
+  if (isAllTables) {
+    targetKeys.push(`${file}_all`);
+    targetKeys.push(`all_all`);
+    const tables = allTablesInFile && allTablesInFile.length > 0 ? allTablesInFile : [];
+    tables.forEach((t) => {
+      targetKeys.push(`${file}_${t}`);
+    });
+  } else {
+    targetKeys.push(`${file}_${table}`);
   }
 
-  // إضافته إلى قائمة الحقول المحذوفة
-  const currentDeleted = mutations.deleted_columns[key] || [];
-  if (!currentDeleted.includes(cleanCol)) {
-    mutations.deleted_columns[key] = [...currentDeleted, cleanCol];
-  }
+  for (const key of targetKeys) {
+    // إزالته من الحقول المضافة إن وجد
+    const currentAdded = mutations.added_columns[key] || [];
+    if (currentAdded.includes(cleanCol)) {
+      mutations.added_columns[key] = currentAdded.filter((c) => c !== cleanCol);
+    }
 
-  // إزالته أيضاً من ترتيب الأعمدة إن وجد
-  if (mutations.column_orders?.[key]) {
-    mutations.column_orders[key] = mutations.column_orders[key].filter((c) => c !== cleanCol);
+    // إضافته إلى قائمة الحقول المحذوفة
+    const currentDeleted = mutations.deleted_columns[key] || [];
+    if (!currentDeleted.includes(cleanCol)) {
+      mutations.deleted_columns[key] = [...currentDeleted, cleanCol];
+    }
+
+    // إزالته أيضاً من ترتيب الأعمدة إن وجد
+    if (mutations.column_orders?.[key]) {
+      mutations.column_orders[key] = mutations.column_orders[key].filter((c) => c !== cleanCol);
+    }
   }
 
   await saveAccessHubMutations(mutations);
-  return mutations.deleted_columns[key];
+  return mutations.deleted_columns[targetKeys[0]] || [cleanCol];
 }
 
 /**
@@ -470,26 +639,31 @@ export async function moveColumnInTable(
 
 /**
  * استخراج قائمة الأعمدة النهائية بدمج الأعمدة المضافة وتصفية المحذوفة وتطبيق الأسماء المعدلة والترتيب المخصص
+ * تدعم دمج وتوريث الحقول المضافة لـ "جميع الأصناف" (all) وتعميمها على كافة الجداول
  */
 export function getCustomColumns(file: string, table: string, baseColumns: string[], mutations: AccessMutations): string[] {
-  if (table === 'all' || !table) {
-    return baseColumns;
-  }
-
   const key = `${file}_${table}`;
   const allKey = `all_${table}`;
+  const fileAllKey = `${file}_all`;
+  const allAllKey = `all_all`;
 
   const deletedSet = new Set<string>([
     ...(mutations.deleted_columns?.[key] || []),
-    ...(mutations.deleted_columns?.[allKey] || [])
+    ...(mutations.deleted_columns?.[allKey] || []),
+    ...(mutations.deleted_columns?.[fileAllKey] || []),
+    ...(mutations.deleted_columns?.[allAllKey] || [])
   ]);
 
   const addedList = [
+    ...(mutations.added_columns?.[allAllKey] || []),
+    ...(mutations.added_columns?.[fileAllKey] || []),
     ...(mutations.added_columns?.[allKey] || []),
     ...(mutations.added_columns?.[key] || [])
   ];
 
   const renamedMap: Record<string, string> = {
+    ...(mutations.renamed_columns?.[allAllKey] || {}),
+    ...(mutations.renamed_columns?.[fileAllKey] || {}),
     ...(mutations.renamed_columns?.[allKey] || {}),
     ...(mutations.renamed_columns?.[key] || {})
   };
@@ -508,7 +682,12 @@ export function getCustomColumns(file: string, table: string, baseColumns: strin
   }
 
   // 3. تطبيق الترتيب المخصص إن وجد (نقل للبداية أو النهاية أو ترتيب إداري)
-  const customOrder = mutations.column_orders?.[key] || mutations.column_orders?.[allKey];
+  const customOrder =
+    mutations.column_orders?.[key] ||
+    mutations.column_orders?.[allKey] ||
+    mutations.column_orders?.[fileAllKey] ||
+    mutations.column_orders?.[allAllKey];
+
   if (customOrder && Array.isArray(customOrder) && customOrder.length > 0) {
     const orderMap = new Map<string, number>();
     customOrder.forEach((name, idx) => orderMap.set(name, idx));

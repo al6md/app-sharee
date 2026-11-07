@@ -19,7 +19,8 @@ import {
   deleteAccessHubRole,
   deleteRecordToTrash,
   restoreRecordFromTrash,
-  setAccessHubRole
+  setAccessHubRole,
+  computeDynamicStats
 } from '@/lib/accessCloudStore';
 import { 
   getCloudAdminStore, 
@@ -378,23 +379,13 @@ export async function GET(req: NextRequest) {
     let availableTables: string[] = [];
     let activeTable = requestedTable;
 
-    // دمج الأقسام وقواعد البيانات المخصصة مع فهرس البيانات
+    // دمج الأقسام وقواعد البيانات المخصصة وحساب الإحصائيات والأعداد الحية بدقة تامة
     const customSections = mutations.custom_sections || [];
-    const mergedFilesMap = new Map<string, any>();
-    (index.files || []).forEach((f: any) => {
-      mergedFilesMap.set(f.name, f);
-    });
-    customSections.forEach((cs) => {
-      mergedFilesMap.set(cs.name, {
-        name: cs.name,
-        tables: cs.tables || [],
-        table_counts: cs.table_counts || {},
-        total_rows: cs.total_rows || 0,
-        size_kb: cs.size_kb || 0.1,
-        is_custom: true,
-      });
-    });
-    const allFiles = Array.from(mergedFilesMap.values());
+    const { files: allFiles, total_records: computedGrandTotal } = computeDynamicStats(
+      index.files || [],
+      customSections,
+      mutations
+    );
 
     const isAllTables = requestedTable === 'all' || requestedTable === 'all_categories' || (!requestedTable && requestedFile === 'all');
 
@@ -660,7 +651,7 @@ export async function GET(req: NextRequest) {
       activeFiles = activeFiles.filter((f: any) => callerContext.allowedSections.includes(f.name));
     }
 
-    const grandTotalRecords = (index.total_records || 0) + (mutations.adds?.length || 0) - (mutations.deletes?.length || 0);
+    const grandTotalRecords = activeFiles.reduce((sum, f) => sum + (f.total_rows || 0), 0);
 
     return NextResponse.json({
       success: true,
@@ -886,16 +877,32 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true, message: 'تم حذف صلاحية الجهاز سحابياً بنجاح' });
     }
 
-    // 4. إضافة حقل جديد للجدول
+    // 4. إضافة حقل جديد للجدول أو تعميمه على كافة الأصناف
     if (body.action === 'ADD_COLUMN') {
       const { file, table, columnName } = body;
       if (!file || !table || !columnName) {
         return NextResponse.json({ success: false, error: 'بيانات الحقل غير مكتملة' }, { status: 400 });
       }
-      const added = await addColumnToTable(file, table, columnName);
+
+      // استخراج كافة جداول هذا الملف لتعميم الحقل عليها عند اختيار جميع الأصناف
+      const index = getIndex();
+      let tablesInFile: string[] = [];
+      if (file === 'all') {
+        const set = new Set<string>();
+        (index.files || []).forEach((f: any) => (f.tables || []).forEach((t: string) => set.add(t)));
+        tablesInFile = Array.from(set);
+      } else {
+        const fileObj = (index.files || []).find((f: any) => f.name === file);
+        tablesInFile = fileObj ? fileObj.tables || [] : [];
+      }
+
+      const isAll = table === 'all' || table === 'all_categories' || table === 'جميع الأصناف';
+      const added = await addColumnToTable(file, table, columnName, tablesInFile);
       return NextResponse.json({
         success: true,
-        message: `تمت إضافة الحقل "${columnName}" سحابياً بنجاح وتعميمه على الجميع`,
+        message: isAll
+          ? `تمت إضافة الحقل "${columnName}" وتعميمه على كافة أصناف (${file === 'all' ? 'كافة الأقسام' : file}) سحابياً بنجاح`
+          : `تمت إضافة الحقل "${columnName}" سحابياً بنجاح وتعميمه`,
         added_columns: added,
       });
     }
@@ -906,7 +913,19 @@ export async function POST(req: NextRequest) {
       if (!file || !table || !columnName) {
         return NextResponse.json({ success: false, error: 'بيانات الحقل غير مكتملة' }, { status: 400 });
       }
-      const deleted = await deleteColumnFromTable(file, table, columnName);
+
+      const index = getIndex();
+      let tablesInFile: string[] = [];
+      if (file === 'all') {
+        const set = new Set<string>();
+        (index.files || []).forEach((f: any) => (f.tables || []).forEach((t: string) => set.add(t)));
+        tablesInFile = Array.from(set);
+      } else {
+        const fileObj = (index.files || []).find((f: any) => f.name === file);
+        tablesInFile = fileObj ? fileObj.tables || [] : [];
+      }
+
+      const deleted = await deleteColumnFromTable(file, table, columnName, tablesInFile);
       return NextResponse.json({
         success: true,
         message: `تم حذف الحقل "${columnName}" سحابياً بنجاح`,

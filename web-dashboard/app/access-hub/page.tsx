@@ -1046,7 +1046,7 @@ export default function AccessHubPage() {
           <div className="flex items-center gap-2">
             <h1 className="font-bold text-sm text-[#1B1F24]">مركز قواعد بيانات Access الموحد</h1>
             <span className="text-[11px] font-mono font-bold bg-[#EDF5F2] text-[#14372e] px-2 py-0.5 rounded-full border border-[#14372e]/20">
-              {data?.total_records ? data.total_records.toLocaleString('ar-IQ') : '88,987'} قيد
+              {data?.total_records !== undefined ? data.total_records.toLocaleString('ar-IQ') : '...'} قيد
             </span>
             <span className="inline-flex items-center gap-1 text-[10px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full font-semibold border border-emerald-200">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
@@ -1107,7 +1107,7 @@ export default function AccessHubPage() {
           </div>
           <span className="font-bold text-xs text-[#1B1F24] truncate">بيانات Access</span>
           <span className="text-[10px] font-mono font-bold bg-[#EDF5F2] text-[#14372e] px-1.5 py-0.2 rounded-full border border-[#14372e]/20 shrink-0">
-            {data?.total_records ? data.total_records.toLocaleString('ar-IQ') : '88,987'}
+            {data?.total_records !== undefined ? data.total_records.toLocaleString('ar-IQ') : '...'}
           </span>
         </div>
 
@@ -1151,7 +1151,9 @@ export default function AccessHubPage() {
             }}
             className="bg-[#F7F8FA] border border-[#D0D5DD] rounded-lg px-2.5 py-1 text-xs font-bold text-[#14372e] outline-none hover:border-[#14372e] focus:border-[#14372e] transition cursor-pointer max-w-[260px] truncate"
           >
-            <option value="all">🌐 الدمج الشامل (كافة الملفات - 88,987 قيد)</option>
+            <option value="all">
+              🌐 الدمج الشامل (كافة الملفات{data?.total_records !== undefined ? ` - ${data.total_records.toLocaleString('ar-IQ')} قيد` : ''})
+            </option>
             {(data?.files || []).map((f) => (
               <option key={f.name} value={f.name}>
                 📁 {f.name} ({f.total_rows.toLocaleString('ar-IQ')} قيد)
@@ -1177,7 +1179,9 @@ export default function AccessHubPage() {
             }}
             className="w-full bg-[#F7F8FA] border border-[#D0D5DD] rounded-xl px-3 py-1.5 text-xs font-bold text-[#14372e] outline-none appearance-none pr-8 pl-3"
           >
-            <option value="all">🌐 الدمج الشامل (كافة الملفات - 88,987 قيد)</option>
+            <option value="all">
+              🌐 الدمج الشامل (كافة الملفات{data?.total_records !== undefined ? ` - ${data.total_records.toLocaleString('ar-IQ')} قيد` : ''})
+            </option>
             {(data?.files || []).map((f) => (
               <option key={f.name} value={f.name}>
                 📁 {f.name} ({f.total_rows.toLocaleString('ar-IQ')} قيد)
@@ -2048,7 +2052,9 @@ export default function AccessHubPage() {
               <div className="flex items-center gap-2">
                 <PlusCircle className="w-5 h-5 text-emerald-700" />
                 <h3 className="font-bold text-sm text-[#1B1F24]">
-                  إضافة حقل جديد لجدول ({activeTable || 'الجدول الحالي'})
+                  {activeTable === 'all'
+                    ? '🌟 إضافة حقل جديد وتعميمه على جميع الأصناف'
+                    : `إضافة حقل جديد لجدول (${activeTable || 'الجدول الحالي'})`}
                 </h3>
               </div>
               <button onClick={() => setIsAddColModalOpen(false)} className="text-[#667085] hover:text-[#1B1F24]">
@@ -2058,18 +2064,28 @@ export default function AccessHubPage() {
 
             <form onSubmit={handleAddColumn} className="p-5 space-y-4">
               <p className="text-xs text-[#667085]">
-                سيتم إنشاء الحقل الجديد سحابياً وإضافته لهذا الجدول، وسيظهر فوراً في نماذج الإضافة والتعديل لكافة الموظفين.
+                {activeTable === 'all'
+                  ? 'سيتم إنشاء الحقل الجديد سحابياً وتعميمه على كافة الأصناف والجداول في هذا القسم فوراً.'
+                  : 'سيتم إنشاء الحقل الجديد سحابياً وإضافته لهذا الجدول، وسيظهر فوراً في نماذج الإضافة والتعديل لكافة الموظفين.'}
               </p>
 
               <div className="space-y-1.5">
-                <label className="text-xs font-bold text-[#344054]">اسم الحقل / العمود الجديد:</label>
+                <label className="text-xs font-bold text-[#344054]">
+                  {activeTable === 'all'
+                    ? 'اسم الحقل المراد تعميمه على كافة الأصناف:'
+                    : 'اسم الحقل / العمود الجديد:'}
+                </label>
                 <input
                   type="text"
                   required
                   autoFocus
                   value={newColName}
                   onChange={(e) => setNewColName(e.target.value)}
-                  placeholder="مثال: رقم الهاتف، ملاحظات، تاريخ التجديد..."
+                  placeholder={
+                    activeTable === 'all'
+                      ? 'اكتب اسم الحقل لتعميمه على كل الأصناف (مثال: رقم الهاتف، ملاحظات، اسم الزوجة)...'
+                      : 'مثال: رقم الهاتف، ملاحظات، تاريخ التجديد...'
+                  }
                   className="w-full px-3.5 py-2.5 text-xs bg-[#F7F8FA] border border-[#E4E7EC] rounded-lg text-[#1B1F24] focus:outline-none focus:border-[#14372e]"
                 />
               </div>
@@ -2087,7 +2103,11 @@ export default function AccessHubPage() {
                   disabled={isSubmitting || !newColName.trim()}
                   className="px-5 py-2 text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition disabled:opacity-50"
                 >
-                  {isSubmitting ? 'جاري الإضافة...' : 'إضافة الحقل وتعميمه سحابياً'}
+                  {isSubmitting
+                    ? 'جاري الإضافة...'
+                    : activeTable === 'all'
+                    ? '🌟 إضافة الحقل وتعميمه على كافة الأصناف'
+                    : 'إضافة الحقل وتعميمه سحابياً'}
                 </button>
               </div>
             </form>

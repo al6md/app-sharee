@@ -333,13 +333,17 @@ class DataLoaderThread(QThread):
         added_for_tbl = []
         deleted_for_tbl = []
         for k, v in mutations.get("added_columns", {}).items():
-            if k.endswith(f":{req_table}") or (req_file != "all" and k == f"{req_file}:{req_table}"):
+            if k.endswith(f":{req_table}") or k.endswith(f"_{req_table}") or \
+               k == f"{req_file}:{req_table}" or k == f"{req_file}_{req_table}" or \
+               k.endswith(":all") or k.endswith("_all") or k == f"{req_file}_all" or k == "all_all":
                 for c in v:
                     if c not in added_for_tbl:
                         added_for_tbl.append(c)
 
         for k, v in mutations.get("deleted_columns", {}).items():
-            if k.endswith(f":{req_table}") or (req_file != "all" and k == f"{req_file}:{req_table}"):
+            if k.endswith(f":{req_table}") or k.endswith(f"_{req_table}") or \
+               k == f"{req_file}:{req_table}" or k == f"{req_file}_{req_table}" or \
+               k.endswith(":all") or k.endswith("_all") or k == f"{req_file}_all" or k == "all_all":
                 for c in v:
                     if c not in deleted_for_tbl:
                         deleted_for_tbl.append(c)
@@ -411,6 +415,46 @@ class DataLoaderThread(QThread):
         start_idx = (self.page - 1) * self.limit
         page_rows = filtered_rows[start_idx:start_idx + self.limit]
 
+        # حساب الإحصائيات الحية للأقسام والجداول محلياً
+        file_map = {}
+        for f in idx.get("files", []):
+            file_map[f["name"]] = {
+                "name": f["name"],
+                "tables": list(f.get("tables", [])),
+                "table_counts": dict(f.get("table_counts", {})),
+                "total_rows": int(f.get("total_rows", 0)),
+                "size_kb": f.get("size_kb", 0.1)
+            }
+        for a in mutations.get("adds", []):
+            af = a.get("_adh_file")
+            at = a.get("_adh_table")
+            if a.get("_adh_id") in deleted_ids or not af or not at:
+                continue
+            if af not in file_map:
+                file_map[af] = {"name": af, "tables": [], "table_counts": {}, "total_rows": 0, "size_kb": 0.1}
+            if at not in file_map[af]["tables"]:
+                file_map[af]["tables"].append(at)
+            file_map[af]["table_counts"][at] = file_map[af]["table_counts"].get(at, 0) + 1
+            file_map[af]["total_rows"] += 1
+
+        adds_ids = {a.get("_adh_id") for a in mutations.get("adds", [])}
+        for del_id in deleted_ids:
+            if del_id in adds_ids:
+                continue
+            for f_name, f_obj in file_map.items():
+                if del_id.startswith(f"{f_name}_"):
+                    rest = del_id[len(f_name) + 1:]
+                    for tbl in f_obj["tables"]:
+                        if rest.startswith(f"{tbl}_") or rest == tbl:
+                            if tbl in f_obj["table_counts"]:
+                                f_obj["table_counts"][tbl] = max(0, f_obj["table_counts"][tbl] - 1)
+                            f_obj["total_rows"] = max(0, f_obj["total_rows"] - 1)
+                            break
+                    break
+
+        dynamic_files = list(file_map.values())
+        grand_total = sum(f["total_rows"] for f in dynamic_files)
+
         my_guid = get_desktop_machine_guid()
         roles_map = mutations.get("roles", {})
         cur_role = roles_map.get(my_guid, {}).get("role", "data_entry") if isinstance(roles_map.get(my_guid), dict) else "data_entry"
@@ -418,8 +462,8 @@ class DataLoaderThread(QThread):
             "success": True,
             "current_role": cur_role,
             "roles": roles_map,
-            "files": idx.get("files", []),
-            "total_records": idx.get("total_records", 0) + len(mutations.get("adds", [])) - len(mutations.get("deletes", [])),
+            "files": dynamic_files,
+            "total_records": grand_total,
             "active_file": req_file,
             "active_table": req_table,
             "available_tables": available_tables,
