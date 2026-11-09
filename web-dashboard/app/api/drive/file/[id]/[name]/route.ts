@@ -22,11 +22,19 @@ function rewrite(req: NextRequest, id: string): NextRequest {
 }
 
 export async function GET(req: NextRequest, { params }: { params: { id: string; name: string } }) {
-  return streamGET(rewrite(req, params.id));
+  const res = await streamGET(rewrite(req, params.id));
+  res.headers.set('DAV', '1, 2');
+  res.headers.set('MS-Author-Via', 'DAV');
+  res.headers.set('Allow', 'GET, HEAD, POST, OPTIONS, PUT, PROPFIND, LOCK, UNLOCK');
+  return res;
 }
 
 export async function HEAD(req: NextRequest, { params }: { params: { id: string; name: string } }) {
-  return streamHEAD(rewrite(req, params.id));
+  const res = await streamHEAD(rewrite(req, params.id));
+  res.headers.set('DAV', '1, 2');
+  res.headers.set('MS-Author-Via', 'DAV');
+  res.headers.set('Allow', 'GET, HEAD, POST, OPTIONS, PUT, PROPFIND, LOCK, UNLOCK');
+  return res;
 }
 
 export async function OPTIONS() {
@@ -58,9 +66,11 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string; 
     const headers = new Headers();
     headers.set('DAV', '1, 2');
     headers.set('MS-Author-Via', 'DAV');
+    headers.set('Allow', 'GET, HEAD, POST, OPTIONS, PUT, PROPFIND, LOCK, UNLOCK');
     headers.set('Access-Control-Allow-Origin', '*');
     headers.set('Access-Control-Allow-Methods', 'GET, HEAD, POST, OPTIONS, PUT, PROPFIND, LOCK, UNLOCK');
     headers.set('Access-Control-Allow-Headers', '*');
+    headers.set('ETag', `"${fileId}-${buffer.length}"`);
 
     return new NextResponse(null, { status: 204, headers });
   } catch (error: any) {

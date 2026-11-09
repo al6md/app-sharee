@@ -79,9 +79,12 @@ export async function HEAD(req: NextRequest) {
       `${download ? 'attachment' : 'inline'}; filename="${safeAsciiName}"; filename*=UTF-8''${encodedName}`
     );
     resHeaders.set('Accept-Ranges', 'bytes');
+    resHeaders.set('DAV', '1, 2');
+    resHeaders.set('MS-Author-Via', 'DAV');
+    resHeaders.set('Allow', 'GET, HEAD, POST, OPTIONS, PUT, PROPFIND, LOCK, UNLOCK');
     resHeaders.set('Access-Control-Allow-Origin', '*');
-    resHeaders.set('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
-    resHeaders.set('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Content-Disposition, Accept-Ranges, X-File-Size, X-File-Name');
+    resHeaders.set('Access-Control-Allow-Methods', 'GET, HEAD, POST, OPTIONS, PUT, PROPFIND, LOCK, UNLOCK');
+    resHeaders.set('Access-Control-Expose-Headers', 'DAV, MS-Author-Via, Lock-Token, Content-Length, Content-Range, Content-Disposition, Accept-Ranges, X-File-Size, X-File-Name, ETag');
     resHeaders.set('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
     resHeaders.set('Pragma', 'no-cache');
     resHeaders.set('Expires', '0');
@@ -131,9 +134,12 @@ export async function GET(req: NextRequest) {
       `${download ? 'attachment' : 'inline'}; filename="${safeAsciiName}"; filename*=UTF-8''${encodedName}`
     );
     resHeaders.set('Accept-Ranges', 'bytes');
+    resHeaders.set('DAV', '1, 2');
+    resHeaders.set('MS-Author-Via', 'DAV');
+    resHeaders.set('Allow', 'GET, HEAD, POST, OPTIONS, PUT, PROPFIND, LOCK, UNLOCK');
     resHeaders.set('Access-Control-Allow-Origin', '*');
-    resHeaders.set('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
-    resHeaders.set('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Content-Disposition, Accept-Ranges, X-File-Size, X-File-Name');
+    resHeaders.set('Access-Control-Allow-Methods', 'GET, HEAD, POST, OPTIONS, PUT, PROPFIND, LOCK, UNLOCK');
+    resHeaders.set('Access-Control-Expose-Headers', 'DAV, MS-Author-Via, Lock-Token, Content-Length, Content-Range, Content-Disposition, Accept-Ranges, X-File-Size, X-File-Name, ETag');
     resHeaders.set('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
     resHeaders.set('Pragma', 'no-cache');
     resHeaders.set('Expires', '0');
