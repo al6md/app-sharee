@@ -69,6 +69,8 @@ function handlePropfind(req: NextRequest) {
     `        <D:displayname>${xmlEscape(name)}</D:displayname>\n` +
     `        <D:resourcetype/>\n` +
     `        <D:getcontenttype>${xmlEscape(type)}</D:getcontenttype>\n` +
+    `        <D:isreadonly>0</D:isreadonly>\n` +
+    `        <Z:Win32FileAttributes xmlns:Z="urn:schemas-microsoft-com:">00000020</Z:Win32FileAttributes>\n` +
     `        <D:supportedlock>\n` +
     `          <D:lockentry>\n` +
     `            <D:lockscope><D:exclusive/></D:lockscope>\n` +

@@ -868,29 +868,31 @@ export default function FilesPage() {
     let lastKnownBridgeSync = 0;
     let bridgeInterval: any = null;
 
-    bridgeInterval = setInterval(async () => {
-      try {
-        const bridgeRes = await fetch('http://127.0.0.1:18290/status', {
-          method: 'GET',
-          mode: 'cors',
-          cache: 'no-store',
-          signal: AbortSignal.timeout(1000),
-        });
-        if (bridgeRes.ok) {
-          const info = await bridgeRes.json();
-          const bridgeTs = Number(info.last_sync_time || 0);
-          if (bridgeTs > 0 && bridgeTs > lastKnownBridgeSync) {
-            if (lastKnownBridgeSync !== 0) {
-              // تم حفظ ورفع تعديلات من تطبيق الحاسوب فورياً!
-              loadData(true);
+    if (typeof window !== 'undefined' && window.location.protocol === 'http:') {
+      bridgeInterval = setInterval(async () => {
+        try {
+          const bridgeRes = await fetch('http://127.0.0.1:18290/status', {
+            method: 'GET',
+            mode: 'cors',
+            cache: 'no-store',
+            signal: AbortSignal.timeout(1000),
+          });
+          if (bridgeRes.ok) {
+            const info = await bridgeRes.json();
+            const bridgeTs = Number(info.last_sync_time || 0);
+            if (bridgeTs > 0 && bridgeTs > lastKnownBridgeSync) {
+              if (lastKnownBridgeSync !== 0) {
+                // تم حفظ ورفع تعديلات من تطبيق الحاسوب فورياً!
+                loadData(true);
+              }
+              lastKnownBridgeSync = bridgeTs;
             }
-            lastKnownBridgeSync = bridgeTs;
           }
+        } catch {
+          // الجسر المحلي غير متاح
         }
-      } catch {
-        // الجسر المحلي غير متاح
-      }
-    }, 2500);
+      }, 2500);
+    }
 
     // 2. فحص سحابي دوري هادئ لمزامنة تعديلات المستخدمين الآخرين بدقة 100% بدون فقدان التغييرات
     let lastCloudSig = '';
@@ -2265,45 +2267,9 @@ export default function FilesPage() {
       return;
     }
 
-    // 1. محاولة فتح الملف عبر تطبيق سطح المكتب المرافق وجسره المحلي لضمان المزامنة الفورية عند الحفظ Ctrl+S
-    // إذا فشل الجسر المحلي مؤخراً نتخطاه فوراً (بدل انتظار المهلة في كل فتح) ونفتح الملف مباشرة
-    const bridgeDownUntil: number = (window as any).__shareCocBridgeDownUntil || 0;
-    const bridgeSkipped = Date.now() < bridgeDownUntil;
-    if (!bridgeSkipped) try {
-      const bridgeUrl = `http://127.0.0.1:18290/open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}&storage_path=${encodeURIComponent(file.storagePath || file.id || '')}`;
-      const bridgeRes = await fetch(bridgeUrl, {
-        method: 'GET',
-        mode: 'cors',
-        cache: 'no-store',
-        signal: AbortSignal.timeout(1500),
-      });
-      if (bridgeRes.ok) {
-        const bData = await bridgeRes.json();
-        if (bData.success) {
-          startLiveBridgeWatcher(file);
-          setToastMessage({
-            text: `🚀 تم فتح "${file.name}" وتفعيل المراقبة اللحظية. أي تعديل بـ Ctrl+S سيُزامن فورياً وتلقائياً!`,
-            type: 'info'
-          });
-          return;
-        }
-      }
-    } catch {
-      (window as any).__shareCocBridgeDownUntil = Date.now() + 60_000;
-      // إذا كان المتصفح يمنع طلبات HTTP من HTTPS، نمرر عبر بروتوكول sharecoc:// المسجل بنظام ويندوز
-      try {
-        const shareCocUri = `sharecoc://open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}&storage_path=${encodeURIComponent(file.storagePath || file.id || '')}`;
-        const iframe = document.createElement('iframe');
-        iframe.style.display = 'none';
-        iframe.src = shareCocUri;
-        document.body.appendChild(iframe);
-        setTimeout(() => {
-          try { document.body.removeChild(iframe); } catch {}
-        }, 1500);
-      } catch {}
-    }
+    const shareCocUri = `sharecoc://open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}&storage_path=${encodeURIComponent(file.storagePath || file.id || '')}`;
 
-    // بروتوكولات Microsoft Office الرسمية المثبتة مع Office في ويندوز
+    // بروتوكولات Microsoft Office الرسمية المثبتة مع Office في ويندوز (للاحتياط)
     const OFFICE_PROTOCOLS: Record<string, [string, string]> = {
       docx: ['ms-word', 'Word'], doc: ['ms-word', 'Word'], docm: ['ms-word', 'Word'], dotx: ['ms-word', 'Word'], rtf: ['ms-word', 'Word'],
       xlsx: ['ms-excel', 'Excel'], xls: ['ms-excel', 'Excel'], xlsm: ['ms-excel', 'Excel'], xltx: ['ms-excel', 'Excel'], csv: ['ms-excel', 'Excel'],
@@ -2312,24 +2278,63 @@ export default function FilesPage() {
     };
     const entry = OFFICE_PROTOCOLS[ext];
 
-    if (entry) {
-      const [scheme, appName] = entry;
-      setToastMessage({ text: `⏳ جاري فتح "${file.name}" في ${appName}...`, type: 'info' });
-      launchExternalProtocol(`${scheme}:ofe|u|${fileUrl}`, () => {
-        setToastMessage({
-          text: `ℹ️ إذا لم يفتح ${appName} تلقائياً، يمكنك تنزيل نسخة يدوياً من زر التنزيل.`,
-          type: 'info'
+    // 1. محاولة اتصال مباشر بجسر الحاسوب إذا كان متاحاً بدون قيود Mixed Content (مثل بيئة http://localhost)
+    if (typeof window !== 'undefined' && window.location.protocol === 'http:') {
+      try {
+        const bridgeUrl = `http://127.0.0.1:18290/open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}&storage_path=${encodeURIComponent(file.storagePath || file.id || '')}`;
+        const bridgeRes = await fetch(bridgeUrl, {
+          method: 'GET',
+          mode: 'cors',
+          cache: 'no-store',
+          signal: AbortSignal.timeout(1000),
         });
-      });
-      return;
+        if (bridgeRes.ok) {
+          const bData = await bridgeRes.json();
+          if (bData.success) {
+            startLiveBridgeWatcher(file);
+            setToastMessage({
+              text: `🚀 تم فتح "${file.name}" في البرنامج الأصلي بنجاح (وضع التحرير والمزامنة اللحظية).`,
+              type: 'info'
+            });
+            return;
+          }
+        }
+      } catch {
+        // ننتقل لتشغيل بروتوكول sharecoc://
+      }
     }
 
-    // باقي الأنواع (PDF وغيرها): تنزيل مباشر ليفتحه المتصفح/النظام بالبرنامج الافتراضي
+    // 2. إطلاق تطبيق الحاسوب المرافق عبر بروتوكول sharecoc:// المسجل في نظام Windows
+    // هذا البروتوكول يتجاوز قيود Mixed Content لصفحات HTTPS تماماً، ويضمن تشغيل الملف الحقيقي محلياً
+    // في برامج Office الأصلية بوضع التحرير الكامل (Full Read/Write) بدلاً من وضع القراءة فقط.
     setToastMessage({
-      text: `📥 جاري تنزيل "${file.name}" لفتحه في البرنامج الافتراضي...`,
+      text: `🚀 جاري فتح "${file.name}" في البرنامج الأصلي عبر تطبيق Share COC (وضع التحرير الكامل)...`,
       type: 'info'
     });
-    triggerBrowserDownload(downloadUrl, file.name);
+
+    launchExternalProtocol(shareCocUri, () => {
+      // 3. الاحتياط فقط إذا كان تطبيق Share COC غير مثبت نهائياً على هذا الحاسوب:
+      if (entry) {
+        const [scheme, appName] = entry;
+        setToastMessage({
+          text: `⚠️ لم يستجب تطبيق Share COC. جاري الفتح عبر ${appName} السحابي... (لتفادي وضع القراءة، يرجى التأكد من تشغيل تطبيق الحاسوب في الخلفية)`,
+          type: 'info'
+        });
+        launchExternalProtocol(`${scheme}:ofe|u|${fileUrl}`, () => {
+          setToastMessage({
+            text: `⚠️ لم يستجب ${appName}. تم تنزيل نسخة من الملف بدلاً من ذلك، افتحها من مجلد التنزيلات.`,
+            type: 'error'
+          });
+          triggerBrowserDownload(downloadUrl, file.name);
+        });
+      } else {
+        setToastMessage({
+          text: `📥 جاري تنزيل "${file.name}" لفتحه في البرنامج الافتراضي...`,
+          type: 'info'
+        });
+        triggerBrowserDownload(downloadUrl, file.name);
+      }
+    });
   };
 
   // تشغيل المستند في تطبيق الهاتف الأصلي (Word / Excel / WPS) عبر Web Share مع نوع MIME دقيق
@@ -2636,19 +2641,24 @@ export default function FilesPage() {
   };
   // 4. إظهار الملف داخل مجلد الويندوز (Reveal in Explorer)
   const handleRevealInExplorer = async (file: FileItem) => {
-    try {
-      const res = await fetch(`http://127.0.0.1:18290/reveal?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder)}`);
-      if (res.ok) {
-        setToastMessage({
-          text: `📂 تم إظهار المستند في مجلد الويندوز FileExchangeShared.`,
-          type: 'success'
-        });
-        return;
-      }
-    } catch {}
-    setToastMessage({
-      text: `المستند مخزن محلياً في مجلد: C:\\Users\\...\\FileExchangeShared`,
-      type: 'info'
+    if (typeof window !== 'undefined' && window.location.protocol === 'http:') {
+      try {
+        const res = await fetch(`http://127.0.0.1:18290/reveal?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}`);
+        if (res.ok) {
+          setToastMessage({
+            text: `📂 تم إظهار المستند في مجلد الويندوز FileExchangeShared.`,
+            type: 'success'
+          });
+          return;
+        }
+      } catch {}
+    }
+    const shareCocReveal = `sharecoc://reveal?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}`;
+    launchExternalProtocol(shareCocReveal, () => {
+      setToastMessage({
+        text: `المستند مخزن محلياً في مجلد: C:\\Users\\...\\FileExchangeShared`,
+        type: 'info'
+      });
     });
   };
 

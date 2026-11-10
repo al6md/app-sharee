@@ -119,13 +119,26 @@ def process_and_apply(raw_token):
     if env_path.exists():
         content = env_path.read_text(encoding="utf-8")
         lines = []
+        found = False
         for line in content.splitlines():
             if line.startswith("GDRIVE_REFRESH_TOKEN="):
                 lines.append(f"GDRIVE_REFRESH_TOKEN={final_refresh_token}")
+                found = True
             else:
                 lines.append(line)
+        if not found:
+            lines.append(f"GDRIVE_REFRESH_TOKEN={final_refresh_token}")
         env_path.write_text("\n".join(lines), encoding="utf-8")
         print(f"✓ تم تحديث إعدادات لوحة التحكم السحابية: {env_path.name}")
+    else:
+        new_env = (
+            f"GDRIVE_CLIENT_ID={CLIENT_ID}\n"
+            f"GDRIVE_CLIENT_SECRET={CLIENT_SECRET}\n"
+            f"GDRIVE_REFRESH_TOKEN={final_refresh_token}\n"
+            f"GDRIVE_FOLDER_ID={FOLDER_ID}\n"
+        )
+        env_path.write_text(new_env, encoding="utf-8")
+        print(f"✓ تم إنشاء إعدادات لوحة التحكم السحابية: {env_path.name}")
 
     # 2. Desktop app paths
     creds_paths = [

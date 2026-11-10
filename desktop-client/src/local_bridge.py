@@ -30,7 +30,7 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
 
     def _is_loopback(self):
         client_ip = getattr(self, 'client_address', ('',))[0]
-        return client_ip in ('127.0.0.1', '::1', 'localhost')
+        return client_ip in ('127.0.0.1', '::1', 'localhost', '::ffff:127.0.0.1') or str(client_ip).startswith('127.')
 
     def _set_headers(self, status=200, content_type='application/json'):
         self.send_response(status)
@@ -125,8 +125,8 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
             return
 
         if path == '/open':
-            file_name = params.get('file', [''])[0].strip()
-            folder_name = params.get('folder', [''])[0].strip()
+            file_name = params.get('file', [''])[0].strip().rstrip('/\\')
+            folder_name = params.get('folder', [''])[0].strip().rstrip('/\\')
             storage_path = params.get('storage_path', [''])[0].strip()
 
             # حماية المسارات من محاولات التخطي (Path Traversal Protection)
@@ -216,8 +216,8 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
             return
 
         if path == '/unlock':
-            file_name = params.get('file', [''])[0].strip()
-            folder_name = params.get('folder', [''])[0].strip()
+            file_name = params.get('file', [''])[0].strip().rstrip('/\\')
+            folder_name = params.get('folder', [''])[0].strip().rstrip('/\\')
             storage_path = params.get('storage_path', [''])[0].strip()
             while "../" in file_name or "..\\" in file_name:
                 file_name = file_name.replace("../", "").replace("..\\", "")
@@ -234,8 +234,8 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
             return
 
         if path == '/reveal':
-            file_name = params.get('file', [''])[0].strip()
-            folder_name = params.get('folder', [''])[0].strip()
+            file_name = params.get('file', [''])[0].strip().rstrip('/\\')
+            folder_name = params.get('folder', [''])[0].strip().rstrip('/\\')
             storage_path = params.get('storage_path', [''])[0].strip()
             while "../" in file_name or "..\\" in file_name:
                 file_name = file_name.replace("../", "").replace("..\\", "")
@@ -252,8 +252,8 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
             return
 
         if path == '/file-status':
-            file_name = params.get('file', [''])[0].strip()
-            folder_name = params.get('folder', [''])[0].strip()
+            file_name = params.get('file', [''])[0].strip().rstrip('/\\')
+            folder_name = params.get('folder', [''])[0].strip().rstrip('/\\')
             while "../" in file_name or "..\\" in file_name:
                 file_name = file_name.replace("../", "").replace("..\\", "")
             while "../" in folder_name or "..\\" in folder_name:

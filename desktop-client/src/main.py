@@ -318,14 +318,22 @@ def _kill_unresponsive_zombies():
 def main():
     # 1. فحص وسائط سطر الأوامر لفتح الملف مباشرة بالبرنامج الأصلي (مثل Word أو Excel)
     if len(sys.argv) > 1 and sys.argv[1] == '--open':
+        _safe_log_err(f'[CLI ARGV RECEIVED]: {sys.argv}')
         raw_target = sys.argv[2] if len(sys.argv) > 2 else ""
         target_file = ""
         target_folder = ""
         target_storage_path = ""
 
-        if raw_target.startswith("sharecoc://"):
+        raw_target = raw_target.strip(' "\'')
+        target_action = "open"
+        if raw_target.lower().startswith("sharecoc:"):
             import urllib.parse
-            parsed = urllib.parse.urlparse(raw_target)
+            url_to_parse = raw_target
+            if not url_to_parse.lower().startswith("sharecoc://"):
+                url_to_parse = "sharecoc://" + url_to_parse.split(":", 1)[1].lstrip("/")
+            url_to_parse = url_to_parse.rstrip('/')
+            parsed = urllib.parse.urlparse(url_to_parse)
+            target_action = parsed.netloc.lower() if parsed.netloc else "open"
             qs = urllib.parse.parse_qs(parsed.query)
             target_file = qs.get('file', [''])[0].strip()
             target_folder = qs.get('folder', [''])[0].strip()
@@ -333,27 +341,33 @@ def main():
         else:
             target_file = raw_target.strip()
 
+        import urllib.parse
+        target_file = urllib.parse.unquote(target_file).strip(' "\'').rstrip('/\\')
+        target_folder = urllib.parse.unquote(target_folder).strip(' "\'').rstrip('/\\')
+        target_storage_path = urllib.parse.unquote(target_storage_path).strip(' "\'')
+
         if target_file:
             import re
             def clean_bidi(s):
-                return re.sub(r'[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]', '', str(s)).strip()
+                return re.sub(r'[​-‏‪-‮⁦-⁩﻿]', '', str(s)).strip()
 
             clean_target_file = clean_bidi(target_file)
 
-            # 1. محاولة تمرير الطلب للجسر المحلي المفتوح بالفعل
+            # 1. محاولة تمرير الطلب للجسر المحلي المفتوح بالفعل في الخلفية
             try:
                 import urllib.request
-                import urllib.parse
+                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                endpoint = "reveal" if target_action == "reveal" else "open"
                 bridge_url = (
-                    f"http://127.0.0.1:18290/open?file={urllib.parse.quote(target_file)}"
+                    f"http://127.0.0.1:18290/{endpoint}?file={urllib.parse.quote(clean_target_file)}"
                     f"&folder={urllib.parse.quote(target_folder)}"
                     f"&storage_path={urllib.parse.quote(target_storage_path)}"
                 )
-                req = urllib.request.urlopen(bridge_url, timeout=3.0)
-                if req.status == 200:
-                    sys.exit(0)
-            except Exception:
-                pass
+                with opener.open(bridge_url, timeout=4.0) as req:
+                    if req.status == 200:
+                        sys.exit(0)
+            except Exception as bridge_err:
+                _safe_log_err(f"[CLI Bridge Forward Notice]: {bridge_err}")
 
             # 2. إذا لم يستجب الجسر، فحصه محلياً في مجلد FileExchangeShared
             sync_folder = Path(os.environ.get('USERPROFILE', 'C:')) / "FileExchangeShared"
@@ -458,12 +472,23 @@ def main():
                 urllib.request.urlopen("http://127.0.0.1:18290/sync", timeout=1.5)
             except Exception:
                 pass
-        # هناك نسخة مسجلة؛ محاولة تنشيطها بهدوء أولاً
+        # هناك نسخة مسجلة؛ محاولة إيقاظ النافذة وإظهارها فوراً
+        # 1. إرسال طلب صريح إلى المنفذ المحلي /show لإظهار النافذة من شريط المهام وصينية النظام (Tray)
+        try:
+            import urllib.request
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open("http://127.0.0.1:18290/show", timeout=1.0) as resp:
+                if resp.status == 200:
+                    sys.exit(0)
+        except Exception:
+            pass
+
+        # 2. محاولة تنشيطها عبر واجهات ويندوز (Win32 Event & HWND)
         activated = _activate_running_instance(retries=2, delay=0.25)
         if activated:
             sys.exit(0)
 
-        # فحص إضافي: هل المنفذ 18290 يستجيب للـ status؟ إذا كان يستجيب فالبرنامج يعمل بنشاط في الخلفية ولا يجوز قتله
+        # 3. فحص إضافي: هل المنفذ 18290 يستجيب للـ status؟
         is_alive = False
         try:
             import urllib.request
@@ -475,6 +500,10 @@ def main():
             is_alive = False
 
         if is_alive:
+            try:
+                opener.open("http://127.0.0.1:18290/show", timeout=0.8)
+            except Exception:
+                pass
             sys.exit(0)
 
         # فقط إذا تعذر التنشيط والمنفذ لا يستجيب تماماً، فالعملية السابقة متجمدة؛ إنهاؤها وتحرير المنفذ والقفل

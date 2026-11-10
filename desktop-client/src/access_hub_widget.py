@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
     QLineEdit, QTableWidget, QTableWidgetItem, QHeaderView,
     QButtonGroup, QFrame, QDialog, QMessageBox, QFileDialog,
     QScrollArea, QAbstractItemView, QProgressDialog, QComboBox,
-    QMenu, QApplication
+    QMenu, QApplication, QStackedWidget, QSlider, QLayout, QSizePolicy
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread
 from PyQt6.QtGui import QFont, QColor, QCursor, QIcon
@@ -118,6 +118,110 @@ def sort_tables_by_priority(tables):
     """ترتيب الجداول ترتيباً منطقياً معتمداً لغرفة التجارة يبدأ بالتجار ثم الشركات ثم الدلالين"""
     return sorted(tables, key=lambda t: (TABLE_PRIORITY.get(t, 50), t))
 
+COLUMN_PRIORITY = {
+    # 1. الأسماء الرئيسية
+    'ArabicName': 1,
+    'اسم التاجر': 1,
+    'اسم الشركة': 1,
+    'اسم الفندق': 1,
+    'اسم الصيدلية': 1,
+    'اسم المعمل': 1,
+    'اسم الدلال': 1,
+    'الإسم التجاري': 2,
+    'الاسم التجاري': 2,
+    'ArabicCommercialName': 2,
+    'EnglishName': 3,
+
+    # 2. المالك وصاحب المنشأة
+    'صاحب الاسم التجاري': 4,
+    'اسم صاحب الفندق': 4,
+    'اسم صاحب المعمل': 4,
+    'اسم صاحب المكتب': 4,
+    'اسم صاحب الصيدلية': 4,
+    'اسم صاحب الشركة': 4,
+    'الإسم': 4,
+
+    # 3. النشاط والعمل
+    'العمل': 5,
+    'Activity': 5,
+    'SpecificActivity': 5,
+    'العمل التجاري': 5,
+    'نوع النشاط': 5,
+    'النشاط': 5,
+    'EnglishActivity': 6,
+
+    # 4. الصنف والدرجة
+    'الصنف': 7,
+    'الدرجة': 7,
+    'Class': 7,
+    'EnglishClass': 8,
+
+    # 5. الاتصال والهاتف
+    'الهاتف': 9,
+    'رقم الهاتف': 9,
+    'Mobile': 9,
+    'Phone': 9,
+
+    # 6. العنوان والموقع
+    'العنوان': 10,
+    'Address': 10,
+    'عنوان المحل': 10,
+    'المنطقة': 10,
+
+    # 7. التواريخ
+    'تأريخه': 11,
+    'تاريخه': 11,
+    'تأريحه': 11,
+    'تاريخ الانتساب': 11,
+    'AffiliationDate': 11,
+    'تاريخ التسجيل': 11,
+    'ExpirationDate': 12,
+    'تاريخ التعديل': 13,
+    'تاريخ الشطب': 13,
+
+    # 8. الأرقام والهويات
+    'رقم الأسم التجاري': 14,
+    'رقم الاسم التجاري': 14,
+    'رقم  التجاري': 14,
+    'رقم التجديد': 15,
+    'RenewalNo': 15,
+    'ID': 16,
+    'id': 16,
+    'IDNo': 16,
+    'ID_No': 16,
+    'StampNo': 17,
+    'CommercialNo': 17,
+    'تسلسل الشركة': 17,
+    'رقم اجازة التأسيس': 18,
+    'رقم شهادة الجنسية': 18,
+
+    # 9. البيانات الشخصية
+    'اسم الزوج': 20,
+    'اسم الام': 21,
+    'المواليد': 22,
+    'ذكر': 23,
+    'انثى': 24,
+    'Female': 24,
+    'جنسيته': 25,
+
+    # 10. التعديل والشطب والملاحظات
+    'التعديل': 30,
+    'الشطب': 31,
+    'العمل التجاري القديم': 32,
+    'الملاحظات': 33,
+    'المرفق': 34,
+    'المرفقات': 34,
+    'Field1': 35,
+    'Field2': 36,
+    'Field3': 37,
+    'Field4': 38,
+}
+
+def sort_columns_by_priority(cols):
+    """ترتيب الحقول حسب الأولوية الذكية المعتمدة في منصة الويب 100%"""
+    cols_list = list(cols)
+    return sorted(cols_list, key=lambda c: (COLUMN_PRIORITY.get(c, 100), cols_list.index(c)))
+
 
 def parse_date_value(val):
     """تحليل ذكي لقيم التواريخ لتحويلها إلى Timestamp للمقارنة والفرز"""
@@ -155,6 +259,108 @@ def parse_date_value(val):
             pass
 
     return None
+
+
+def get_short_file_name(name: str) -> str:
+    """اسم القسم المختصر والأنيق للبطاقات والشارات مطابقاً للوحة الويب"""
+    if not name:
+        return ""
+    if "جهاز الاشتراكات" in name:
+        return "جهاز الاشتراكات"
+    if "2025" in name:
+        return "2025 - 2026"
+    if "2024" in name:
+        return "2024"
+    if "2023" in name:
+        return "2023"
+    if "2022" in name:
+        return "2022"
+    if "1984" in name:
+        return "1984 - 2021"
+    if "جديد" in name or "المبتكرة" in name:
+        return "الكلية والمبتكرة"
+    return name
+
+
+def extract_card_fields(row: dict) -> dict:
+    """استخراج وتوحيد الحقول الجوهرية لعرض البطاقات الذكية لكافة الأصناف مطابقاً للويب"""
+    if not isinstance(row, dict):
+        return {
+            "name": "قيد بدون اسم", "commercial_name": None, "activity": None,
+            "phone": None, "address": None, "date_val": None, "grade": None
+        }
+
+    name = (
+        row.get("ArabicName") or
+        row.get("اسم التاجر") or
+        row.get("اسم الشركة") or
+        row.get("اسم الفندق") or
+        row.get("اسم الصيدلية") or
+        row.get("اسم المعمل") or
+        row.get("اسم الدلال") or
+        row.get("صاحب الاسم التجاري") or
+        row.get("اسم صاحب الفندق") or
+        row.get("اسم صاحب المعمل") or
+        row.get("اسم صاحب المكتب") or
+        row.get("اسم صاحب الصيدلية") or
+        row.get("اسم صاحب الشركة") or
+        row.get("الاسم التجاري") or
+        row.get("الإسم التجاري") or
+        row.get("Name") or
+        "قيد مسجل بدون اسم"
+    )
+
+    commercial_name = None
+    for cand in ("الاسم التجاري", "الإسم التجاري", "اسم الفندق", "اسم الشركة", "اسم الصيدلية", "اسم المعمل", "صاحب الاسم التجاري", "CommercialName", "اسم المحل"):
+        val = row.get(cand)
+        if val and str(val).strip() and str(val).strip() != str(name).strip():
+            commercial_name = str(val).strip()
+            break
+
+    activity = None
+    for cand in ("نوع النشاط", "النشاط", "Activity", "العمل", "العمل التجاري", "SpecificActivity", "EnglishActivity", "نوع المحل"):
+        val = row.get(cand)
+        if val and str(val).strip():
+            activity = str(val).strip()
+            break
+
+    phone = None
+    for cand in ("Mobile", "الهاتف", "رقم الهاتف", "Phone"):
+        val = row.get(cand)
+        if val and str(val).strip():
+            phone = str(val).strip()
+            break
+
+    address = None
+    for cand in ("العنوان", "عنوان المحل", "Address", "المنطقة"):
+        val = row.get(cand)
+        if val and str(val).strip():
+            address = str(val).strip()
+            break
+
+    date_val = None
+    for cand in ("تاريخ التسجيل", "تاريخ التجديد", "تاريخ انتهاء الإجازة", "تأريخه", "تاريخه", "تأريحه", "تاريخ الانتساب", "تاريخ التعديل", "تاريخ الشطب", "Date", "RegDate", "AffiliationDate"):
+        val = row.get(cand)
+        if val and str(val).strip():
+            date_val = str(val).strip()
+            break
+
+    grade = None
+    for cand in ("Class", "الصنف", "الدرجة"):
+        val = row.get(cand)
+        if val and str(val).strip():
+            grade = str(val).strip()
+            break
+
+    return {
+        "name": str(name).strip(),
+        "commercial_name": commercial_name,
+        "activity": activity,
+        "phone": phone,
+        "address": address,
+        "date_val": date_val,
+        "grade": grade,
+    }
 
 
 class DataLoaderThread(QThread):
@@ -270,26 +476,25 @@ class DataLoaderThread(QThread):
 
                 columns = cols_order
             else:
-                if not req_table or req_table not in tables_set:
-                    req_table = available_tables[0] if available_tables else "التجار"
-
+                target_tables = ["الدلالين", "دلالين"] if req_table in ("الدلالين", "دلالين") else [req_table]
                 for f in idx.get("files", []):
                     fpath = local_dir / f"{f['name']}.json"
                     data = get_cached_json_file(fpath)
                     if not data:
                         continue
 
-                    orig_cols = data.get("columns", {}).get(req_table, [])
-                    for c in orig_cols:
-                        if c not in cols_seen:
-                            cols_seen.add(c)
-                            cols_order.append(c)
+                    for tt in target_tables:
+                        orig_cols = data.get("columns", {}).get(tt, [])
+                        for c in orig_cols:
+                            if c not in cols_seen:
+                                cols_seen.add(c)
+                                cols_order.append(c)
 
-                    for r in data.get("tables", {}).get(req_table, []):
-                        r_copy = dict(r)
-                        r_copy["_adh_file"] = f["name"]
-                        r_copy["_adh_table"] = req_table
-                        rows.append(r_copy)
+                        for r in data.get("tables", {}).get(tt, []):
+                            r_copy = dict(r)
+                            r_copy["_adh_file"] = f["name"]
+                            r_copy["_adh_table"] = tt
+                            rows.append(r_copy)
 
                 columns = cols_order
         else:
@@ -319,7 +524,12 @@ class DataLoaderThread(QThread):
 
                 columns = cols_order
             else:
-                if not req_table or req_table not in data.get("tables", {}):
+                if req_table in ("الدلالين", "دلالين"):
+                    if "الدلالين" in data.get("tables", {}):
+                        req_table = "الدلالين"
+                    elif "دلالين" in data.get("tables", {}):
+                        req_table = "دلالين"
+                elif not req_table or req_table not in data.get("tables", {}):
                     req_table = available_tables[0] if available_tables else ""
 
                 columns = list(data.get("columns", {}).get(req_table, []))
@@ -352,6 +562,21 @@ class DataLoaderThread(QThread):
         for c in added_for_tbl:
             if c not in active_columns and c not in deleted_for_tbl:
                 active_columns.append(c)
+
+        # ترتيب الأعمدة حسب الأولوية الذكية مطابقاً لمنصة الويب 100%
+        active_columns = sort_columns_by_priority(active_columns)
+
+        # تطبيق الترتيب المخصص السحابي إن وجد
+        custom_orders = mutations.get("column_orders", {})
+        custom_order = (
+            custom_orders.get(f"{req_file}_{req_table}") or
+            custom_orders.get(f"all_{req_table}") or
+            custom_orders.get(f"{req_file}_all") or
+            custom_orders.get("all_all")
+        )
+        if custom_order and isinstance(custom_order, list) and len(custom_order) > 0:
+            order_map = {name: idx for idx, name in enumerate(custom_order)}
+            active_columns.sort(key=lambda c: order_map.get(c, 9999))
 
         # استخراج أعمدة التواريخ
         date_columns = []
@@ -480,27 +705,31 @@ class DataLoaderThread(QThread):
 
 
 class RecordFormDialog(QDialog):
-    """نافذة لإضافة أو تعديل قيد بالحفاظ الكامل على ترتيب الحقول الأصلية 100%"""
+    """نافذة لإضافة أو تعديل قيد بتصميم عصري مطابق لموقع الويب (شبكة من عمودين وإخفاء الحقول الفارغة تلقائياً)"""
     def __init__(self, title, columns, initial_data=None, files_list=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.resize(580, 650)
+        self.resize(680, 700)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        self.columns = columns
+        # تصفية الحقول وترتيبها بالأولوية الذكية المطابقة للويب
+        self.columns = sort_columns_by_priority([c for c in columns if not c.startswith("_adh_")])
         self.files_list = files_list or []
+        self.initial_data = initial_data
         self.inputs = {}
+        self.empty_card_widgets = []
+        self.show_empty_fields = False
         self.selected_file = None
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
-        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setContentsMargins(18, 16, 18, 16)
 
         header = QLabel(title)
         header.setFont(QFont("IBM Plex Sans Arabic", 11, QFont.Weight.Bold))
         header.setStyleSheet("color: #14372e; padding-bottom: 6px; border-bottom: 2px solid #c59b27;")
         layout.addWidget(header)
 
-        # اختيار الملف في حالة الإضافة وكان في وضع الدمج الشامل
+        # اختيار الملف في حالة الإضافة وفي وضع الدمج الشامل
         if self.files_list and initial_data is None:
             file_box = QVBoxLayout()
             file_box.setSpacing(4)
@@ -527,52 +756,141 @@ class RecordFormDialog(QDialog):
             file_box.addWidget(self.file_combo)
             layout.addLayout(file_box)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll_content = QWidget()
-        scroll_layout = QVBoxLayout(scroll_content)
-        scroll_layout.setSpacing(10)
+        # شريط التحكم في إظهار / إخفاء الحقول الفارغة (يظهر أعلى الحقول مباشرة)
+        filled_count = 0
+        empty_count = 0
+        if initial_data:
+            for col in self.columns:
+                raw_val = initial_data.get(col, "")
+                val_str = "" if raw_val is None else str(raw_val).strip()
+                if val_str != "" and val_str.lower() != "none" and val_str != "—":
+                    filled_count += 1
+                else:
+                    empty_count += 1
 
-        for col in self.columns:
-            row_box = QVBoxLayout()
-            row_box.setSpacing(3)
-            lbl = QLabel(col)
-            lbl.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
-            lbl.setStyleSheet("color: #344054;")
-            row_box.addWidget(lbl)
+        if initial_data and empty_count > 0:
+            toggle_bar = QHBoxLayout()
+            toggle_bar.setContentsMargins(0, 0, 0, 4)
 
-            inp = QLineEdit()
-            inp.setFont(QFont("IBM Plex Sans Arabic", 9))
-            inp.setStyleSheet("""
-                QLineEdit {
-                    background: #FFFFFF;
-                    border: 1px solid #D0D5DD;
+            lbl_hint = QLabel(f"📌 عرض الحقول التي تحتوي بيانات فقط ({filled_count})")
+            lbl_hint.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+            lbl_hint.setStyleSheet("color: #14372e; background: #EDF5F2; padding: 4px 10px; border-radius: 6px; border: 1px solid #B8D8CC;")
+            toggle_bar.addWidget(lbl_hint)
+            toggle_bar.addStretch()
+
+            self.btn_toggle_empty = QPushButton(f"➕ إظهار باقي الحقول الفارغة ({empty_count})")
+            self.btn_toggle_empty.setFont(QFont("IBM Plex Sans Arabic", 9))
+            self.btn_toggle_empty.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            self.btn_toggle_empty.setStyleSheet("""
+                QPushButton {
+                    background: #F8F9FA;
+                    color: #344054;
+                    border: 1px dashed #98A2B3;
                     border-radius: 6px;
-                    padding: 6px 10px;
-                    color: #1B1F24;
+                    padding: 4px 12px;
                 }
-                QLineEdit:focus {
-                    border: 1.5px solid #14372e;
+                QPushButton:hover {
+                    background: #EDF5F2;
+                    color: #14372e;
+                    border-color: #14372e;
                 }
             """)
-            if initial_data and col in initial_data and initial_data[col] is not None:
-                inp.setText(str(initial_data[col]))
-            row_box.addWidget(inp)
+            self.btn_toggle_empty.clicked.connect(self._toggle_empty_fields)
+            toggle_bar.addWidget(self.btn_toggle_empty)
+            layout.addLayout(toggle_bar)
+
+        # شبكة إدخال البيانات في عمودين متناسقين مطابقة للويب (2-Column Grid)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: 1px solid #E4E7EC; border-radius: 8px; background: #FAFAFA; }")
+        scroll_content = QWidget()
+        scroll_content.setStyleSheet("background: transparent;")
+        grid_layout = QGridLayout(scroll_content)
+        grid_layout.setContentsMargins(10, 10, 10, 10)
+        grid_layout.setSpacing(10)
+
+        # فصل الحقول إلى ممتلئة أولاً ثم فارغة
+        filled_cols = []
+        empty_cols = []
+        if initial_data:
+            for col in self.columns:
+                raw_val = initial_data.get(col, "")
+                val_str = "" if raw_val is None else str(raw_val).strip()
+                if val_str != "" and val_str.lower() != "none" and val_str != "—":
+                    filled_cols.append(col)
+                else:
+                    empty_cols.append(col)
+        else:
+            filled_cols = list(self.columns)
+            empty_cols = []
+
+        cur_row = 0
+        cur_col = 0
+
+        # إضافة الحقول الممتلئة أولاً
+        for col in filled_cols:
+            card, inp, is_wide = self._create_field_card(col, initial_data.get(col, "") if initial_data else "")
             self.inputs[col] = inp
-            scroll_layout.addLayout(row_box)
+            if is_wide:
+                if cur_col == 1:
+                    cur_row += 1
+                    cur_col = 0
+                grid_layout.addWidget(card, cur_row, 0, 1, 2)
+                cur_row += 1
+                cur_col = 0
+            else:
+                grid_layout.addWidget(card, cur_row, cur_col)
+                cur_col += 1
+                if cur_col >= 2:
+                    cur_col = 0
+                    cur_row += 1
+
+        if cur_col == 1:
+            cur_row += 1
+            cur_col = 0
+
+        # إضافة الحقول الفارغة (تكون مخفية افتراضياً في حالة التعديل)
+        for col in empty_cols:
+            card, inp, is_wide = self._create_field_card(col, "")
+            self.inputs[col] = inp
+            card.hide()
+            self.empty_card_widgets.append((card, is_wide))
+            if is_wide:
+                if cur_col == 1:
+                    cur_row += 1
+                    cur_col = 0
+                grid_layout.addWidget(card, cur_row, 0, 1, 2)
+                cur_row += 1
+                cur_col = 0
+            else:
+                grid_layout.addWidget(card, cur_row, cur_col)
+                cur_col += 1
+                if cur_col >= 2:
+                    cur_col = 0
+                    cur_row += 1
 
         scroll.setWidget(scroll_content)
         layout.addWidget(scroll, stretch=1)
 
+        # شريط أزرار الحفظ والإلغاء
         btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+
         btn_save = QPushButton("💾 حفظ ومزامنة سحابية فورية")
         btn_save.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
         btn_save.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         btn_save.setStyleSheet("""
-            background: #14372e;
-            color: #FFFFFF;
-            border-radius: 6px;
-            padding: 8px 18px;
+            QPushButton {
+                background: #14372e;
+                color: #FFFFFF;
+                border: none;
+                border-radius: 8px;
+                padding: 8px 20px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background: #1a473b;
+            }
         """)
         btn_save.clicked.connect(self.accept)
 
@@ -580,11 +898,16 @@ class RecordFormDialog(QDialog):
         btn_cancel.setFont(QFont("IBM Plex Sans Arabic", 9))
         btn_cancel.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         btn_cancel.setStyleSheet("""
-            background: #F2F4F7;
-            color: #344054;
-            border-radius: 6px;
-            padding: 8px 16px;
-            border: 1px solid #D0D5DD;
+            QPushButton {
+                background: #FFFFFF;
+                color: #344054;
+                border: 1px solid #D0D5DD;
+                border-radius: 8px;
+                padding: 8px 18px;
+            }
+            QPushButton:hover {
+                background: #F2F4F7;
+            }
         """)
         btn_cancel.clicked.connect(self.reject)
 
@@ -593,14 +916,89 @@ class RecordFormDialog(QDialog):
         btn_row.addWidget(btn_save)
         layout.addLayout(btn_row)
 
+    def _create_field_card(self, col: str, val):
+        card = QFrame()
+        card.setStyleSheet("""
+            QFrame {
+                background: #FFFFFF;
+                border: 1px solid #E4E7EC;
+                border-radius: 8px;
+                padding: 4px 6px;
+            }
+        """)
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(4, 4, 4, 4)
+        lay.setSpacing(3)
+
+        lbl = QLabel(col)
+        lbl.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+        lbl.setStyleSheet("color: #344054; border: none; background: transparent;")
+        lay.addWidget(lbl)
+
+        inp = QLineEdit()
+        inp.setFont(QFont("IBM Plex Sans Arabic", 9))
+        inp.setStyleSheet("""
+            QLineEdit {
+                background: #F7F8FA;
+                border: 1px solid #D0D5DD;
+                border-radius: 6px;
+                padding: 6px 10px;
+                color: #1B1F24;
+            }
+            QLineEdit:focus {
+                background: #FFFFFF;
+                border: 1.5px solid #14372e;
+            }
+        """)
+        val_str = "" if val is None else str(val).strip()
+        if val_str and val_str.lower() != "none" and val_str != "—":
+            inp.setText(val_str)
+        lay.addWidget(inp)
+
+        col_lower = col.lower()
+        is_wide = any(k in col_lower for k in ("ملاحظ", "field", "notes", "العمل", "العنوان", "activity", "address"))
+        return card, inp, is_wide
+
+    def _toggle_empty_fields(self):
+        self.show_empty_fields = not self.show_empty_fields
+        for card, _ in self.empty_card_widgets:
+            card.setVisible(self.show_empty_fields)
+        if self.show_empty_fields:
+            self.btn_toggle_empty.setText(f"➖ إخفاء الحقول الفارغة ({len(self.empty_card_widgets)})")
+            self.btn_toggle_empty.setStyleSheet("""
+                QPushButton {
+                    background: #FEF3C7;
+                    color: #92400E;
+                    border: 1px solid #FCD34D;
+                    border-radius: 6px;
+                    padding: 4px 12px;
+                    font-weight: bold;
+                }
+            """)
+        else:
+            self.btn_toggle_empty.setText(f"➕ إظهار باقي الحقول الفارغة ({len(self.empty_card_widgets)})")
+            self.btn_toggle_empty.setStyleSheet("""
+                QPushButton {
+                    background: #F8F9FA;
+                    color: #344054;
+                    border: 1px dashed #98A2B3;
+                    border-radius: 6px;
+                    padding: 4px 12px;
+                }
+                QPushButton:hover {
+                    background: #EDF5F2;
+                    color: #14372e;
+                    border-color: #14372e;
+                }
+            """)
+
     def get_data(self):
-        return {col: self.inputs[col].text().strip() for col in self.columns}
+        return {col: self.inputs[col].text().strip() for col in self.columns if col in self.inputs}
 
     def get_target_file(self):
         if hasattr(self, 'file_combo'):
             return self.file_combo.currentText()
         return None
-
 
 class AddColumnDialog(QDialog):
     """نافذة لإضافة حقل جديد إلى الجدول مع تعميمه سحابياً"""
@@ -742,78 +1140,433 @@ class DeleteColumnDialog(QDialog):
         return self.combo_cols.currentText()
 
 
+class RecordCardWidget(QFrame):
+    """بطاقة تفاعلية ذكية متطابقة 1:1 مع عرض البطاقات في لوحة الويب"""
+    def __init__(self, row, row_num, parent_hub, parent=None):
+        super().__init__(parent)
+        self.row = row
+        self.row_num = row_num
+        self.parent_hub = parent_hub
+        self.setObjectName("accessRecordCard")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self._init_ui()
+
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(6)
+
+        fields = extract_card_fields(self.row)
+        short_file = get_short_file_name(self.row.get("_adh_file", ""))
+        tbl = self.row.get("_adh_table", "")
+
+        # 1. الترويسة العليا للبطاقة
+        hdr = QHBoxLayout()
+        hdr.setSpacing(6)
+
+        lbl_num = QLabel(f"#{self.row_num}")
+        lbl_num.setObjectName("cardRecordNum")
+        hdr.addWidget(lbl_num)
+
+        if short_file:
+            lbl_file = QLabel(short_file)
+            lbl_file.setObjectName("cardRecordFileBadge")
+            hdr.addWidget(lbl_file)
+
+        if tbl:
+            icon, title = TABLE_DISPLAY_META.get(tbl, ("🏷️", tbl))
+            lbl_tbl = QLabel(f"{icon} {title}")
+            lbl_tbl.setObjectName("cardRecordTableBadge")
+            hdr.addWidget(lbl_tbl)
+
+        if fields["grade"]:
+            lbl_grade = QLabel(f"⭐ {fields['grade']}")
+            lbl_grade.setObjectName("cardRecordTableBadge")
+            hdr.addWidget(lbl_grade)
+
+        hdr.addStretch()
+
+        if fields["date_val"]:
+            lbl_date = QLabel(f"📅 {fields['date_val']}")
+            lbl_date.setObjectName("cardRecordDateBadge")
+            hdr.addWidget(lbl_date)
+
+        layout.addLayout(hdr)
+
+        # 2. جسم البطاقة (الاسم والنشاط والعنوان)
+        lbl_name = QLabel(fields["name"])
+        lbl_name.setObjectName("cardRecordName")
+        lbl_name.setWordWrap(True)
+        lbl_name.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        lbl_name.mousePressEvent = lambda e: self.parent_hub._show_record_details_by_data(self.row)
+        layout.addWidget(lbl_name)
+
+        if fields["commercial_name"]:
+            lbl_comm = QLabel(f"🏢 {fields['commercial_name']}")
+            lbl_comm.setObjectName("cardRecordCommercial")
+            lbl_comm.setWordWrap(True)
+            layout.addWidget(lbl_comm)
+
+        if fields["activity"]:
+            lbl_act = QLabel(f"💼 {fields['activity']}")
+            lbl_act.setObjectName("cardRecordActivity")
+            lbl_act.setWordWrap(True)
+            layout.addWidget(lbl_act)
+
+        if fields["address"]:
+            lbl_addr = QLabel(f"📍 {fields['address']}")
+            lbl_addr.setObjectName("cardRecordAddress")
+            lbl_addr.setWordWrap(True)
+            layout.addWidget(lbl_addr)
+
+        layout.addSpacing(4)
+
+        # 3. شريط الإجراءات السفلي (الاتصال والنسخ والتعديل)
+        footer = QHBoxLayout()
+        footer.setSpacing(6)
+
+        if fields["phone"]:
+            btn_call = QPushButton(f"📞 {fields['phone']}")
+            btn_call.setObjectName("btnCardCall")
+            btn_call.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            btn_call.setToolTip("اضغط لنسخ رقم الهاتف")
+            btn_call.clicked.connect(lambda: self._on_call_clicked(fields["phone"]))
+            footer.addWidget(btn_call)
+        else:
+            lbl_no_phone = QLabel("بدون هاتف")
+            lbl_no_phone.setStyleSheet("color: #98A2B3; font-size: 10px;")
+            footer.addWidget(lbl_no_phone)
+
+        footer.addStretch()
+
+        btn_eye = QPushButton("👁️")
+        btn_eye.setObjectName("btnCardQuickAction")
+        btn_eye.setToolTip("عرض تفاصيل القيد بالكامل")
+        btn_eye.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn_eye.clicked.connect(lambda: self.parent_hub._show_record_details_by_data(self.row))
+        footer.addWidget(btn_eye)
+
+        btn_copy = QPushButton("📋")
+        btn_copy.setObjectName("btnCardQuickAction")
+        btn_copy.setToolTip("نسخ بيانات القيد")
+        btn_copy.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn_copy.clicked.connect(self._copy_data)
+        footer.addWidget(btn_copy)
+
+        if getattr(self.parent_hub, "user_role", "data_entry") != "viewer":
+            btn_edit = QPushButton("✏️")
+            btn_edit.setObjectName("btnCardQuickAction")
+            btn_edit.setToolTip("تعديل هذا القيد")
+            btn_edit.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            btn_edit.clicked.connect(lambda: self.parent_hub._edit_record_by_data(self.row))
+            footer.addWidget(btn_edit)
+
+        if getattr(self.parent_hub, "user_role", "data_entry") == "admin":
+            btn_del = QPushButton("🗑️")
+            btn_del.setObjectName("btnCardQuickAction")
+            btn_del.setStyleSheet("QPushButton { color: #D92D20; border-color: #FECDCA; } QPushButton:hover { background: #FEF3F2; }")
+            btn_del.setToolTip("حذف هذا القيد")
+            btn_del.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            btn_del.clicked.connect(lambda: self.parent_hub._delete_record_by_data(self.row))
+            footer.addWidget(btn_del)
+
+        layout.addLayout(footer)
+
+    def _copy_data(self):
+        lines = [f"{k}: {v}" for k, v in self.row.items() if not k.startswith("_adh_") and v is not None and str(v).strip() != ""]
+        text = chr(10).join(lines)
+        clipboard = QApplication.clipboard()
+        if clipboard:
+            clipboard.setText(text)
+        QMessageBox.information(self, "تم النسخ", "تم نسخ بيانات القيد بنجاح إلى الحافظة!")
+
+    def _on_call_clicked(self, phone):
+        clipboard = QApplication.clipboard()
+        if clipboard:
+            clipboard.setText(phone)
+        QMessageBox.information(self, "رقم الهاتف", f"تم نسخ رقم الهاتف ({phone}) إلى الحافظة.")
+
+
 class RecordDetailsDialog(QDialog):
-    """نافذة لعرض التفاصيل الكاملة للقيد بشكل منسق ومقروء"""
-    def __init__(self, record, columns, title="تفاصيل القيد", parent=None):
+    """نافذة لعرض التفاصيل الكاملة للقيد بشكل منسق ومقروء متطابقة مع الويب"""
+    def __init__(self, record, columns, title="تفاصيل القيد", parent_hub=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.resize(560, 620)
+        self.resize(600, 680)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.record = record
+        self.columns = sort_columns_by_priority([c for c in columns if not c.startswith("_adh_")])
+        self.parent_hub = parent_hub
+        self._init_ui()
 
+    def _init_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setContentsMargins(18, 16, 18, 16)
         layout.setSpacing(12)
 
-        hdr = QLabel(f"📄 {title}")
-        hdr.setFont(QFont("IBM Plex Sans Arabic", 11, QFont.Weight.Bold))
-        hdr.setStyleSheet("color: #14372e; padding-bottom: 6px; border-bottom: 2px solid #c59b27;")
-        layout.addWidget(hdr)
+        fields = extract_card_fields(self.record)
 
+        # 1. الترويسة
+        hdr_frame = QFrame()
+        hdr_frame.setStyleSheet("background: #FFFFFF; border-bottom: 2px solid #c59b27; padding-bottom: 8px;")
+        hdr_lay = QHBoxLayout(hdr_frame)
+        hdr_lay.setContentsMargins(0, 0, 0, 0)
+
+        lbl_icon = QLabel("👁️")
+        lbl_icon.setFont(QFont("Segoe UI Emoji", 14))
+        hdr_lay.addWidget(lbl_icon)
+
+        hdr_info = QVBoxLayout()
+        hdr_info.setSpacing(2)
+        lbl_title = QLabel(fields["name"])
+        lbl_title.setFont(QFont("IBM Plex Sans Arabic", 11, QFont.Weight.Bold))
+        lbl_title.setStyleSheet("color: #14372e;")
+        hdr_info.addWidget(lbl_title)
+
+        f_name = self.record.get("_adh_file", "")
+        t_name = self.record.get("_adh_table", "")
+        lbl_sub = QLabel(f"الملف: {f_name}  •  الجدول: {t_name or 'الرئيسي'}")
+        lbl_sub.setFont(QFont("IBM Plex Sans Arabic", 9))
+        lbl_sub.setStyleSheet("color: #667085;")
+        hdr_info.addWidget(lbl_sub)
+        hdr_lay.addLayout(hdr_info, stretch=1)
+
+        layout.addWidget(hdr_frame)
+
+        # 2. شريط الإجراءات السريعة (اتصال، نسخ، تعديل)
+        actions_bar = QHBoxLayout()
+        actions_bar.setSpacing(8)
+
+        if fields["phone"]:
+            btn_call = QPushButton(f"📞 اتصال: {fields['phone']}")
+            btn_call.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+            btn_call.setStyleSheet("background: #027A48; color: #FFFFFF; border-radius: 6px; padding: 6px 14px;")
+            btn_call.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            btn_call.clicked.connect(lambda: self._copy_and_notify(fields["phone"], "تم نسخ رقم الهاتف!"))
+            actions_bar.addWidget(btn_call)
+
+        btn_copy = QPushButton("📋 نسخ كامل البيانات")
+        btn_copy.setFont(QFont("IBM Plex Sans Arabic", 9))
+        btn_copy.setStyleSheet("background: #FFFFFF; color: #344054; border: 1px solid #D0D5DD; border-radius: 6px; padding: 6px 14px;")
+        btn_copy.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn_copy.clicked.connect(self._copy_all)
+        actions_bar.addWidget(btn_copy)
+
+        actions_bar.addStretch()
+
+        if self.parent_hub and getattr(self.parent_hub, "user_role", "data_entry") != "viewer":
+            btn_edit = QPushButton("✏️ تعديل القيد")
+            btn_edit.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+            btn_edit.setStyleSheet("background: #14372e; color: #FFFFFF; border-radius: 6px; padding: 6px 14px;")
+            btn_edit.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            btn_edit.clicked.connect(self._open_edit)
+            actions_bar.addWidget(btn_edit)
+
+        layout.addLayout(actions_bar)
+
+        # 3. شبكة تفاصيل الحقول
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea { border: 1px solid #E4E7EC; border-radius: 8px; background: #FFFFFF; }")
+        scroll.setStyleSheet("QScrollArea { border: 1px solid #E4E7EC; border-radius: 8px; background: #F7F8FA; }")
 
-        card = QWidget()
-        card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(14, 14, 14, 14)
-        card_layout.setSpacing(8)
+        grid_widget = QWidget()
+        grid_lay = QGridLayout(grid_widget)
+        grid_lay.setContentsMargins(10, 10, 10, 10)
+        grid_lay.setSpacing(8)
 
-        for col in columns:
-            val = record.get(col, "")
-            val_str = "—" if val is None or str(val).strip() == "" else str(val).strip()
+        self.empty_details_boxes = []
+        self.show_empty_details = False
+
+        filled_cols = []
+        empty_cols = []
+        for col in self.columns:
+            val = self.record.get(col, "")
+            val_str = "" if val is None else str(val).strip()
+            if val_str != "" and val_str.lower() != "none" and val_str != "—":
+                filled_cols.append(col)
+            else:
+                empty_cols.append(col)
+
+        if empty_cols and filled_cols:
+            details_bar = QHBoxLayout()
+            lbl_info = QLabel(f"📌 عرض الحقول التي تحتوي بيانات فقط ({len(filled_cols)})")
+            lbl_info.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+            lbl_info.setStyleSheet("color: #14372e; background: #EDF5F2; padding: 4px 10px; border-radius: 6px; border: 1px solid #B8D8CC;")
+            details_bar.addWidget(lbl_info)
+            details_bar.addStretch()
+
+            self.btn_toggle_details_empty = QPushButton(f"➕ إظهار باقي الحقول الفارغة ({len(empty_cols)})")
+            self.btn_toggle_details_empty.setFont(QFont("IBM Plex Sans Arabic", 9))
+            self.btn_toggle_details_empty.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            self.btn_toggle_details_empty.setStyleSheet("""
+                QPushButton {
+                    background: #F8F9FA;
+                    color: #344054;
+                    border: 1px dashed #98A2B3;
+                    border-radius: 6px;
+                    padding: 4px 12px;
+                }
+                QPushButton:hover {
+                    background: #EDF5F2;
+                    color: #14372e;
+                    border-color: #14372e;
+                }
+            """)
+            self.btn_toggle_details_empty.clicked.connect(self._toggle_empty_details)
+            details_bar.addWidget(self.btn_toggle_details_empty)
+            layout.addLayout(details_bar)
+
+        r_idx = 0
+        c_idx = 0
+        for col in filled_cols:
+            val = self.record.get(col, "")
+            val_str = str(val).strip()
+            is_notes = ("Field" in col) or ("ملاحظ" in col) or ("Notes" in col)
 
             row_box = QFrame()
-            row_box.setStyleSheet("background: #F8F9FA; border: 1px solid #E4E7EC; border-radius: 6px; padding: 6px 10px;")
-            r_lay = QVBoxLayout(row_box)
-            r_lay.setContentsMargins(0, 0, 0, 0)
-            r_lay.setSpacing(2)
+            if is_notes:
+                row_box.setStyleSheet("background: #FFFBEB; border: 1px solid #FCD34D; border-radius: 8px; padding: 6px 10px;")
+            else:
+                row_box.setStyleSheet("background: #FFFFFF; border: 1px solid #E4E7EC; border-radius: 8px; padding: 6px 10px;")
 
+            r_box_lay = QVBoxLayout(row_box)
+            r_box_lay.setContentsMargins(0, 0, 0, 0)
+            r_box_lay.setSpacing(2)
+
+            k_row = QHBoxLayout()
             lbl_k = QLabel(col)
-            lbl_k.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+            lbl_k.setFont(QFont("IBM Plex Sans Arabic", 8, QFont.Weight.Bold))
             lbl_k.setStyleSheet("color: #667085;")
+            k_row.addWidget(lbl_k)
+
+            if is_notes:
+                lbl_badge = QLabel("ملاحظات هامة")
+                lbl_badge.setFont(QFont("IBM Plex Sans Arabic", 7, QFont.Weight.Bold))
+                lbl_badge.setStyleSheet("background: #FEF3C7; color: #92400E; padding: 1px 4px; border-radius: 3px;")
+                k_row.addWidget(lbl_badge)
+            k_row.addStretch()
+            r_box_lay.addLayout(k_row)
 
             lbl_v = QLabel(val_str)
-            lbl_v.setFont(QFont("IBM Plex Sans Arabic", 10))
+            lbl_v.setFont(QFont("IBM Plex Sans Arabic", 9))
             lbl_v.setStyleSheet("color: #1B1F24;")
             lbl_v.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             lbl_v.setWordWrap(True)
+            r_box_lay.addWidget(lbl_v)
 
-            r_lay.addWidget(lbl_k)
-            r_lay.addWidget(lbl_v)
-            card_layout.addWidget(row_box)
+            if is_notes:
+                if c_idx == 1:
+                    r_idx += 1
+                    c_idx = 0
+                grid_lay.addWidget(row_box, r_idx, 0, 1, 2)
+                r_idx += 1
+                c_idx = 0
+            else:
+                grid_lay.addWidget(row_box, r_idx, c_idx)
+                c_idx += 1
+                if c_idx >= 2:
+                    c_idx = 0
+                    r_idx += 1
 
-        scroll.setWidget(card)
+        if c_idx == 1:
+            r_idx += 1
+            c_idx = 0
+
+        for col in empty_cols:
+            row_box = QFrame()
+            row_box.setStyleSheet("background: #FAFBFB; border: 1px solid #F2F4F7; border-radius: 8px; padding: 6px 10px;")
+            r_box_lay = QVBoxLayout(row_box)
+            r_box_lay.setContentsMargins(0, 0, 0, 0)
+            r_box_lay.setSpacing(2)
+
+            k_row = QHBoxLayout()
+            lbl_k = QLabel(col)
+            lbl_k.setFont(QFont("IBM Plex Sans Arabic", 8, QFont.Weight.Bold))
+            lbl_k.setStyleSheet("color: #98A2B3;")
+            k_row.addWidget(lbl_k)
+            k_row.addStretch()
+            r_box_lay.addLayout(k_row)
+
+            lbl_v = QLabel("—")
+            lbl_v.setFont(QFont("IBM Plex Sans Arabic", 9))
+            lbl_v.setStyleSheet("color: #98A2B3;")
+            r_box_lay.addWidget(lbl_v)
+
+            row_box.hide()
+            self.empty_details_boxes.append(row_box)
+
+            grid_lay.addWidget(row_box, r_idx, c_idx)
+            c_idx += 1
+            if c_idx >= 2:
+                c_idx = 0
+                r_idx += 1
+
+        scroll.setWidget(grid_widget)
         layout.addWidget(scroll, stretch=1)
 
-        btn_close = QPushButton("إغلاق")
-        btn_close.setFont(QFont("IBM Plex Sans Arabic", 9))
+        # 4. زر الإغلاق السفلي
+        btn_close = QPushButton("إغلاق التفاصيل")
+        btn_close.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
         btn_close.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        btn_close.setStyleSheet("""
-            QPushButton {
-                background: #14372e;
-                color: #FFFFFF;
-                border-radius: 6px;
-                padding: 8px 24px;
-                font-weight: bold;
-            }
-            QPushButton:hover { background: #1b493d; }
-        """)
+        btn_close.setStyleSheet("background: #FFFFFF; color: #344054; border: 1px solid #D0D5DD; border-radius: 6px; padding: 8px 24px;")
         btn_close.clicked.connect(self.accept)
 
-        btn_box = QHBoxLayout()
-        btn_box.addStretch()
-        btn_box.addWidget(btn_close)
-        layout.addLayout(btn_box)
+        b_box = QHBoxLayout()
+        b_box.addStretch()
+        b_box.addWidget(btn_close)
+        layout.addLayout(b_box)
+
+    def _toggle_empty_details(self):
+        self.show_empty_details = not self.show_empty_details
+        for box in self.empty_details_boxes:
+            box.setVisible(self.show_empty_details)
+        if self.show_empty_details:
+            self.btn_toggle_details_empty.setText(f"➖ إخفاء الحقول الفارغة ({len(self.empty_details_boxes)})")
+            self.btn_toggle_details_empty.setStyleSheet("""
+                QPushButton {
+                    background: #FEF3C7;
+                    color: #92400E;
+                    border: 1px solid #FCD34D;
+                    border-radius: 6px;
+                    padding: 4px 12px;
+                    font-weight: bold;
+                }
+            """)
+        else:
+            self.btn_toggle_details_empty.setText(f"➕ إظهار باقي الحقول الفارغة ({len(self.empty_details_boxes)})")
+            self.btn_toggle_details_empty.setStyleSheet("""
+                QPushButton {
+                    background: #F8F9FA;
+                    color: #344054;
+                    border: 1px dashed #98A2B3;
+                    border-radius: 6px;
+                    padding: 4px 12px;
+                }
+                QPushButton:hover {
+                    background: #EDF5F2;
+                    color: #14372e;
+                    border-color: #14372e;
+                }
+            """)
+
+    def _copy_all(self):
+        lines = [f"{k}: {v}" for k, v in self.record.items() if not k.startswith("_adh_") and v is not None and str(v).strip() != ""]
+        text = chr(10).join(lines)
+        clipboard = QApplication.clipboard()
+        if clipboard:
+            clipboard.setText(text)
+        QMessageBox.information(self, "تم النسخ", "تم نسخ بيانات القيد بالكامل بنجاح!")
+
+    def _copy_and_notify(self, text, msg):
+        clipboard = QApplication.clipboard()
+        if clipboard:
+            clipboard.setText(text)
+        QMessageBox.information(self, "تم النسخ", msg)
+
+    def _open_edit(self):
+        self.accept()
+        if self.parent_hub:
+            self.parent_hub._edit_record_by_data(self.record)
 
 
 class AccessHubWidget(QWidget):
@@ -844,217 +1597,343 @@ class AccessHubWidget(QWidget):
         self.date_columns = []
         self.current_data = None
         self.loader_thread = None
+        self.view_mode = "table"
 
         self._build_ui()
         self.load_data()
 
     def _build_ui(self):
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(10, 8, 10, 8)
-        main_layout.setSpacing(6)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
         # ========================================================
-        # 1. شريط الملاحة والمصدر الموحد (Compact Nav Bar - Height ~40px)
+        # 1. شريط الترويسة الرسمي (Desktop Header - Height 44px) مطابق للويب 100%
         # ========================================================
-        nav_frame = QFrame()
-        nav_frame.setStyleSheet("""
+        header_frame = QFrame()
+        header_frame.setFixedHeight(44)
+        header_frame.setStyleSheet("""
             QFrame {
                 background: #FFFFFF;
-                border: 1px solid #E4E7EC;
-                border-right: 4px solid #14372e;
-                border-radius: 8px;
+                border-bottom: 1px solid #E4E7EC;
             }
         """)
-        nav_layout = QHBoxLayout(nav_frame)
-        nav_layout.setContentsMargins(8, 4, 8, 4)
-        nav_layout.setSpacing(8)
+        hl = QHBoxLayout(header_frame)
+        hl.setContentsMargins(16, 0, 16, 0)
+        hl.setSpacing(10)
 
-        # عنوان المركز المدمج
-        lbl_title = QLabel("🏛️ مركز بيانات Access")
+        # أيقونة قاعدة البيانات بلون الغرفة
+        lbl_db_icon = QLabel("🗄️")
+        lbl_db_icon.setFixedSize(28, 28)
+        lbl_db_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_db_icon.setStyleSheet("background: #14372e; color: #ecd58a; border-radius: 7px; font-size: 13px; font-weight: bold;")
+        hl.addWidget(lbl_db_icon)
+
+        # عنوان المركز الموحد
+        lbl_title = QLabel("مركز قواعد بيانات Access الموحد")
         lbl_title.setFont(QFont("IBM Plex Sans Arabic", 11, QFont.Weight.Bold))
-        lbl_title.setStyleSheet("color: #14372e; border: none; background: transparent;")
-        nav_layout.addWidget(lbl_title)
+        lbl_title.setStyleSheet("color: #1B1F24; font-weight: 700; border: none; background: transparent;")
+        hl.addWidget(lbl_title)
 
-        # فاصل
-        sep1 = QFrame()
-        sep1.setFrameShape(QFrame.Shape.VLine)
-        sep1.setStyleSheet("color: #E4E7EC; max-height: 22px;")
-        nav_layout.addWidget(sep1)
+        # شارة إجمالي السجلات
+        self.stat_badge = QLabel("92,120 قيد")
+        self.stat_badge.setFont(QFont("IBM Plex Sans Arabic", 8, QFont.Weight.Bold))
+        self.stat_badge.setStyleSheet("background: #EDF5F2; color: #14372e; border: 1px solid #CBE3DA; border-radius: 12px; padding: 2px 9px;")
+        hl.addWidget(self.stat_badge)
 
-        # اختيار القسم / الملف (Sleek QComboBox)
-        lbl_sec = QLabel("📁 القسم:")
-        lbl_sec.setFont(QFont("IBM Plex Sans Arabic", 10, QFont.Weight.Bold))
-        lbl_sec.setStyleSheet("color: #344054; border: none; background: transparent;")
-        nav_layout.addWidget(lbl_sec)
+        # شارة الاتصال السحابي المباشر
+        lbl_live = QLabel("● سحابي ومباشر")
+        lbl_live.setFont(QFont("IBM Plex Sans Arabic", 8, QFont.Weight.Bold))
+        lbl_live.setStyleSheet("background: #ECFDF3; color: #12B76A; border: 1px solid #A6F4C5; border-radius: 12px; padding: 2px 8px;")
+        hl.addWidget(lbl_live)
 
-        self.combo_file = QComboBox()
-        self.combo_file.setFont(QFont("IBM Plex Sans Arabic", 10))
-        self.combo_file.setMinimumWidth(280)
-        self.combo_file.setStyleSheet("""
-            QComboBox {
-                background: #F8F9FA;
-                border: 1.5px solid #D0D5DD;
-                border-radius: 6px;
+        hl.addStretch()
+
+        # شارة رتبة وصلاحية الجهاز الحالي
+        self.user_role = "data_entry"
+        self.role_badge = QLabel("👑 مدير نظام (Super Admin)")
+        self.role_badge.setFont(QFont("IBM Plex Sans Arabic", 8, QFont.Weight.Bold))
+        self.role_badge.setStyleSheet("background: #FEF3F2; color: #B42318; border: 1px solid #FECDCA; border-radius: 12px; padding: 3px 10px;")
+        hl.addWidget(self.role_badge)
+
+        # زر الانتقال إلى لوحة تحكم الإدارة
+        self.btn_go_admin = QPushButton("🛡️ لوحة تحكم الإدارة")
+        self.btn_go_admin.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_go_admin.setStyleSheet("""
+            QPushButton {
+                background: #14372e;
+                color: #FFFFFF;
+                border: none;
+                border-radius: 8px;
                 padding: 5px 12px;
-                color: #14372e;
+                font-family: 'IBM Plex Sans Arabic', 'Cairo', 'Segoe UI';
+                font-size: 11.5px;
                 font-weight: bold;
+            }
+            QPushButton:hover { background: #1a473b; }
+        """)
+        self.btn_go_admin.clicked.connect(self._go_to_admin)
+        hl.addWidget(self.btn_go_admin)
+
+        # زر التحديث السريع
+        self.btn_refresh = QPushButton("🔄")
+        self.btn_refresh.setFixedSize(30, 30)
+        self.btn_refresh.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.btn_refresh.setToolTip("تحديث فوري للسجلات من السحابة")
+        self.btn_refresh.setStyleSheet("""
+            QPushButton {
+                background: #FFFFFF;
+                border: 1px solid #E4E7EC;
+                border-radius: 8px;
+                color: #667085;
                 font-size: 13px;
             }
-            QComboBox:hover { border-color: #14372e; background: #FFFFFF; }
+            QPushButton:hover { background: #F7F8FA; color: #14372e; border-color: #14372e; }
+        """)
+        self.btn_refresh.clicked.connect(self.load_data)
+        hl.addWidget(self.btn_refresh)
+
+        main_layout.addWidget(header_frame)
+
+        # ========================================================
+        # 2. شريط التنقل للأقسام والفئات (Navigator - Height 42px سطر واحد) مطابق للويب
+        # ========================================================
+        nav_row_frame = QFrame()
+        nav_row_frame.setFixedHeight(42)
+        nav_row_frame.setStyleSheet("""
+            QFrame {
+                background: #FFFFFF;
+                border-bottom: 1px solid #E4E7EC;
+            }
+        """)
+        nl = QHBoxLayout(nav_row_frame)
+        nl.setContentsMargins(16, 0, 16, 0)
+        nl.setSpacing(10)
+
+        lbl_sec = QLabel("القسم:")
+        lbl_sec.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+        lbl_sec.setStyleSheet("color: #667085; border: none; background: transparent;")
+        nl.addWidget(lbl_sec)
+
+        self.combo_file = QComboBox()
+        self.combo_file.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+        self.combo_file.setStyleSheet("""
+            QComboBox {
+                background: #F7F8FA;
+                border: 1px solid #D0D5DD;
+                border-radius: 8px;
+                padding: 4px 10px;
+                color: #14372e;
+                font-size: 11.5px;
+                font-weight: bold;
+                min-width: 260px;
+                max-width: 340px;
+            }
+            QComboBox:hover { border-color: #14372e; }
             QComboBox QAbstractItemView {
                 background: #FFFFFF;
                 border: 1px solid #D0D5DD;
                 selection-background-color: #EDF5F2;
                 selection-color: #14372e;
-                padding: 6px;
-                font-size: 13px;
+                padding: 4px;
+                font-size: 11.5px;
             }
         """)
         self.combo_file.currentIndexChanged.connect(self._on_file_combo_changed)
-        nav_layout.addWidget(self.combo_file)
+        nl.addWidget(self.combo_file)
 
-        nav_layout.addStretch()
-
-        # شارة إجمالي السجلات وزر التحديث المدمج
-        self.stat_badge = QLabel("88,987 قيد")
-        self.stat_badge.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
-        self.stat_badge.setStyleSheet("""
-            background: #EDF5F2;
-            color: #14372e;
-            padding: 5px 12px;
-            border-radius: 6px;
-            border: 1px solid #CBE3DA;
-        """)
-        nav_layout.addWidget(self.stat_badge)
-
-        self.btn_refresh = QPushButton("🔄 تحديث")
-        self.btn_refresh.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
-        self.btn_refresh.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.btn_refresh.setStyleSheet("""
-            QPushButton {
-                background: #14372e;
-                color: #FFFFFF;
-                padding: 6px 16px;
-                border-radius: 6px;
-            }
-            QPushButton:hover { background: #1b493d; }
-        """)
-        self.btn_refresh.clicked.connect(self.load_data)
-        nav_layout.addWidget(self.btn_refresh)
-
-        main_layout.addWidget(nav_frame)
-
-        # ========================================================
-        # 2. شريط الأصناف والجداول الفرعية الواسع والواضح (توزيع شبكي ذكي)
-        # ========================================================
-        tables_frame = QFrame()
-        tables_frame.setStyleSheet("""
-            QFrame {
-                background: #FFFFFF;
-                border: 1px solid #E4E7EC;
-                border-radius: 8px;
-            }
-        """)
-        tables_layout = QHBoxLayout(tables_frame)
-        tables_layout.setContentsMargins(12, 6, 12, 6)
-        tables_layout.setSpacing(12)
-
-        self.lbl_tbl = QLabel("🏷️ الأصناف والجداول:")
-        self.lbl_tbl.setFont(QFont("IBM Plex Sans Arabic", 10, QFont.Weight.Bold))
-        self.lbl_tbl.setMinimumWidth(155)
-        self.lbl_tbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.lbl_tbl.setStyleSheet("color: #14372e; border: none; background: transparent; padding-right: 4px;")
-        tables_layout.addWidget(self.lbl_tbl)
-
-        # حاوية أزرار الأصناف بتوزيع شبكي مرن يتسع لكافة الأصناف بالكامل دون أي قص أو اختفاء
+        # شريط الفئات الـ 11 الأفقي المنسق في سطر واحد قابل للتمرير بسلاسة
         self.subtables_scroll = QScrollArea()
+        self.subtables_scroll.setFixedHeight(38)
         self.subtables_scroll.setWidgetResizable(True)
         self.subtables_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.subtables_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.subtables_scroll.setStyleSheet("""
             QScrollArea { border: none; background: transparent; }
             QScrollBar:horizontal {
-                height: 5px;
-                background: #F2F4F7;
-                border-radius: 2px;
-                margin: 0px;
+                height: 4px;
+                background: transparent;
             }
             QScrollBar::handle:horizontal {
                 background: #CBE3DA;
                 border-radius: 2px;
-                min-width: 25px;
             }
             QScrollBar::handle:horizontal:hover {
                 background: #14372e;
-            }
-            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
-                width: 0px;
             }
         """)
 
         self.subtables_container = QWidget()
         self.subtables_container.setStyleSheet("background: transparent; border: none;")
-        self.subtables_grid = QGridLayout(self.subtables_container)
-        self.subtables_grid.setContentsMargins(0, 0, 0, 0)
-        self.subtables_grid.setHorizontalSpacing(8)
-        self.subtables_grid.setVerticalSpacing(6)
+        self.subtables_layout = QHBoxLayout(self.subtables_container)
+        self.subtables_layout.setContentsMargins(0, 2, 0, 2)
+        self.subtables_layout.setSpacing(6)
+        self.subtables_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinAndMaxSize)
+        self.subtables_container.setSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.Preferred)
         self.subtable_btn_group = QButtonGroup(self)
         self.subtable_btn_group.setExclusive(True)
 
+        # دعم تمرير شريط الأصناف بالماوس أفقياً بسلاسة
+        def _on_subtables_wheel(event):
+            delta = event.angleDelta().y() or event.angleDelta().x()
+            sb = self.subtables_scroll.horizontalScrollBar()
+            sb.setValue(sb.value() - delta)
+            event.accept()
+        self.subtables_scroll.wheelEvent = _on_subtables_wheel
+
         self.subtables_scroll.setWidget(self.subtables_container)
-        tables_layout.addWidget(self.subtables_scroll, stretch=1)
+        nl.addWidget(self.subtables_scroll, stretch=1)
 
-        main_layout.addWidget(tables_frame)
+        main_layout.addWidget(nav_row_frame)
 
         # ========================================================
-        # 2. شريط البحث والعمليات السريعة (Actions Bar - Height ~38px)
+        # 3. شريط البحث والعمليات السريعة (Toolbar - Height 46px سطر واحد) مطابق للويب
         # ========================================================
-        action_frame = QFrame()
-        action_frame.setStyleSheet("""
+        toolbar_frame = QFrame()
+        toolbar_frame.setFixedHeight(46)
+        toolbar_frame.setStyleSheet("""
             QFrame {
-                background: #FFFFFF;
-                border: 1px solid #E4E7EC;
-                border-radius: 8px;
+                background: #F7F8FA;
+                border-bottom: 1px solid #E4E7EC;
             }
         """)
-        action_layout = QHBoxLayout(action_frame)
-        action_layout.setContentsMargins(6, 3, 6, 3)
-        action_layout.setSpacing(8)
+        tl = QHBoxLayout(toolbar_frame)
+        tl.setContentsMargins(16, 0, 16, 0)
+        tl.setSpacing(12)
 
         # حقل البحث الرئيسي
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("🔍 بحث فوري في كافة الحقول والسجلات والأسماء والشركات...")
+        self.search_input.setPlaceholderText("🔍 بحث فوري بالاسم، النشاط، العنوان، الهاتف...")
         self.search_input.setClearButtonEnabled(True)
         self.search_input.setFont(QFont("IBM Plex Sans Arabic", 9))
+        self.search_input.setMinimumWidth(280)
+        self.search_input.setMaximumWidth(380)
         self.search_input.setStyleSheet("""
             QLineEdit {
-                background: #F8F9FA;
+                background: #FFFFFF;
                 border: 1px solid #D0D5DD;
-                border-radius: 6px;
+                border-radius: 8px;
                 padding: 6px 12px;
-                font-size: 12px;
+                font-size: 11.5px;
                 color: #1B1F24;
             }
-            QLineEdit:focus { border: 1.5px solid #14372e; background: #FFFFFF; }
+            QLineEdit:focus { border: 1.5px solid #14372e; }
         """)
-        # مؤقت تأخير البحث لمنع أي ثقل أثناء الكتابة (Debounce 250ms)
         self.search_timer = QTimer(self)
         self.search_timer.setSingleShot(True)
         self.search_timer.setInterval(250)
         self.search_timer.timeout.connect(self._execute_search)
-
         self.search_input.textChanged.connect(self._on_search_text_changed)
         self.search_input.returnPressed.connect(self._execute_search)
-        action_layout.addWidget(self.search_input, stretch=1)
+        tl.addWidget(self.search_input)
 
-        # شارة الصلاحية الحالية للجهاز (RBAC Engine)
-        self.user_role = "data_entry"
-        self.role_badge = QLabel("✏️ مدخل بيانات")
-        self.role_badge.setFont(QFont("IBM Plex Sans Arabic", 8, QFont.Weight.Bold))
-        self.role_badge.setStyleSheet("background: #D1FAE5; color: #065F46; border: 1px solid #6EE7B7; border-radius: 6px; padding: 4px 8px;")
-        action_layout.addWidget(self.role_badge)
+        # عداد نتائج البحث
+        self.lbl_matches_count = QLabel("النتائج: 92,137")
+        self.lbl_matches_count.setFont(QFont("IBM Plex Sans Arabic", 8, QFont.Weight.Bold))
+        self.lbl_matches_count.setStyleSheet("color: #667085; font-size: 11px; border: none; background: transparent;")
+        tl.addWidget(self.lbl_matches_count)
 
-        # أزرار الإجراءات الأساسية (تم سحب زر الحذف لحماية البيانات وحصر الحذف في لوحة الأدمن)
+        # محدد فرز التواريخ الموحد (الأحدث | الأقدم | الأصلي)
+        sort_frame = QFrame()
+        sort_frame.setStyleSheet("background: #FFFFFF; border: 1px solid #D0D5DD; border-radius: 8px;")
+        sfl = QHBoxLayout(sort_frame)
+        sfl.setContentsMargins(2, 2, 2, 2)
+        sfl.setSpacing(2)
+
+        self.sort_btn_group = QButtonGroup(self)
+        self.sort_btn_group.setExclusive(True)
+
+        sort_btn_style = """
+            QPushButton {
+                background: transparent;
+                color: #344054;
+                border: none;
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-family: 'IBM Plex Sans Arabic', 'Cairo', 'Segoe UI';
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QPushButton:hover { background: #F7F8FA; }
+            QPushButton:checked {
+                background: #14372e;
+                color: #FFFFFF;
+                font-weight: bold;
+            }
+        """
+
+        self.btn_sort_desc = QPushButton("⬇️ الأحدث")
+        self.btn_sort_desc.setCheckable(True)
+        self.btn_sort_desc.setStyleSheet(sort_btn_style)
+        self.btn_sort_desc.clicked.connect(lambda: self._set_sort_mode("desc"))
+        self.sort_btn_group.addButton(self.btn_sort_desc)
+        sfl.addWidget(self.btn_sort_desc)
+
+        self.btn_sort_asc = QPushButton("⬆️ الأقدم")
+        self.btn_sort_asc.setCheckable(True)
+        self.btn_sort_asc.setStyleSheet(sort_btn_style)
+        self.btn_sort_asc.clicked.connect(lambda: self._set_sort_mode("asc"))
+        self.sort_btn_group.addButton(self.btn_sort_asc)
+        sfl.addWidget(self.btn_sort_asc)
+
+        self.btn_sort_none = QPushButton("الأصلي")
+        self.btn_sort_none.setCheckable(True)
+        self.btn_sort_none.setChecked(True)
+        self.btn_sort_none.setStyleSheet(sort_btn_style)
+        self.btn_sort_none.clicked.connect(lambda: self._set_sort_mode("none"))
+        self.sort_btn_group.addButton(self.btn_sort_none)
+        sfl.addWidget(self.btn_sort_none)
+
+        tl.addWidget(sort_frame)
+
+        # تبديل وضع العرض (جدول | بطاقات)
+        view_frame = QFrame()
+        view_frame.setStyleSheet("background: #FFFFFF; border: 1px solid #D0D5DD; border-radius: 8px;")
+        vfl = QHBoxLayout(view_frame)
+        vfl.setContentsMargins(2, 2, 2, 2)
+        vfl.setSpacing(2)
+
+        self.view_btn_group = QButtonGroup(self)
+        self.view_btn_group.setExclusive(True)
+
+        view_btn_style = """
+            QPushButton {
+                background: transparent;
+                color: #667085;
+                border: none;
+                border-radius: 6px;
+                padding: 4px 10px;
+                font-family: 'IBM Plex Sans Arabic', 'Cairo', 'Segoe UI';
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QPushButton:hover { background: #F7F8FA; }
+            QPushButton:checked {
+                background: #14372e;
+                color: #FFFFFF;
+                font-weight: bold;
+            }
+        """
+
+        self.btn_view_table = QPushButton("目 جدول")
+        self.btn_view_table.setCheckable(True)
+        self.btn_view_table.setChecked(True)
+        self.btn_view_table.setStyleSheet(view_btn_style)
+        self.btn_view_table.clicked.connect(lambda: self._set_view_mode("table"))
+        self.view_btn_group.addButton(self.btn_view_table)
+        vfl.addWidget(self.btn_view_table)
+
+        self.btn_view_cards = QPushButton("田 بطاقات")
+        self.btn_view_cards.setCheckable(True)
+        self.btn_view_cards.setStyleSheet(view_btn_style)
+        self.btn_view_cards.clicked.connect(lambda: self._set_view_mode("cards"))
+        self.view_btn_group.addButton(self.btn_view_cards)
+        vfl.addWidget(self.btn_view_cards)
+
+        tl.addWidget(view_frame)
+        tl.addStretch()
+
+        # أزرار الإجراءات
         self.btn_add = QPushButton("➕ إضافة قيد")
         self.btn_add.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
         self.btn_add.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
@@ -1062,67 +1941,193 @@ class AccessHubWidget(QWidget):
             QPushButton {
                 background: #14372e;
                 color: #FFFFFF;
-                border-radius: 6px;
+                border: none;
+                border-radius: 8px;
                 padding: 6px 14px;
+                font-size: 11.5px;
+                font-weight: bold;
             }
-            QPushButton:hover { background: #1b493d; }
+            QPushButton:hover { background: #1a473b; }
         """)
         self.btn_add.clicked.connect(self._on_add_clicked)
-        action_layout.addWidget(self.btn_add)
+        tl.addWidget(self.btn_add)
 
         self.btn_edit = QPushButton("✏️ تعديل")
         self.btn_edit.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
         self.btn_edit.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.btn_edit.setStyleSheet("""
             QPushButton {
-                background: #F7F8FA;
+                background: #FFFFFF;
                 color: #14372e;
                 border: 1px solid #D0D5DD;
-                border-radius: 6px;
-                padding: 6px 12px;
+                border-radius: 8px;
+                padding: 6px 14px;
+                font-size: 11.5px;
+                font-weight: bold;
             }
-            QPushButton:hover { background: #E4E7EC; }
+            QPushButton:hover {
+                background: #F7F8FA;
+                border-color: #14372e;
+            }
         """)
         self.btn_edit.clicked.connect(self._on_edit_clicked)
-        action_layout.addWidget(self.btn_edit)
+        tl.addWidget(self.btn_edit)
 
-        self.btn_export = QPushButton("📥 تصدير Excel")
-        self.btn_export.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+        self.btn_export = QPushButton("📥 Excel")
+        self.btn_export.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.DemiBold))
         self.btn_export.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.btn_export.setStyleSheet("""
             QPushButton {
                 background: #FFFFFF;
                 color: #344054;
                 border: 1px solid #D0D5DD;
-                border-radius: 6px;
+                border-radius: 8px;
                 padding: 6px 12px;
+                font-size: 11.5px;
+                font-weight: 600;
             }
-            QPushButton:hover { background: #F2F4F7; }
+            QPushButton:hover { background: #F7F8FA; }
         """)
         self.btn_export.clicked.connect(self._on_export_clicked)
-        action_layout.addWidget(self.btn_export)
+        tl.addWidget(self.btn_export)
 
-        # قائمة أدوات الحقول والفرز المتقدمة (Menu Button)
-        self.btn_tools = QPushButton("⚙️ خيارات متقدمة ▾")
-        self.btn_tools.setFont(QFont("IBM Plex Sans Arabic", 9))
-        self.btn_tools.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.btn_tools.setStyleSheet("""
-            QPushButton {
-                background: #F8F9FA;
-                color: #475467;
-                border: 1px solid #D0D5DD;
-                border-radius: 6px;
-                padding: 6px 10px;
-            }
-            QPushButton:hover { background: #E4E7EC; color: #101828; }
-        """)
-        self.btn_tools.clicked.connect(self._open_tools_menu)
-        action_layout.addWidget(self.btn_tools)
-
-        main_layout.addWidget(action_frame)
+        main_layout.addWidget(toolbar_frame)
 
         # ========================================================
-        # 3. الجدول الرئيسي للبيانات (Main Data Grid - يغطي 80% من الشاشة)
+        # 4. شريط تمرير الحقول العرضي بالماوس (Horizontal Field Slider - Height 36px)
+        # ========================================================
+        self.hnav_frame = QFrame()
+        self.hnav_frame.setObjectName("horizontalFieldNavBar")
+        self.hnav_frame.setFixedHeight(36)
+        self.hnav_frame.setStyleSheet("""
+            QFrame#horizontalFieldNavBar {
+                background: #FFFFFF;
+                border-bottom: 1px solid #E4E7EC;
+            }
+        """)
+        hnav_layout = QHBoxLayout(self.hnav_frame)
+        hnav_layout.setContentsMargins(16, 0, 16, 0)
+        hnav_layout.setSpacing(6)
+
+        lbl_hnav = QLabel("تمرير الحقول:")
+        lbl_hnav.setFont(QFont("IBM Plex Sans Arabic", 8, QFont.Weight.Bold))
+        lbl_hnav.setStyleSheet("color: #667085; background: transparent; border: none;")
+        hnav_layout.addWidget(lbl_hnav)
+
+        btn_field_style = """
+            QPushButton {
+                background: #F7F8FA;
+                border: 1px solid #E4E7EC;
+                border-radius: 6px;
+                padding: 3px 8px;
+                color: #344054;
+                font-family: 'IBM Plex Sans Arabic', 'Cairo';
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: #EDF5F2;
+                border-color: #14372e;
+                color: #14372e;
+            }
+        """
+
+        btn_first_col = QPushButton(">> أول الحقول")
+        btn_first_col.setStyleSheet(btn_field_style)
+        btn_first_col.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn_first_col.clicked.connect(lambda: self.table_widget.horizontalScrollBar().setValue(0))
+        hnav_layout.addWidget(btn_first_col)
+
+        btn_scroll_right = QPushButton("> يمين")
+        btn_scroll_right.setStyleSheet(btn_field_style)
+        btn_scroll_right.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn_scroll_right.clicked.connect(lambda: self._scroll_columns(-300))
+        hnav_layout.addWidget(btn_scroll_right)
+
+        btn_scroll_left = QPushButton("يسار <")
+        btn_scroll_left.setStyleSheet(btn_field_style)
+        btn_scroll_left.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn_scroll_left.clicked.connect(lambda: self._scroll_columns(300))
+        hnav_layout.addWidget(btn_scroll_left)
+
+        btn_last_col = QPushButton("آخر الحقول <<")
+        btn_last_col.setStyleSheet(btn_field_style)
+        btn_last_col.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn_last_col.clicked.connect(lambda: self.table_widget.horizontalScrollBar().setValue(self.table_widget.horizontalScrollBar().maximum()))
+        hnav_layout.addWidget(btn_last_col)
+
+        # منزلق السحب التفاعلي للحقول بالماوس
+        lbl_start = QLabel("البداية")
+        lbl_start.setFont(QFont("IBM Plex Sans Arabic", 8, QFont.Weight.Bold))
+        lbl_start.setStyleSheet("color: #98A2B3; background: transparent; border: none;")
+        hnav_layout.addWidget(lbl_start)
+
+        self.slider_field_nav = QSlider(Qt.Orientation.Horizontal)
+        self.slider_field_nav.setObjectName("fieldRangeSlider")
+        self.slider_field_nav.setRange(0, 100)
+        self.slider_field_nav.setToolTip("اسحب بالماوس للتنقل بين الحقول عرضياً بسلاسة")
+        self.slider_field_nav.setStyleSheet("""
+            QSlider::groove:horizontal {
+                height: 6px;
+                background: #E4E7EC;
+                border-radius: 3px;
+            }
+            QSlider::sub-page:horizontal {
+                background: #14372e;
+                border-radius: 3px;
+            }
+            QSlider::handle:horizontal {
+                background: #c59b27;
+                border: 2px solid #FFFFFF;
+                width: 14px;
+                height: 14px;
+                margin-top: -4px;
+                margin-bottom: -4px;
+                border-radius: 7px;
+            }
+            QSlider::handle:horizontal:hover {
+                background: #14372e;
+            }
+        """)
+        self.slider_field_nav.valueChanged.connect(self._on_slider_moved)
+        hnav_layout.addWidget(self.slider_field_nav, stretch=1)
+
+        lbl_end = QLabel("النهاية")
+        lbl_end.setFont(QFont("IBM Plex Sans Arabic", 8, QFont.Weight.Bold))
+        lbl_end.setStyleSheet("color: #98A2B3; background: transparent; border: none;")
+        hnav_layout.addWidget(lbl_end)
+
+        # القفز المباشر لأي حقل
+        lbl_jump = QLabel("انتقال لحقل:")
+        lbl_jump.setFont(QFont("IBM Plex Sans Arabic", 8))
+        lbl_jump.setStyleSheet("color: #667085; background: transparent; border: none;")
+        hnav_layout.addWidget(lbl_jump)
+
+        self.combo_jump_col = QComboBox()
+        self.combo_jump_col.setFont(QFont("IBM Plex Sans Arabic", 8, QFont.Weight.Bold))
+        self.combo_jump_col.setStyleSheet("""
+            QComboBox {
+                background: #FFFFFF;
+                border: 1px solid #D0D5DD;
+                border-radius: 6px;
+                padding: 2px 8px;
+                color: #14372e;
+                font-size: 11px;
+                font-weight: bold;
+                max-width: 140px;
+            }
+            QComboBox:hover { border-color: #14372e; }
+        """)
+        self.combo_jump_col.currentIndexChanged.connect(lambda idx: self._on_jump_to_col(self.combo_jump_col.currentText()))
+        hnav_layout.addWidget(self.combo_jump_col)
+
+        self.lbl_col_count = QLabel("0 حقل")
+        self.lbl_col_count.setFont(QFont("IBM Plex Sans Arabic", 8, QFont.Weight.Bold))
+        self.lbl_col_count.setStyleSheet("background: #FFFFFF; color: #14372e; border: 1px solid #D0D5DD; border-radius: 6px; padding: 2px 8px;")
+        hnav_layout.addWidget(self.lbl_col_count)
+
+        # ========================================================
+        # 5. الجدول المركزي والبطاقات الذكية (Table & Cards Stack)
         # ========================================================
         self.table_widget = QTableWidget()
         self.table_widget.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
@@ -1130,47 +2135,50 @@ class AccessHubWidget(QWidget):
         self.table_widget.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table_widget.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table_widget.setAlternatingRowColors(True)
+        self.table_widget.setShowGrid(True)
+        self.table_widget.verticalHeader().setDefaultSectionSize(38)
         self.table_widget.verticalHeader().setVisible(False)
-        self.table_widget.verticalHeader().setDefaultSectionSize(36)
         self.table_widget.horizontalHeader().setStretchLastSection(False)
         self.table_widget.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table_widget.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.table_widget.horizontalHeader().sectionClicked.connect(self._on_header_clicked)
         self.table_widget.setFont(QFont("IBM Plex Sans Arabic", 10))
         self.table_widget.doubleClicked.connect(self._on_table_double_clicked)
+        self.table_widget.cellClicked.connect(self._on_table_cell_clicked)
         self.table_widget.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
-
-        # قائمة الزر الأيمن المخصصة
         self.table_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table_widget.customContextMenuRequested.connect(self._show_context_menu)
 
         self.table_widget.setStyleSheet("""
             QTableWidget {
                 background: #FFFFFF;
-                alternate-background-color: #F8F9FA;
-                border: 1px solid #E4E7EC;
-                border-radius: 8px;
+                alternate-background-color: #FAFAFA;
+                border: none;
                 gridline-color: #F2F4F7;
                 color: #1B1F24;
                 selection-background-color: #EDF5F2;
                 selection-color: #14372e;
             }
             QHeaderView::section {
-                background: #F2F4F7;
-                color: #344054;
-                font-family: 'IBM Plex Sans Arabic';
-                font-size: 12px;
+                background: #EDF2EF;
+                color: #14372e;
+                font-family: 'IBM Plex Sans Arabic', 'Cairo';
+                font-size: 11.5px;
                 font-weight: bold;
                 padding: 8px 12px;
-                border: 1px solid #E4E7EC;
+                border: none;
+                border-bottom: 2px solid #D0D5DD;
+                border-left: 1px solid rgba(208, 213, 221, 0.5);
                 cursor: pointer;
             }
             QHeaderView::section:hover {
-                background: #E4E7EC;
+                background: #E0EAE5;
                 color: #14372e;
             }
             QTableWidget::item {
-                padding: 4px 8px;
+                padding: 4px 10px;
+                border-bottom: 1px solid #F2F4F7;
+                border-left: 1px solid rgba(242, 244, 247, 0.7);
             }
             QTableWidget::item:selected {
                 background-color: #EDF5F2;
@@ -1178,92 +2186,161 @@ class AccessHubWidget(QWidget):
                 font-weight: bold;
             }
             QScrollBar:horizontal {
-                height: 12px;
-                background: #EDF2EF;
-                border-top: 1px solid #D0D5DD;
-                border-radius: 6px;
+                height: 10px;
+                background: #F2F4F7;
+                border-top: 1px solid #E4E7EC;
             }
             QScrollBar::handle:horizontal {
-                background: #14372e;
+                background: #CBE3DA;
                 min-width: 25px;
-                border-radius: 5px;
+                border-radius: 4px;
             }
             QScrollBar::handle:horizontal:hover {
-                background: #c59b27;
+                background: #14372e;
             }
         """)
-        main_layout.addWidget(self.table_widget, stretch=1)
+
+        self.table_widget.horizontalScrollBar().valueChanged.connect(lambda v: self._sync_horizontal_slider())
+
+        table_container = QWidget()
+        table_layout = QVBoxLayout(table_container)
+        table_layout.setContentsMargins(0, 0, 0, 0)
+        table_layout.setSpacing(0)
+        table_layout.addWidget(self.hnav_frame)
+        table_layout.addWidget(self.table_widget, stretch=1)
+
+        # حاوية البطاقات الذكية التفاعلية (Cards View Container)
+        self.cards_scroll = QScrollArea()
+        self.cards_scroll.setWidgetResizable(True)
+        self.cards_scroll.setStyleSheet("QScrollArea { border: none; background: #F7F8FA; }")
+
+        self.cards_container = QWidget()
+        self.cards_container.setStyleSheet("background: transparent;")
+        self.cards_grid = QGridLayout(self.cards_container)
+        self.cards_grid.setContentsMargins(12, 12, 12, 12)
+        self.cards_grid.setSpacing(12)
+        self.cards_scroll.setWidget(self.cards_container)
+
+        self.view_stack = QStackedWidget()
+        self.view_stack.addWidget(table_container)
+        self.view_stack.addWidget(self.cards_scroll)
+        main_layout.addWidget(self.view_stack, stretch=1)
 
         # ========================================================
-        # 4. شريط الترقيم والتنقل السفلي (Bottom Status & Pagination)
+        # 6. شريط الترقيم والتنقل السفلي (Footer - Height 38px) مطابق للويب 100%
         # ========================================================
         pagination_frame = QFrame()
+        pagination_frame.setFixedHeight(38)
         pagination_frame.setStyleSheet("""
             QFrame {
                 background: #FFFFFF;
-                border: 1px solid #E4E7EC;
-                border-radius: 6px;
+                border-top: 1px solid #E4E7EC;
             }
         """)
-        pagination_layout = QHBoxLayout(pagination_frame)
-        pagination_layout.setContentsMargins(8, 3, 8, 3)
-        pagination_layout.setSpacing(10)
+        pl = QHBoxLayout(pagination_frame)
+        pl.setContentsMargins(16, 0, 16, 0)
+        pl.setSpacing(10)
 
-        self.lbl_page_info = QLabel("الصفحة 1 من 1")
-        self.lbl_page_info.setFont(QFont("IBM Plex Sans Arabic", 9))
-        self.lbl_page_info.setStyleSheet("color: #475467; border: none; background: transparent;")
-        pagination_layout.addWidget(self.lbl_page_info)
+        # عداد السجلات بصيغة رشيقة ومختصرة
+        self.lbl_display_range = QLabel("عرض: 1-50 من 92,137")
+        self.lbl_display_range.setFont(QFont("IBM Plex Sans Arabic", 9))
+        self.lbl_display_range.setStyleSheet("color: #667085; border: none; background: transparent; font-family: 'IBM Plex Sans Arabic', 'Consolas', monospace;")
+        pl.addWidget(self.lbl_display_range)
 
-        self.lbl_sort_status = QLabel("")
-        self.lbl_sort_status.setFont(QFont("IBM Plex Sans Arabic", 9))
-        self.lbl_sort_status.setStyleSheet("color: #027A48; font-weight: bold; border: none; background: transparent;")
-        pagination_layout.addWidget(self.lbl_sort_status)
+        self.lbl_page_info = self.lbl_display_range # توافق
 
-        self.btn_reset_sort = QPushButton("🔄 الترتيب الأصلي")
-        self.btn_reset_sort.setFont(QFont("IBM Plex Sans Arabic", 8))
-        self.btn_reset_sort.setVisible(False)
-        self.btn_reset_sort.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.btn_reset_sort.setStyleSheet("background: #F2F4F7; color: #344054; border: 1px solid #D0D5DD; padding: 2px 8px; border-radius: 4px;")
-        self.btn_reset_sort.clicked.connect(self._reset_sort)
-        pagination_layout.addWidget(self.btn_reset_sort)
+        pl.addStretch()
 
-        pagination_layout.addStretch()
+        # أزرار التنقل الرشيقة واختيار عدد السجلات
+        self.combo_limit = QComboBox()
+        self.combo_limit.addItems(["25", "50", "100", "200"])
+        self.combo_limit.setCurrentText(str(self.limit))
+        self.combo_limit.setToolTip("عدد السجلات لكل صفحة")
+        self.combo_limit.setStyleSheet("""
+            QComboBox {
+                background: #F7F8FA;
+                border: 1px solid #D0D5DD;
+                border-radius: 6px;
+                padding: 2px 8px;
+                color: #14372e;
+                font-family: 'IBM Plex Sans Arabic', 'Cairo';
+                font-size: 11px;
+                font-weight: bold;
+            }
+        """)
+        self.combo_limit.currentIndexChanged.connect(self._on_limit_combo_changed)
+        pl.addWidget(self.combo_limit)
 
-        self.btn_prev = QPushButton("⏮️ السابق")
-        self.btn_prev.setFont(QFont("IBM Plex Sans Arabic", 9))
+        self.btn_prev = QPushButton("السابق >")
+        self.btn_prev.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.DemiBold))
         self.btn_prev.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.btn_prev.setStyleSheet("""
             QPushButton {
                 background: #FFFFFF;
-                border: 1px solid #D0D5DD;
-                padding: 4px 12px;
-                border-radius: 5px;
-                color: #344054;
+                border: 1px solid #E4E7EC;
+                border-radius: 6px;
+                padding: 3px 10px;
+                color: #1B1F24;
+                font-size: 11px;
+                font-weight: 600;
             }
-            QPushButton:hover:enabled { background: #F2F4F7; }
-            QPushButton:disabled { color: #98A2B3; background: #F8F9FA; }
+            QPushButton:hover:enabled { background: #F7F8FA; }
+            QPushButton:disabled { color: #D0D5DD; background: #FAFAFA; border-color: #E4E7EC; }
         """)
         self.btn_prev.clicked.connect(self._prev_page)
-        pagination_layout.addWidget(self.btn_prev)
+        pl.addWidget(self.btn_prev)
 
-        self.btn_next = QPushButton("التالي ⏭️")
-        self.btn_next.setFont(QFont("IBM Plex Sans Arabic", 9))
+        self.lbl_page_numbers = QLabel("1 / 1")
+        self.lbl_page_numbers.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+        self.lbl_page_numbers.setStyleSheet("color: #14372e; font-family: monospace; font-size: 11.5px; border: none; background: transparent; padding: 0 4px;")
+        pl.addWidget(self.lbl_page_numbers)
+
+        self.btn_next = QPushButton("< التالي")
+        self.btn_next.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.DemiBold))
         self.btn_next.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.btn_next.setStyleSheet("""
             QPushButton {
                 background: #FFFFFF;
-                border: 1px solid #D0D5DD;
-                padding: 4px 12px;
-                border-radius: 5px;
-                color: #344054;
+                border: 1px solid #E4E7EC;
+                border-radius: 6px;
+                padding: 3px 10px;
+                color: #1B1F24;
+                font-size: 11px;
+                font-weight: 600;
             }
-            QPushButton:hover:enabled { background: #F2F4F7; }
-            QPushButton:disabled { color: #98A2B3; background: #F8F9FA; }
+            QPushButton:hover:enabled { background: #F7F8FA; }
+            QPushButton:disabled { color: #D0D5DD; background: #FAFAFA; border-color: #E4E7EC; }
         """)
         self.btn_next.clicked.connect(self._next_page)
-        pagination_layout.addWidget(self.btn_next)
+        pl.addWidget(self.btn_next)
 
         main_layout.addWidget(pagination_frame)
+
+
+    def _go_to_admin(self):
+        """الانتقال إلى لوحة تحكم الإدارة من الترويسة"""
+        w = self.window()
+        if hasattr(w, '_switch_workspace_page'):
+            w._switch_workspace_page(2)
+
+    def _set_sort_mode(self, mode: str):
+        """تطبيق وضع الفرز الزمني (الأحدث / الأقدم / الأصلي)"""
+        self.sort_dir = mode
+        if mode == "none":
+            self.sort_col = "date_auto"
+        self.current_page = 1
+        self.load_data()
+
+    def _on_limit_combo_changed(self):
+        """تغيير عدد السجلات المعروضة في الصفحة"""
+        try:
+            val = int(self.combo_limit.currentText())
+            if val != self.limit:
+                self.limit = val
+                self.current_page = 1
+                self.load_data()
+        except Exception:
+            pass
 
     def _apply_user_role(self):
         """تطبيق قيود الصلاحيات وشارات الواجهة حسب رتبة الجهاز"""
@@ -1290,30 +2367,40 @@ class AccessHubWidget(QWidget):
             self.btn_edit.show()
 
     def _on_table_double_clicked(self, index):
-        """عند النقر المزدوج: للمستعلم عرض التفاصيل وللمدخل فتح نافذة التعديل"""
-        if getattr(self, "user_role", "data_entry") == "viewer":
-            self._show_record_details(index.row())
-        else:
-            self._on_edit_clicked()
+        """عند النقر المزدوج: فتح نافذة تفاصيل القيد الكاملة"""
+        self._show_record_details(index.row())
+
+    def _on_table_cell_clicked(self, row, col):
+        """عند النقر على اسم الشخص أو التاجر أو البطاقة: فتح تفاصيل القيد التي تحتوي بيانات فقط"""
+        header_item = self.table_widget.horizontalHeaderItem(col)
+        if header_item:
+            h_text = header_item.text()
+            name_keywords = ('ArabicName', 'اسم التاجر', 'اسم الشركة', 'اسم الفندق', 'اسم الصيدلية', 'اسم المعمل', 'اسم الدلال', 'الاسم التجاري', 'الإسم التجاري', 'صاحب')
+            if any(k in h_text for k in name_keywords):
+                self._show_record_details(row)
 
     def _subtable_btn_style(self):
         return """
             QPushButton {
-                background: #F8F9FA;
+                background: #FFFFFF;
                 color: #344054;
-                border: 1.5px solid #D0D5DD;
-                border-radius: 6px;
-                padding: 5px 12px;
-                font-size: 12px;
-                font-weight: bold;
-                min-width: 82px;
-                text-align: center;
+                border: 1px solid #D0D5DD;
+                border-radius: 8px;
+                padding: 4px 11px;
+                font-family: 'IBM Plex Sans Arabic', 'Cairo', 'Segoe UI';
+                font-size: 11.5px;
+                font-weight: 600;
+                white-space: nowrap;
             }
-            QPushButton:hover { background: #EDF5F2; color: #14372e; border-color: #14372e; }
+            QPushButton:hover {
+                background: #F7F8FA;
+                color: #14372e;
+                border-color: #14372e;
+            }
             QPushButton:checked {
                 background: #14372e;
                 color: #FFFFFF;
-                border: 1.5px solid #14372e;
+                border: 1px solid #14372e;
                 font-weight: bold;
             }
         """
@@ -1376,9 +2463,9 @@ class AccessHubWidget(QWidget):
                     break
             self.combo_file.blockSignals(False)
 
-        # 2. تحديث أزرار الجداول التابعة لهذا القسم وترتيبها المنطقي وعرضها الكامل دون أي قص
-        while self.subtables_grid.count():
-            item = self.subtables_grid.takeAt(0)
+        # 2. تحديث شريط الفئات الأفقي الأنيق في سطر واحد مطابق للويب
+        while self.subtables_layout.count():
+            item = self.subtables_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
@@ -1386,31 +2473,49 @@ class AccessHubWidget(QWidget):
         active_tbl = data.get("active_table", self.active_table)
         self.active_table = active_tbl
 
-        self.lbl_tbl.setText(f"🏷️ الأصناف ({len(tables_list)}):")
+        grand_total = data.get("total_records", 92120)
 
-        # ضبط الارتفاع بمرونة: سطر واحد إذا كانت 6 أو أقل، وسطرين متناسقين إذا كانت أكثر من 6 لضمان ظهور كافة الأصناف الـ 11
-        if len(tables_list) <= 6:
-            self.subtables_scroll.setFixedHeight(40)
-            cols_per_row = max(1, len(tables_list))
-        else:
-            self.subtables_scroll.setFixedHeight(82)
-            cols_per_row = max(5, (len(tables_list) + 1) // 2)
-
-        for idx, tbl in enumerate(tables_list):
-            r = idx // cols_per_row
-            c = idx % cols_per_row
-
+        # منع تكرار بطاقات الفئات (مثل دلالين والدلالين)
+        seen_titles = set()
+        deduped_tables = []
+        for tbl in tables_list:
             icon, display_title = TABLE_DISPLAY_META.get(tbl, ("🏷️", tbl))
-            btn = QPushButton(f"{icon} {display_title}")
-            btn.setFont(QFont("IBM Plex Sans Arabic", 10, QFont.Weight.Bold))
+            if display_title in seen_titles:
+                continue
+            seen_titles.add(display_title)
+            deduped_tables.append((tbl, icon, display_title))
+
+        for tbl, icon, display_title in deduped_tables:
+            if tbl == "all":
+                cnt = grand_total
+                lbl_text = f"🌟 جميع الأصناف  {cnt:,}"
+                is_active = (active_tbl == "all")
+            else:
+                lookup_keys = ["الدلالين", "دلالين"] if tbl in ("الدلالين", "دلالين") else [tbl]
+                if self.active_file == "all":
+                    cnt = sum(
+                        f.get("table_counts", {}).get(k, 0)
+                        for f in data.get("files", [])
+                        for k in lookup_keys
+                    )
+                else:
+                    f_obj = next((f for f in data.get("files", []) if f["name"] == self.active_file), None)
+                    cnt = sum(f_obj.get("table_counts", {}).get(k, 0) for k in lookup_keys) if f_obj else 0
+                lbl_text = f"{icon} {display_title}  {cnt:,}"
+                is_active = (active_tbl in lookup_keys)
+
+            btn = QPushButton(lbl_text)
+            btn.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
             btn.setCheckable(True)
-            btn.setChecked(tbl == active_tbl)
+            btn.setChecked(is_active)
             btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-            btn.setToolTip(f"عرض جدول {display_title} بالكامل")
+            btn.setToolTip(f"عرض جدول {display_title} بالكامل ({cnt:,} قيد)")
             btn.setStyleSheet(self._subtable_btn_style())
             btn.clicked.connect(lambda checked, t=tbl: self._on_subtable_clicked(t))
             self.subtable_btn_group.addButton(btn)
-            self.subtables_grid.addWidget(btn, r, c)
+            self.subtables_layout.addWidget(btn)
+
+        self.subtables_layout.addStretch()
 
         # 3. تعبئة الجدول بالحقول والمعلومات الأصلية 100% من الملف بدون أي تغيير إطلاقاً (مع تسريع الرسم الفائق)
         cols = data.get("columns", [])
@@ -1419,11 +2524,14 @@ class AccessHubWidget(QWidget):
         self.table_widget.setUpdatesEnabled(False)
         self.table_widget.blockSignals(True)
         try:
-            display_cols = []
+            display_cols = ["#"]
             if self.active_file == "all":
-                display_cols.append("الملف المصدر")
+                display_cols.append("القسم")
             if self.active_table == "all":
                 display_cols.append("الصنف / الجدول")
+
+            # ترتيب الحقول بالأولوية الذكية لمطابقة الويب
+            cols = sort_columns_by_priority(cols)
 
             for c in cols:
                 header_txt = c
@@ -1434,24 +2542,48 @@ class AccessHubWidget(QWidget):
                         header_txt = f"{c} ⬆️"
                 display_cols.append(header_txt)
 
+            display_cols.append("الإجراءات")
+
             self.table_widget.setColumnCount(len(display_cols))
             self.table_widget.setHorizontalHeaderLabels(display_cols)
             self.table_widget.setRowCount(len(rows))
 
+            actions_col_idx = len(display_cols) - 1
+
+            cur_p = data.get("page", 1)
+            lim = data.get("limit", self.limit)
+
             for r_idx, row in enumerate(rows):
+                self.table_widget.setRowHeight(r_idx, 38)
+                row_num = (cur_p - 1) * lim + r_idx + 1
                 c_offset = 0
+
+                # العمود الأول: # رقم التسلسل
+                item_num = QTableWidgetItem(str(row_num))
+                item_num.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                item_num.setForeground(QColor("#98A2B3"))
+                fnt_num = QFont("Consolas", 9)
+                fnt_num.setBold(True)
+                item_num.setFont(fnt_num)
+                self.table_widget.setItem(r_idx, c_offset, item_num)
+                c_offset += 1
+
                 if self.active_file == "all":
-                    src_item = QTableWidgetItem(str(row.get("_adh_file", "")))
+                    src_file = str(row.get("_adh_file", ""))
+                    src_item = QTableWidgetItem(get_short_file_name(src_file))
                     src_item.setForeground(QColor("#14372e"))
+                    src_item.setBackground(QColor("#F0FDF4"))
                     src_item.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
                     src_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    src_item.setToolTip(src_file)
                     self.table_widget.setItem(r_idx, c_offset, src_item)
                     c_offset += 1
 
                 if self.active_table == "all":
                     tbl_meta = TABLE_DISPLAY_META.get(row.get("_adh_table"), ("🏷️", row.get("_adh_table", "")))
                     tbl_item = QTableWidgetItem(f"{tbl_meta[0]} {tbl_meta[1]}")
-                    tbl_item.setForeground(QColor("#8C6B1B"))
+                    tbl_item.setForeground(QColor("#92400E"))
+                    tbl_item.setBackground(QColor("#FEF3C7"))
                     tbl_item.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
                     tbl_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                     self.table_widget.setItem(r_idx, c_offset, tbl_item)
@@ -1460,47 +2592,180 @@ class AccessHubWidget(QWidget):
                 for c_idx, col in enumerate(cols):
                     val = row.get(col, "")
                     val_str = "" if val is None else str(val).strip()
-                    item = QTableWidgetItem(val_str)
-                    # محاذاة واضحة ومناسبة لنوع القيمة
                     col_lower = col.lower()
-                    if col_lower in ('id', 'ت', 'stampno', 'renewalno') or any(k in col_lower for k in DATE_KEYWORDS):
+
+                    if not val_str or val_str.lower() == "none":
+                        # الخلية الفارغة: شحطة رمادية محايدة بالمنتصف مطابقة للويب
+                        item = QTableWidgetItem("—")
                         item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                        item.setForeground(QColor("#D0D5DD"))
+                        item.setFont(QFont("Consolas", 10))
                     else:
-                        item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                        item = QTableWidgetItem(val_str)
+                        # تمييز وتنسيق درجات التجار بشارات وألوان مطابقة للويب
+                        if col in ('Class', 'الصنف', 'الدرجة'):
+                            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                            if "ممتاز" in val_str:
+                                item.setText(f"⭐ {val_str}")
+                                item.setForeground(QColor("#B45309"))
+                                item.setBackground(QColor("#FFFBEB"))
+                                item.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+                            elif "أول" in val_str or "الاول" in val_str:
+                                item.setText(f"🥇 {val_str}")
+                                item.setForeground(QColor("#065F46"))
+                                item.setBackground(QColor("#ECFDF5"))
+                                item.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+                            elif "ثان" in val_str:
+                                item.setText(f"🥈 {val_str}")
+                                item.setForeground(QColor("#1E40AF"))
+                                item.setBackground(QColor("#EFF6FF"))
+                                item.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+                            elif "ثالث" in val_str:
+                                item.setText(f"🥉 {val_str}")
+                                item.setForeground(QColor("#6B21A8"))
+                                item.setBackground(QColor("#FAF5FF"))
+                                item.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+                            elif "رابع" in val_str:
+                                item.setText(f"4️⃣ {val_str}")
+                                item.setForeground(QColor("#334155"))
+                                item.setBackground(QColor("#F1F5F9"))
+                                item.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+                            else:
+                                item.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+                                item.setForeground(QColor("#14372e"))
+                        elif col in ('ArabicName', 'اسم التاجر', 'الاسم التجاري', 'الإسم التجاري', 'اسم الشركة', 'اسم الفندق', 'اسم الصيدلية', 'اسم المعمل', 'اسم الدلال', 'صاحب الاسم التجاري', 'اسم صاحب الفندق', 'اسم صاحب المعمل', 'اسم صاحب المكتب', 'اسم صاحب الصيدلية', 'اسم صاحب الشركة', 'الإسم', 'EnglishName'):
+                            item.setForeground(QColor("#14372e"))
+                            item.setFont(QFont("IBM Plex Sans Arabic", 9, QFont.Weight.Bold))
+                            item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                        elif col in ('Mobile', 'الهاتف', 'رقم الهاتف', 'Phone'):
+                            item.setForeground(QColor("#344054"))
+                            item.setFont(QFont("Consolas", 9, QFont.Weight.Bold))
+                            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                        elif any(k in col_lower for k in ('activity', 'address', 'العمل', 'النشاط', 'العنوان', 'محل', 'منطقة')):
+                            item.setForeground(QColor("#344054"))
+                            item.setFont(QFont("IBM Plex Sans Arabic", 9))
+                            item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                        elif col_lower in ('id', 'idno', 'id_no', 'stampno', 'commercialno', 'renewalno', 'ت') or any(k in col_lower for k in DATE_KEYWORDS):
+                            item.setForeground(QColor("#475467"))
+                            item.setFont(QFont("IBM Plex Sans Arabic", 9))
+                            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                        else:
+                            item.setForeground(QColor("#344054"))
+                            item.setFont(QFont("IBM Plex Sans Arabic", 9))
+                            item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
                     self.table_widget.setItem(r_idx, c_idx + c_offset, item)
 
-            # ضبط عرض الأعمدة تلقائياً لضمان عدم ظهور النقاط (...)
-            self.table_widget.resizeColumnsToContents()
-            for c in range(self.table_widget.columnCount()):
-                col_w = self.table_widget.columnWidth(c)
-                if col_w < 110:
-                    self.table_widget.setColumnWidth(c, 110)
-                elif col_w > 400:
-                    self.table_widget.setColumnWidth(c, 400)
+                # عمود الإجراءات السريعة (تفاصيل وتعديل)
+                act_widget = QWidget()
+                act_lay = QHBoxLayout(act_widget)
+                act_lay.setContentsMargins(4, 2, 4, 2)
+                act_lay.setSpacing(4)
+                act_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+                btn_eye = QPushButton("👁️")
+                btn_eye.setToolTip("عرض تفاصيل القيد بالكامل")
+                btn_eye.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+                btn_eye.setStyleSheet("QPushButton { background: #FFFFFF; border: 1px solid #D0D5DD; border-radius: 4px; padding: 2px 6px; font-size: 11px; } QPushButton:hover { background: #F2F4F7; color: #14372e; border-color: #14372e; }")
+                btn_eye.clicked.connect(lambda _, r=row: self._show_record_details_by_data(r))
+                act_lay.addWidget(btn_eye)
+
+                if getattr(self, "user_role", "data_entry") != "viewer":
+                    btn_edit = QPushButton("✏️")
+                    btn_edit.setToolTip("تعديل هذا القيد")
+                    btn_edit.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+                    btn_edit.setStyleSheet("QPushButton { background: #FFFFFF; border: 1px solid #D0D5DD; border-radius: 4px; padding: 2px 6px; font-size: 11px; } QPushButton:hover { background: #ECFDF5; color: #065F46; border-color: #10B981; }")
+                    btn_edit.clicked.connect(lambda _, r=row: self._edit_record_by_data(r))
+                    act_lay.addWidget(btn_edit)
+
+                self.table_widget.setCellWidget(r_idx, actions_col_idx, act_widget)
+
+            # ضبط أبعاد وعرض الأعمدة الذكي
+            self.table_widget.setColumnWidth(0, 48) # عمود #
+            for c in range(1, self.table_widget.columnCount()):
+                h_item = self.table_widget.horizontalHeaderItem(c)
+                h_text = h_item.text() if h_item else ""
+                if "القسم" in h_text or "الملف" in h_text:
+                    self.table_widget.setColumnWidth(c, 160)
+                elif "الصنف" in h_text or "الجدول" in h_text:
+                    self.table_widget.setColumnWidth(c, 130)
+                elif "الإجراءات" in h_text:
+                    self.table_widget.setColumnWidth(c, 85)
+                elif any(k in h_text for k in ("ArabicName", "اسم التاجر", "اسم الشركة", "اسم الفندق", "اسم الصيدلية", "اسم المعمل", "اسم الدلال", "صاحب")):
+                    self.table_widget.setColumnWidth(c, 210)
+                elif any(k in h_text for k in ("الإسم التجاري", "الاسم التجاري", "Commercial")):
+                    self.table_widget.setColumnWidth(c, 190)
+                elif any(k in h_text for k in ("العمل", "Activity", "النشاط")):
+                    self.table_widget.setColumnWidth(c, 220)
+                elif any(k in h_text for k in ("العنوان", "Address")):
+                    self.table_widget.setColumnWidth(c, 190)
+                elif any(k in h_text for k in ("هاتف", "Mobile", "Phone")):
+                    self.table_widget.setColumnWidth(c, 130)
+                elif any(k in h_text for k in ("تاريخ", "تأريخ", "Date")):
+                    self.table_widget.setColumnWidth(c, 115)
+                elif any(k in h_text for k in ("ID", "رقم", "No")):
+                    self.table_widget.setColumnWidth(c, 100)
+                else:
+                    curr_w = self.table_widget.columnWidth(c)
+                    if curr_w < 110:
+                        self.table_widget.setColumnWidth(c, 110)
+                    elif curr_w > 320:
+                        self.table_widget.setColumnWidth(c, 320)
         finally:
             self.table_widget.blockSignals(False)
             self.table_widget.setUpdatesEnabled(True)
 
-        # 4. تحديث معلومات الترقيم
+        # 4. تحديث معلومات الترقيم وشريط الحالة السفلي مطابقاً للويب 100%
         cur_p = data.get("page", 1)
         tot_p = data.get("total_pages", 1)
         matches = data.get("total_matches", 0)
-        self.lbl_page_info.setText(f"الصفحة {cur_p} من {tot_p} (إجمالي السجلات: {matches:,})")
+        lim = data.get("limit", self.limit)
+
+        start_row = (cur_p - 1) * lim + 1 if len(rows) > 0 else 0
+        end_row = min(cur_p * lim, matches) if len(rows) > 0 else 0
+        self.lbl_display_range.setText(f"عرض: {start_row:,}-{end_row:,} من {matches:,}")
+        self.lbl_page_numbers.setText(f"\u200E{cur_p} / {tot_p}\u200E")
         self.btn_prev.setEnabled(cur_p > 1)
         self.btn_next.setEnabled(cur_p < tot_p)
 
-        # شارة عدد السجلات
-        tot_all = data.get("total_records", 88987)
+        self.lbl_matches_count.setText(f"النتائج: {matches:,}")
+        tot_all = data.get("total_records", 92120)
         self.stat_badge.setText(f"{tot_all:,} قيد")
 
-        # حالة الفرز
-        if self.sort_dir in ('desc', 'asc') and data.get("sort_col"):
-            dir_str = "من الأحدث إلى الأقدم ⬇️" if self.sort_dir == "desc" else "من الأقدم إلى الأحدث ⬆️"
-            self.lbl_sort_status.setText(f"⚡ الفرز: {data.get('sort_col')} ({dir_str})")
-            self.btn_reset_sort.setVisible(True)
-        else:
-            self.lbl_sort_status.setText("")
-            self.btn_reset_sort.setVisible(False)
+        # أزرار فرز التاريخ
+        if hasattr(self, 'btn_sort_desc'):
+            if self.sort_dir == "desc":
+                self.btn_sort_desc.setChecked(True)
+            elif self.sort_dir == "asc":
+                self.btn_sort_asc.setChecked(True)
+            else:
+                self.btn_sort_none.setChecked(True)
+
+        # تحديث شريط تمرير الحقول وقائمة القفز المباشر
+        cols = data.get("columns", [])
+        self.lbl_col_count.setText(f"{len(cols)} حقل")
+        self.combo_jump_col.blockSignals(True)
+        self.combo_jump_col.clear()
+        self.combo_jump_col.addItem("اختر حقل...")
+        for c in cols:
+            self.combo_jump_col.addItem(c)
+        self.combo_jump_col.blockSignals(False)
+
+        # ملء البطاقات الذكية التفاعلية (Cards View)
+        while self.cards_grid.count():
+            it = self.cards_grid.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+
+        cur_p = data.get("page", 1)
+        lim = data.get("limit", 50)
+        cards_per_row = 3
+        for idx, row in enumerate(rows):
+            row_num = (cur_p - 1) * lim + idx + 1
+            card = RecordCardWidget(row, row_num, self, self.cards_container)
+            grid_r = idx // cards_per_row
+            grid_c = idx % cards_per_row
+            self.cards_grid.addWidget(card, grid_r, grid_c)
 
     def _on_data_error(self, err):
         self.btn_refresh.setEnabled(True)
@@ -1833,3 +3098,112 @@ class AccessHubWidget(QWidget):
             except Exception as e:
                 QMessageBox.critical(self, "خطأ", f"فشل التصدير: {e}")
 
+
+    def _set_view_mode(self, mode: str):
+        """التبديل بين عرض جدول البيانات وعرض البطاقات الذكية مطابقاً للويب"""
+        self.view_mode = mode
+        if mode == "cards":
+            self.view_stack.setCurrentIndex(1)
+            self.btn_view_cards.setChecked(True)
+            self.btn_view_table.setChecked(False)
+        else:
+            self.view_stack.setCurrentIndex(0)
+            self.btn_view_table.setChecked(True)
+            self.btn_view_cards.setChecked(False)
+
+    def _sync_horizontal_slider(self):
+        """مزامنة منزلق الحقول مع شريط التمرير الأفقي للجدول"""
+        sb = self.table_widget.horizontalScrollBar()
+        max_val = sb.maximum()
+        if max_val > 0:
+            self.slider_field_nav.blockSignals(True)
+            self.slider_field_nav.setValue(int((sb.value() / max_val) * 100))
+            self.slider_field_nav.blockSignals(False)
+
+    def _on_slider_moved(self, val: int):
+        """تمرير حقول الجدول عند سحب المنزلق بالماوس"""
+        sb = self.table_widget.horizontalScrollBar()
+        max_val = sb.maximum()
+        if max_val > 0:
+            target = int((val / 100.0) * max_val)
+            sb.setValue(target)
+
+    def _scroll_columns(self, delta: int):
+        """تمرير الحقول بمقدار محدد يميناً أو يساراً"""
+        sb = self.table_widget.horizontalScrollBar()
+        sb.setValue(sb.value() + delta)
+
+    def _on_jump_to_col(self, col_name: str):
+        """القفز المباشر لأي حقل عند اختياره من القائمة"""
+        if not col_name or col_name == "اختر حقل..." or not self.current_data:
+            return
+        cols = self.current_data.get("columns", [])
+        c_offset = 0
+        if self.active_file == "all":
+            c_offset += 1
+        if self.active_table == "all":
+            c_offset += 1
+        if col_name in cols:
+            idx = cols.index(col_name) + c_offset
+            item = self.table_widget.item(0, idx)
+            if item:
+                self.table_widget.scrollToItem(item, QAbstractItemView.ScrollHint.PositionAtCenter)
+
+    def _show_record_details_by_data(self, row: dict):
+        """عرض تفاصيل القيد من البطاقة الذكية"""
+        cols = self.current_data.get("columns", []) if self.current_data else list(row.keys())
+        dlg = RecordDetailsDialog(row, cols, title="تفاصيل القيد الكاملة", parent_hub=self, parent=self)
+        dlg.exec()
+
+    def _edit_record_by_data(self, row_data: dict):
+        """تعديل القيد مباشرة من البطاقة الذكية"""
+        if getattr(self, "user_role", "data_entry") == "viewer":
+            self._show_record_details_by_data(row_data)
+            return
+        cols = self.current_data.get("columns", []) if self.current_data else list(row_data.keys())
+        dlg = RecordFormDialog(f"تعديل القيد (الملف: {row_data.get('_adh_file')})", cols, initial_data=row_data, parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            updates = dlg.get_data()
+            try:
+                my_guid = get_desktop_machine_guid()
+                r = requests.put(CLOUD_API_URL, json={
+                    "file": row_data.get("_adh_file"),
+                    "table": row_data.get("_adh_table"),
+                    "id": row_data.get("_adh_id"),
+                    "updates": updates,
+                    "guid": my_guid,
+                }, headers={"x-machine-guid": my_guid}, timeout=10)
+                if r.status_code == 200:
+                    QMessageBox.information(self, "نجاح", "تم تعديل السجل ومزامنته فورياً مع كافة الموظفين.")
+                    self.load_data()
+                else:
+                    QMessageBox.warning(self, "تنبيه", f"فشل التعديل: {r.text}")
+            except Exception as e:
+                QMessageBox.critical(self, "خطأ", f"تعذر الاتصال بالسحابة: {e}")
+
+    def _delete_record_by_data(self, row_data: dict):
+        """حذف القيد للمدير مع التأكيد والمزامنة السحابية"""
+        if getattr(self, "user_role", "data_entry") != "admin":
+            QMessageBox.warning(self, "تنبيه", "عفواً، تقتصر صلاحية الحذف على مدير النظام (Super Admin) حصراً.")
+            return
+        res = QMessageBox.question(
+            self, "تأكيد حذف القيد",
+            f"هل أنت متأكد من حذف هذا السجل بشكل نهائي ومزامنته مع السحابة؟\n\nالقيد: {row_data.get('_adh_id')}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if res == QMessageBox.StandardButton.Yes:
+            try:
+                my_guid = get_desktop_machine_guid()
+                r = requests.delete(
+                    f"{CLOUD_API_URL}?id={row_data.get('_adh_id')}&guid={my_guid}",
+                    headers={"x-machine-guid": my_guid, "x-admin-role": "admin"},
+                    timeout=10
+                )
+                if r.status_code == 200:
+                    QMessageBox.information(self, "نجاح", "تم حذف السجل ومزامنته مع النظام السحابي.")
+                    self.load_data()
+                else:
+                    QMessageBox.warning(self, "تنبيه", f"فشل الحذف: {r.text}")
+            except Exception as e:
+                QMessageBox.critical(self, "خطأ", f"تعذر حذف السجل: {e}")
