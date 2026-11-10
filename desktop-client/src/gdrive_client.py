@@ -94,28 +94,8 @@ def _q_escape(value):
 
 
 def load_gdrive_config():
-    """Load Google Drive OAuth credentials from bundle, environment, or local paths"""
-    # 1. Check frozen PyInstaller bundle (_MEIPASS)
-    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
-        meipass_p = Path(sys._MEIPASS) / "gdrive_credentials.json"
-        if meipass_p.exists():
-            try:
-                with open(meipass_p, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception:
-                pass
-
-    # 2. Check next to executable
-    if getattr(sys, 'frozen', False):
-        exe_dir_p = Path(sys.executable).parent / "gdrive_credentials.json"
-        if exe_dir_p.exists():
-            try:
-                with open(exe_dir_p, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception:
-                pass
-
-    # 3. Environment variables
+    """Load Google Drive OAuth credentials from environment, local paths, or bundle fallback"""
+    # 1. Environment variables
     if os.environ.get("GDRIVE_REFRESH_TOKEN"):
         return {
             "client_id": os.environ.get("GDRIVE_CLIENT_ID", ""),
@@ -124,18 +104,36 @@ def load_gdrive_config():
             "folder_id": os.environ.get("GDRIVE_FOLDER_ID", DEFAULT_ROOT_FOLDER_ID)
         }
 
-    # 4. Standard local storage paths
-    candidates = [
+    candidates = []
+
+    # 2. Check next to executable (if frozen)
+    if getattr(sys, 'frozen', False):
+        exe_dir_p = Path(sys.executable).parent / "gdrive_credentials.json"
+        candidates.append(exe_dir_p)
+
+    # 3. Standard local storage and AppData paths (active user configuration)
+    candidates.extend([
+        Path(os.environ.get("APPDATA", "C:")) / "ShareCOC" / "gdrive_credentials.json",
         Path(os.environ.get("APPDATA", "C:")) / "FileExchange" / "gdrive_credentials.json",
+        Path(os.environ.get("LOCALAPPDATA", "C:")) / "Programs" / "ShareCOC" / "gdrive_credentials.json",
         Path.home() / "FileExchangeShared" / ".gdrive_credentials.json",
+        Path.home() / "ShareCOCShared" / ".gdrive_credentials.json",
+        Path(r"C:\Users\tohiba\OneDrive\Desktop\ShareCOC\gdrive_credentials.json"),
         Path(__file__).parent.parent / "gdrive_credentials.json",
         Path(__file__).parent / "gdrive_credentials.json",
-    ]
+    ])
+
+    # 4. Check frozen PyInstaller bundle (_MEIPASS) as LAST fallback only
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        candidates.append(Path(sys._MEIPASS) / "gdrive_credentials.json")
+
     for c in candidates:
-        if c.exists():
+        if c and c.exists():
             try:
                 with open(c, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    data = json.load(f)
+                    if data.get("client_id") and data.get("client_secret") and data.get("refresh_token"):
+                        return data
             except Exception:
                 pass
 
@@ -179,6 +177,14 @@ class GoogleDriveClient:
         # ذاكرة مسارات المجلدات المعروفة: rel_path -> id
         self._folder_ids = {"": self.root_folder_id}
 
+    def reload_config(self):
+        """إعادة تحميل الإعدادات من الملفات الخارجية في حال تحديث الرمز أثناء عمل البرنامج"""
+        self.config = load_gdrive_config()
+        self.root_folder_id = self.config.get("folder_id", DEFAULT_ROOT_FOLDER_ID)
+        self._access_token = None
+        self._token_expiry = 0.0
+        self._reset_thread_service()
+
     def _get_access_token(self, force_refresh=False):
         """جلب رمز وصول OAuth2 نشط ومخزن مؤقتاً لعمليات البث السريع المباشر عبر المقبس"""
         now = time.time()
@@ -195,6 +201,21 @@ class GoogleDriveClient:
                 },
                 timeout=30,
             )
+            if resp.status_code != 200 and "invalid_grant" in resp.text:
+                new_cfg = load_gdrive_config()
+                if new_cfg and new_cfg.get("refresh_token") != self.config.get("refresh_token"):
+                    self.config = new_cfg
+                    self._reset_thread_service()
+                    resp = requests.post(
+                        "https://oauth2.googleapis.com/token",
+                        data={
+                            "client_id": self.config["client_id"],
+                            "client_secret": self.config["client_secret"],
+                            "refresh_token": self.config["refresh_token"],
+                            "grant_type": "refresh_token",
+                        },
+                        timeout=30,
+                    )
             resp.raise_for_status()
             tok = resp.json()
             self._access_token = tok["access_token"]
@@ -432,11 +453,21 @@ class GoogleDriveClient:
                 return request_factory(self.service).execute(num_retries=2)
             except Exception as e:
                 last_exc = e
+                err_str = str(e).lower()
                 status = getattr(getattr(e, "resp", None), "status", None)
                 try:
                     status = int(status) if status is not None else None
                 except Exception:
                     status = None
+
+                # إذا انتهت صلاحية الرمز، محاولة إعادة قراءة الإعدادات المحدثة من الملفات المحلية
+                if "invalid_grant" in err_str or status in (400, 401):
+                    new_cfg = load_gdrive_config()
+                    if new_cfg and new_cfg.get("refresh_token") != self.config.get("refresh_token"):
+                        self.config = new_cfg
+                        self._reset_thread_service()
+                        continue
+
                 if status in (400, 401, 404):
                     raise
                 self._reset_thread_service()

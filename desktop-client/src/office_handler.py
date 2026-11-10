@@ -56,13 +56,35 @@ class OfficeHandler:
             path = Path(filepath).resolve()
             parent = path.parent
 
-            # فحص ملفات القفل الخاصة ببرامج Office
+            file_locked = OfficeHandler.is_file_locked_by_os(str(path))
+
+            # فحص ملفات القفل الخاصة بالملف المطلوب فقط (~$ + بقية الاسم)؛
+            # أقفال الملفات الأخرى المفتوحة حالياً في Word/Excel لا تُلمس إطلاقاً
+            tail = path.name[2:] if len(path.name) > 2 else path.name
             for lock in parent.glob("~$*"):
-                if lock.exists():
-                    # إذا كان الملف الأصلي غير مقفول فعلياً بنظام التشغيل، فالقفل عالق ويجب حذفه
-                    if not OfficeHandler.is_file_locked_by_os(str(path)):
+                if lock.exists() and lock.name.endswith(tail) and not file_locked:
+                    try:
+                        lock.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+
+            # قفل Access العالق (.laccdb/.ldb): يُحذف فقط إذا لم يكن Access يعمل والملف غير مقفول
+            if OfficeHandler.is_access_db(str(path)):
+                alock = OfficeHandler.get_access_lock_file(str(path))
+                if alock and alock.exists() and not file_locked:
+                    access_running = False
+                    try:
+                        out = subprocess.run(
+                            ["tasklist", "/FI", "IMAGENAME eq MSACCESS.EXE", "/NH"],
+                            capture_output=True, text=True, timeout=3,
+                            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+                        ).stdout
+                        access_running = "MSACCESS.EXE" in out.upper()
+                    except Exception:
+                        access_running = True  # عند الشك لا نحذف
+                    if not access_running:
                         try:
-                            lock.unlink(missing_ok=True)
+                            alock.unlink(missing_ok=True)
                         except Exception:
                             pass
         except Exception:

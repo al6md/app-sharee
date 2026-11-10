@@ -2252,8 +2252,6 @@ export default function FilesPage() {
   // فتح الملف في برنامجه الأصلي على جهاز المستخدم (بدون أي تطبيق مساعد)
   const openNativeFile = async (file: FileItem) => {
     const fileUrl = await getFileDirectUrl(file);
-    const downloadUrl = fileUrl.includes('?') ? `${fileUrl}&download=1` : `${fileUrl}?download=1`;
-    const ext = file.name.split('.').pop()?.toLowerCase() || '';
 
     // الهواتف المحمولة
     const isMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
@@ -2268,15 +2266,6 @@ export default function FilesPage() {
     }
 
     const shareCocUri = `sharecoc://open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}&storage_path=${encodeURIComponent(file.storagePath || file.id || '')}`;
-
-    // بروتوكولات Microsoft Office الرسمية المثبتة مع Office في ويندوز (للاحتياط)
-    const OFFICE_PROTOCOLS: Record<string, [string, string]> = {
-      docx: ['ms-word', 'Word'], doc: ['ms-word', 'Word'], docm: ['ms-word', 'Word'], dotx: ['ms-word', 'Word'], rtf: ['ms-word', 'Word'],
-      xlsx: ['ms-excel', 'Excel'], xls: ['ms-excel', 'Excel'], xlsm: ['ms-excel', 'Excel'], xltx: ['ms-excel', 'Excel'], csv: ['ms-excel', 'Excel'],
-      pptx: ['ms-powerpoint', 'PowerPoint'], ppt: ['ms-powerpoint', 'PowerPoint'], pptm: ['ms-powerpoint', 'PowerPoint'],
-      accdb: ['ms-access', 'Access'], mdb: ['ms-access', 'Access'],
-    };
-    const entry = OFFICE_PROTOCOLS[ext];
 
     // 1. محاولة اتصال مباشر بجسر الحاسوب إذا كان متاحاً بدون قيود Mixed Content (مثل بيئة http://localhost)
     if (typeof window !== 'undefined' && window.location.protocol === 'http:') {
@@ -2312,28 +2301,13 @@ export default function FilesPage() {
       type: 'info'
     });
 
+    // لا يتم تنزيل أي نسخة في مجلد التنزيلات أبداً عند الفتح (لتفادي تكرار الملفات).
+    // إذا لم يستجب تطبيق Share COC نكتفي بتنبيه المستخدم؛ التنزيل يتم فقط بزر "تنزيل" الصريح.
     launchExternalProtocol(shareCocUri, () => {
-      // 3. الاحتياط فقط إذا كان تطبيق Share COC غير مثبت نهائياً على هذا الحاسوب:
-      if (entry) {
-        const [scheme, appName] = entry;
-        setToastMessage({
-          text: `⚠️ لم يستجب تطبيق Share COC. جاري الفتح عبر ${appName} السحابي... (لتفادي وضع القراءة، يرجى التأكد من تشغيل تطبيق الحاسوب في الخلفية)`,
-          type: 'info'
-        });
-        launchExternalProtocol(`${scheme}:ofe|u|${fileUrl}`, () => {
-          setToastMessage({
-            text: `⚠️ لم يستجب ${appName}. تم تنزيل نسخة من الملف بدلاً من ذلك، افتحها من مجلد التنزيلات.`,
-            type: 'error'
-          });
-          triggerBrowserDownload(downloadUrl, file.name);
-        });
-      } else {
-        setToastMessage({
-          text: `📥 جاري تنزيل "${file.name}" لفتحه في البرنامج الافتراضي...`,
-          type: 'info'
-        });
-        triggerBrowserDownload(downloadUrl, file.name);
-      }
+      setToastMessage({
+        text: `⚠️ لم يتم رصد استجابة من تطبيق Share COC. إذا ظهرت نافذة في المتصفح فاختر "فتح Share COC" مع تفعيل "السماح دائماً"، وتأكد أن تطبيق الحاسوب مثبت ومفتوح. لم يتم تنزيل أي نسخة من الملف.`,
+        type: 'info'
+      });
     });
   };
 

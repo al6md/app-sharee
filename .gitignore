@@ -78,3 +78,5 @@ android-client/app/build/
 
 # Agent metadata
 .gemini/
+
+scratch/

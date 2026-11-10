@@ -308,7 +308,11 @@ class CloudRenewDialog(QWidget):
             creds_paths = [
                 workspace_root / "desktop-client" / "gdrive_credentials.json",
                 Path.home() / "AppData" / "Roaming" / "FileExchange" / "gdrive_credentials.json",
+                Path.home() / "AppData" / "Roaming" / "ShareCOC" / "gdrive_credentials.json",
+                Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "ShareCOC" / "gdrive_credentials.json",
                 Path.home() / "FileExchangeShared" / ".gdrive_credentials.json",
+                Path.home() / "ShareCOCShared" / ".gdrive_credentials.json",
+                Path(r"C:\Users\tohiba\OneDrive\Desktop\ShareCOC\gdrive_credentials.json"),
             ]
             for cp in creds_paths:
                 cp.parent.mkdir(parents=True, exist_ok=True)
