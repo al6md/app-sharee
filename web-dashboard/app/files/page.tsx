@@ -2267,15 +2267,16 @@ export default function FilesPage() {
 
     const shareCocUri = `sharecoc://open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}&storage_path=${encodeURIComponent(file.storagePath || file.id || '')}`;
 
-    // 1. محاولة اتصال مباشر بجسر الحاسوب إذا كان متاحاً بدون قيود Mixed Content (مثل بيئة http://localhost)
-    if (typeof window !== 'undefined' && window.location.protocol === 'http:') {
+    // 1. محاولة اتصال مباشر وسريع بجسر الحاسوب (127.0.0.1 يُعتبر عنواناً آمناً في Chrome/Edge/Firefox حتى من صفحات HTTPS)
+    // هذا أسرع بكثير من بروتوكول sharecoc:// الذي يُشغّل نسخة جديدة من التطبيق (عدة ثوانٍ) قبل فتح الملف.
+    if (typeof window !== 'undefined') {
       try {
         const bridgeUrl = `http://127.0.0.1:18290/open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}&storage_path=${encodeURIComponent(file.storagePath || file.id || '')}`;
         const bridgeRes = await fetch(bridgeUrl, {
           method: 'GET',
           mode: 'cors',
           cache: 'no-store',
-          signal: AbortSignal.timeout(1000),
+          signal: AbortSignal.timeout(1500),
         });
         if (bridgeRes.ok) {
           const bData = await bridgeRes.json();

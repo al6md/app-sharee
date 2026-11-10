@@ -165,16 +165,31 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
                             if cloud_md5 and self.sync_engine:
                                 is_local_newer = False
                                 st = self.sync_engine.state_mgr.get_file_state(rel)
-                                if st:
-                                    if st.get("sync_status") in ("syncing", "pending_upload"):
-                                        is_local_newer = True
-                                    elif st.get("remote_md5") == cloud_md5 and st.get("sha256_hash"):
-                                        if self.sync_engine.calculate_hash(str(target_path)) != st.get("sha256_hash"):
+                                # مسار سريع: مقارنة الحجم ووقت التعديل مع آخر حالة مزامنة بدلاً من حساب هاش الملف كاملاً
+                                # (حساب الهاش لملفات ضخمة مثل Access يستغرق عدة ثوانٍ في كل فتح)
+                                fast_decided = False
+                                if st and st.get("sync_status") not in ("syncing", "pending_upload") and st.get("remote_md5"):
+                                    try:
+                                        lst = target_path.stat()
+                                        st_mtime = st.get("local_mtime")
+                                        if (int(st.get("file_size") or -1) == lst.st_size
+                                                and st_mtime is not None
+                                                and abs(float(st_mtime) - lst.st_mtime) < 2):
+                                            need_refresh = (st.get("remote_md5") != cloud_md5)
+                                            fast_decided = True
+                                    except Exception:
+                                        fast_decided = False
+                                if not fast_decided:
+                                    if st:
+                                        if st.get("sync_status") in ("syncing", "pending_upload"):
                                             is_local_newer = True
-                                if not is_local_newer:
-                                    local_hash = self.sync_engine.calculate_hash(str(target_path))
-                                    if local_hash != cloud_md5:
-                                        need_refresh = True
+                                        elif st.get("remote_md5") == cloud_md5 and st.get("sha256_hash"):
+                                            if self.sync_engine.calculate_hash(str(target_path)) != st.get("sha256_hash"):
+                                                is_local_newer = True
+                                    if not is_local_newer:
+                                        local_hash = self.sync_engine.calculate_hash(str(target_path))
+                                        if local_hash != cloud_md5:
+                                            need_refresh = True
 
                 if target_path and target_path.exists() and not need_refresh:
                     OfficeHandler.open_native_file(str(target_path))
