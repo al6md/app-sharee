@@ -16,6 +16,7 @@ function isIgnoredName(name?: string | null): boolean {
   const low = name.toLowerCase();
   if (IGNORED_EXACT.has(low)) return true;
   if (name.startsWith('~$') || name.startsWith('.') || name.startsWith('~WRL')) return true;
+  if (/^[0-9a-f]{8}$/i.test(name)) return true;
   return IGNORED_SUFFIXES.some((s) => low.endsWith(s));
 }
 
@@ -1211,6 +1212,7 @@ export async function getAllCloudFiles(forceRefresh: boolean = false) {
         if (isIgnoredName(name)) continue;
 
         const relPath = parentPath ? `${parentPath}/${name}` : name;
+        if (relPath.split('/').some(p => p.startsWith('.'))) continue;
 
         if (item.mimeType === FOLDER_MIME) {
           if (visited.has(item.id!)) continue;

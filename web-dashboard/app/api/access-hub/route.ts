@@ -50,6 +50,12 @@ const TABLE_PRIORITY: Record<string, number> = {
   'الشطب': 11,
 };
 
+// توحيد اسم جدول الدلالين (دلالين / الدلالين) في جدول واحد عند الدمج الشامل
+function canonTable(name: any): string {
+  const s = String(name ?? '').trim();
+  return s === 'دلالين' ? 'الدلالين' : s;
+}
+
 function sortTablesByPriority(tables: string[]): string[] {
   return [...tables].sort((a, b) => {
     const pA = TABLE_PRIORITY[a] || 50;
@@ -348,6 +354,16 @@ export async function GET(req: NextRequest) {
     const callerContext = await resolveCallerContext(req);
     const callerRole = callerContext.role;
 
+    // جلب سجل الطفرات السحابية بالكامل لتحديث تطبيق سطح المكتب فورياً
+    const action = url.searchParams.get('action');
+    if (action === 'mutations' || action === 'get_mutations' || url.searchParams.get('mutations') === '1') {
+      return NextResponse.json({
+        success: true,
+        mutations,
+        sig: currentSig,
+      });
+    }
+
     // فحص حماية وقفل مركز بيانات Access لكافة الأجهزة
     const store = await getCloudAdminStore(false);
     const hubSec = store.accessHubSecurity || DEFAULT_ACCESS_HUB_SECURITY;
@@ -393,11 +409,11 @@ export async function GET(req: NextRequest) {
       // 🌐 وضع الدمج الشامل (كافة الملفات مدمجة)
       const tablesSet = new Set<string>();
       allFiles.forEach((f: any) => {
-        (f.tables || []).forEach((t: string) => tablesSet.add(t));
+        (f.tables || []).forEach((t: string) => tablesSet.add(canonTable(t)));
       });
       // إضافة جداول السجلات السحابية الجديدة إن وجدت
       (mutations.adds || []).forEach((a) => {
-        if (a._adh_table) tablesSet.add(a._adh_table);
+        if (a._adh_table) tablesSet.add(canonTable(a._adh_table));
       });
 
       availableTables = sortTablesByPriority(Array.from(tablesSet));
@@ -434,7 +450,7 @@ export async function GET(req: NextRequest) {
               rawRows.push({
                 ...row,
                 _adh_file: row._adh_file || f.name,
-                _adh_table: row._adh_table || tblName,
+                _adh_table: canonTable(row._adh_table || tblName),
                 _adh_id: rId,
               });
             }
@@ -456,22 +472,26 @@ export async function GET(req: NextRequest) {
           if (!content || !content.tables) continue;
 
           // قراءة الأعمدة الأصلية كما هي في ملف Access
-          const origCols = content.columns?.[activeTable] || [];
-          for (const col of origCols) {
-            if (!colsSeen.has(col)) {
-              colsSeen.add(col);
-              colsOrder.push(col);
+          // (يشمل دمج جدولي الدلالين / دلالين معاً)
+          for (const tblName of Object.keys(content.tables)) {
+            if (canonTable(tblName) !== activeTable) continue;
+            const origCols = content.columns?.[tblName] || [];
+            for (const col of origCols) {
+              if (!colsSeen.has(col)) {
+                colsSeen.add(col);
+                colsOrder.push(col);
+              }
             }
-          }
 
-          // جمع السجلات الأساسية
-          const tableRows = content.tables[activeTable] || [];
-          for (let idx = 0; idx < tableRows.length; idx++) {
-            const row = tableRows[idx];
-            if (!row._adh_file) row._adh_file = f.name;
-            if (!row._adh_table) row._adh_table = activeTable;
-            if (!row._adh_id) row._adh_id = `${f.name}_${activeTable}_${idx}`;
-            rawRows.push(row);
+            // جمع السجلات الأساسية
+            const tableRows = content.tables[tblName] || [];
+            for (let idx = 0; idx < tableRows.length; idx++) {
+              const row = tableRows[idx];
+              if (!row._adh_file) row._adh_file = f.name;
+              row._adh_table = activeTable;
+              if (!row._adh_id) row._adh_id = `${f.name}_${tblName}_${idx}`;
+              rawRows.push(row);
+            }
           }
         }
 
@@ -574,7 +594,10 @@ export async function GET(req: NextRequest) {
     }
 
     // تطبيق التعديلات والإضافات والمحذوفات السحابية
-    const mergedRows = applyMutations(requestedFile, activeTable, rawRows, mutations);
+    const mutationsView = requestedFile === 'all'
+      ? { ...mutations, adds: (mutations.adds || []).map((a: any) => canonTable(a._adh_table) !== a._adh_table ? { ...a, _adh_table: canonTable(a._adh_table) } : a) }
+      : mutations;
+    const mergedRows = applyMutations(requestedFile, activeTable, rawRows, mutationsView);
 
     // تطبيق الأعمدة المخصصة (إضافة / حذف الأعمدة السحابية)
     let columns = getCustomColumns(requestedFile, activeTable, baseColumns, mutations);
@@ -614,7 +637,9 @@ export async function GET(req: NextRequest) {
     }
 
     // تطبيق الترتيب الزمني (من الجديد للقديم أو العكس)
-    if (sortDir === 'desc' || sortDir === 'asc') {
+    // الدلالين المدمجون: ترتيب افتراضي من الجديد إلى القديم
+    const effectiveSortDir = (sortDir === 'none' && requestedFile === 'all' && activeTable === 'الدلالين') ? 'desc' : sortDir;
+    if (effectiveSortDir === 'desc' || effectiveSortDir === 'asc') {
       const targetCol = actualSortCol || (dateColumns.length > 0 ? dateColumns[0] : '');
       if (targetCol) {
         filteredRows = [...filteredRows].sort((a, b) => {
@@ -625,7 +650,7 @@ export async function GET(req: NextRequest) {
 
           // كلاهما يحملان تاريخاً صحيحاً
           if (timeA !== null && timeB !== null) {
-            return sortDir === 'desc' ? timeB - timeA : timeA - timeB;
+            return effectiveSortDir === 'desc' ? timeB - timeA : timeA - timeB;
           }
           // الصف الذي يحتوي على تاريخ يظهر أولاً
           if (timeA !== null) return -1;
@@ -634,7 +659,7 @@ export async function GET(req: NextRequest) {
           // نص احتياطي
           const strA = valA !== null && valA !== undefined ? String(valA) : '';
           const strB = valB !== null && valB !== undefined ? String(valB) : '';
-          return sortDir === 'desc' ? strB.localeCompare(strA, 'ar') : strA.localeCompare(strB, 'ar');
+          return effectiveSortDir === 'desc' ? strB.localeCompare(strA, 'ar') : strA.localeCompare(strB, 'ar');
         });
       }
     }
@@ -670,7 +695,7 @@ export async function GET(req: NextRequest) {
       columns,
       date_columns: dateColumns,
       sort_col: actualSortCol,
-      sort_dir: sortDir,
+      sort_dir: effectiveSortDir,
       total_matches: totalMatches,
       page,
       limit,

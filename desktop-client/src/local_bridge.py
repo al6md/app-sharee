@@ -115,6 +115,16 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
 
         if path == '/sync':
             try:
+                req_file = params.get('file', [''])[0].strip()
+                req_folder = params.get('folder', [''])[0].strip()
+                if req_file and self.sync_engine:
+                    target = self._find_local_file(req_file, req_folder)
+                    if target and target.exists():
+                        try:
+                            rel = norm_rel(target.relative_to(Path(self.sync_folder)))
+                            self.sync_engine.queue_fast_upload(rel, delay=0.0)
+                        except Exception:
+                            pass
                 if self.sync_engine:
                     self.sync_engine.wake(delay=0.05)
                 self._set_headers(200)
@@ -327,10 +337,12 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
             if cand.exists() and cand.is_file():
                 return cand
 
-        # 3. بحث متكرر عن الملف في المجلدات الفرعية
+        # 3. بحث متكرر عن الملف في المجلدات الفرعية (مع استبعاد المجلدات المخفية والنظامية تماماً)
         target_lower = clean_file.lower()
         for sub in base.rglob("*"):
-            if sub.is_file() and ".trash" not in sub.parts:
+            if sub.is_file():
+                if any(part.startswith(".") for part in sub.parts):
+                    continue
                 if sub.name == file_name or clean_bidi(sub.name).lower() == target_lower:
                     return sub
 
@@ -372,10 +384,12 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
             if cand.exists() and cand.is_file():
                 return cand
 
-        # 3. بحث متكرر عن الملف في المجلدات الفرعية
+        # 3. بحث متكرر عن الملف في المجلدات الفرعية (مع استبعاد المجلدات المخفية والنظامية تماماً)
         target_lower = clean_file.lower()
         for sub in base.rglob("*"):
-            if sub.is_file() and ".trash" not in sub.parts:
+            if sub.is_file():
+                if any(part.startswith(".") for part in sub.parts):
+                    continue
                 if sub.name == file_name or clean_bidi(sub.name).lower() == target_lower:
                     return sub
 

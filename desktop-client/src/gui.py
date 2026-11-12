@@ -3180,6 +3180,11 @@ class FileExchangeMainWindow(QMainWindow):
                     self.sync_engine.sync_now(timeout=60)
                 elif self.sync_engine:
                     self.sync_engine.pull_remote_changes()
+                try:
+                    from access_hub_widget import sync_cloud_mutations_to_local
+                    sync_cloud_mutations_to_local(force=True)
+                except Exception as ex:
+                    print(f"[Access mutations sync error]: {ex}")
             except Exception as e:
                 print(f"[Manual refresh error]: {e}")
             finally:
@@ -3195,6 +3200,11 @@ class FileExchangeMainWindow(QMainWindow):
         self._refresh_file_list()
         if self.active_filter == "TRASH":
             self._render_trash_table()
+        if hasattr(self, 'access_hub_page') and self.access_hub_page:
+            try:
+                self.access_hub_page.load_data()
+            except Exception:
+                pass
         QTimer.singleShot(1800, lambda: self.btn_refresh.setText("🔄 تحديث"))
     def _show_add_department_dialog(self):
         """نافذة إنشاء قسم إداري جديد للغرفة"""

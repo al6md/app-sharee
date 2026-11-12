@@ -14,7 +14,7 @@ class OfficeHandler:
         التحقق من أن برنامج Word أو Excel انتهى من كتابة الملف وحرر قفل النظام (File Handle)
         """
         if not os.path.exists(filepath):
-            return True
+            return False
         try:
             with open(filepath, 'r+b') as f:
                 pass
@@ -337,7 +337,10 @@ class OfficeHandler:
 
         # الحالة 2: الملف مقفول محلياً بواسطة Office (Word أو Excel أو Access)
         # أ) حفظ نسخة في مسار الظل فوراً
-        shadow_dir = dest_p.parent / ".sync_shadow"
+        parent_dir = dest_p.parent
+        while parent_dir.name == ".sync_shadow":
+            parent_dir = parent_dir.parent
+        shadow_dir = parent_dir / ".sync_shadow"
         shadow_dir.mkdir(parents=True, exist_ok=True)
         shadow_file = shadow_dir / dest_p.name
         try:

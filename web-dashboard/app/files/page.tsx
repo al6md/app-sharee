@@ -1345,7 +1345,7 @@ export default function FilesPage() {
             // مهلة 400ms لفك مقبض أوفيس ثم طلب مزامنة الجسر وتحديث السحابة
             setTimeout(async () => {
               try {
-                await fetch('http://127.0.0.1:18290/sync', { mode: 'cors' }).catch(() => {});
+                await fetch(`http://127.0.0.1:18290/sync?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}`, { mode: 'cors' }).catch(() => {});
                 await new Promise(r => setTimeout(r, 900));
                 await loadData(true, true);
                 setAutoSyncCount(prev => prev + 1);

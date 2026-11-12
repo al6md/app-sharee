@@ -12,7 +12,9 @@ import re
 import json
 import requests
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
+import threading
+import io
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
@@ -78,6 +80,139 @@ def get_cached_json_file(file_path: Path):
         data = json.load(jf)
     _FILE_RAM_CACHE[path_str] = (cur_mtime, data)
     return data
+
+def get_all_local_data_dirs() -> list[Path]:
+    """إرجاع كافة المسارات المحلية الموجودة لبيانات Access Hub لمزامنتها معاً"""
+    candidates = [
+        Path(sys.executable).parent / "data" / "access-hub",
+        Path(r"C:\Users\tohiba\OneDrive\Desktop\ShareCOC\data\access-hub"),
+        Path(__file__).resolve().parent.parent.parent / "web-dashboard" / "data" / "access-hub",
+        Path(r"c:\Users\tohiba\OneDrive\Desktop\شييييير\web-dashboard\data\access-hub"),
+        Path(os.environ.get("APPDATA", "")) / "ShareCOC" / "access-hub",
+    ]
+    existing = []
+    seen = set()
+    for c in candidates:
+        try:
+            res_p = c.resolve()
+            if res_p.exists() and str(res_p) not in seen:
+                seen.add(str(res_p))
+                existing.append(res_p)
+        except Exception:
+            pass
+    return existing if existing else [candidates[0]]
+
+def load_local_mutations(local_dir=None) -> dict:
+    """تحميل سجل الطفرات والتعديلات المخزنة محلياً"""
+    if local_dir is None:
+        local_dir = get_local_data_dir()
+    mut_path = local_dir / "mutations.json"
+    default_mut = {"adds": [], "updates": {}, "deletes": [], "added_columns": {}, "deleted_columns": {}, "column_orders": {}, "roles": {}}
+    if mut_path.exists():
+        data = get_cached_json_file(mut_path)
+        if isinstance(data, dict):
+            return data
+    return default_mut
+
+def save_local_mutations(mutations: dict, local_dir=None):
+    """حفظ سجل الطفرات والتعديلات محلياً وتحديث كاش الذاكرة لكافة المجلدات المحلية النشطة"""
+    dirs_to_update = get_all_local_data_dirs()
+    if local_dir and local_dir not in dirs_to_update:
+        dirs_to_update.append(local_dir)
+
+    for d in dirs_to_update:
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            mp = d / "mutations.json"
+            with open(mp, "w", encoding="utf-8") as f:
+                json.dump(mutations, f, ensure_ascii=False, indent=2)
+            # تحديث كاش الذاكرة الفوري
+            path_str = str(mp.resolve())
+            try:
+                cur_mtime = mp.stat().st_mtime
+            except Exception:
+                cur_mtime = 0
+            _FILE_RAM_CACHE[path_str] = (cur_mtime, mutations)
+        except Exception as e:
+            print(f"[AccessHub] Error saving mutations to {d}: {e}")
+
+def fetch_cloud_mutations(known_sync_time=None) -> dict | None:
+    """جلب سجل التعديلات السحابية الأحدث من Google Drive أو Web API"""
+    # 1. المحاولة المباشرة من Google Drive عبر ملف .sharecoc_access_mutations.json
+    try:
+        from gdrive_client import GoogleDriveClient
+        client = GoogleDriveClient()
+        if client.is_configured():
+            res = client._execute(lambda s: s.files().list(
+                q=f"'{client.root_folder_id}' in parents and name = '.sharecoc_access_mutations.json' and trashed = false",
+                fields="files(id, name, modifiedTime)",
+                pageSize=1
+            ))
+            files = res.get("files", [])
+            if files:
+                file_meta = files[0]
+                cloud_mod = file_meta.get("modifiedTime")
+                # إذا كانت لدينا نفس البصمة الزمنية، لا داعي لإعادة التنزيل
+                if known_sync_time and cloud_mod and cloud_mod == known_sync_time:
+                    return None
+
+                fid = file_meta["id"]
+                from googleapiclient.http import MediaIoBaseDownload
+                fh = io.BytesIO()
+                downloader = MediaIoBaseDownload(fh, client.service.files().get_media(fileId=fid))
+                done = False
+                while not done:
+                    status, done = downloader.next_chunk()
+                fh.seek(0)
+                content = fh.read().decode("utf-8")
+                parsed = json.loads(content)
+                if isinstance(parsed, dict):
+                    if cloud_mod and not parsed.get("last_sync"):
+                        parsed["last_sync"] = cloud_mod
+                    return parsed
+    except Exception as e:
+        print(f"[AccessHub] Google Drive fetch warning: {e}")
+
+    # 2. المحاولة الاحتياطية عبر Web Dashboard API
+    try:
+        r = requests.get(f"{CLOUD_API_URL}?action=mutations", timeout=7)
+        if r.status_code == 200:
+            data = r.json()
+            if data.get("mutations") and isinstance(data["mutations"], dict):
+                return data["mutations"]
+    except Exception as e:
+        print(f"[AccessHub] Cloud API fetch warning: {e}")
+
+    return None
+
+def sync_cloud_mutations_to_local(force=False) -> bool:
+    """مزامنة سجل الطفرات السحابية وحفظه في القرص المحلي"""
+    try:
+        local_dir = get_local_data_dir()
+        current_mut = load_local_mutations(local_dir)
+        known_time = None if force else current_mut.get("last_sync")
+        cloud_mut = fetch_cloud_mutations(known_sync_time=known_time)
+        if cloud_mut:
+            save_local_mutations(cloud_mut, local_dir)
+            return True
+    except Exception as e:
+        print(f"[AccessHub] Sync error: {e}")
+    return False
+
+class CloudSyncWorker(QThread):
+    sync_completed = pyqtSignal(bool)
+
+    def __init__(self, force=False):
+        super().__init__()
+        self.force = force
+
+    def run(self):
+        try:
+            updated = sync_cloud_mutations_to_local(force=self.force)
+            self.sync_completed.emit(updated)
+        except Exception as e:
+            print(f"[AccessHub Worker] Error: {e}")
+            self.sync_completed.emit(False)
 
 DATE_KEYWORDS = ['date', 'تاريخ', 'affiliation', 'expiration', 'year', 'سنة', 'مواليد']
 
@@ -604,7 +739,8 @@ class DataLoaderThread(QThread):
                     continue
             filtered_rows.append(merged)
 
-        # إضافة السجلات الجديدة
+        # إضافة السجلات الجديدة (الحفاظ على أسبقية السجلات الأحدث في قمة الجدول 100% مطابقاً لمنصة الويب)
+        relevant_adds = []
         for a in mutations.get("adds", []):
             if req_file == "all" or a.get("_adh_file") == req_file:
                 if req_table == "all" or a.get("_adh_table") == req_table:
@@ -618,11 +754,17 @@ class DataLoaderThread(QThread):
                         match = any(v and search in str(v).lower() for k, v in merged.items() if not k.startswith("_adh_"))
                         if not match:
                             continue
-                    filtered_rows.insert(0, merged)
+                    relevant_adds.append(merged)
+
+        # دمج السجلات المضافة في قمة الجدول بحيث يظهر القيد المضاف حديثاً كأول قيد #1
+        filtered_rows = relevant_adds + filtered_rows
 
         # الفرز الزمني إذا طُلب
         actual_sort_col = self.sort_col
-        if self.sort_dir in ('desc', 'asc'):
+        eff_sort_dir = self.sort_dir
+        if eff_sort_dir == 'none' and req_file == 'all' and req_table in ('الدلالين', 'دلالين'):
+            eff_sort_dir = 'desc'  # الدلالين المدمجون: من الجديد للقديم
+        if eff_sort_dir in ('desc', 'asc'):
             if actual_sort_col == 'date_auto' or not actual_sort_col:
                 actual_sort_col = date_columns[0] if date_columns else (active_columns[0] if active_columns else "")
 
@@ -634,7 +776,7 @@ class DataLoaderThread(QThread):
                         return (0, ts)
                     return (1, str(val or ""))
 
-                filtered_rows.sort(key=sort_key, reverse=(self.sort_dir == 'desc'))
+                filtered_rows.sort(key=sort_key, reverse=(eff_sort_dir == 'desc'))
 
         total_matches = len(filtered_rows)
         start_idx = (self.page - 1) * self.limit
@@ -1599,6 +1741,16 @@ class AccessHubWidget(QWidget):
         self.loader_thread = None
         self.view_mode = "table"
 
+        # إدارة المزامنة السحابية اللحظية التلقائية
+        self.sync_worker = None
+        self._start_background_sync(force=False)
+
+        # فحص دوري في الخلفية كل 60 ثانية لجلب أي قيود جديدة من الويب أو الأجهزة الأخرى
+        self.cloud_sync_timer = QTimer(self)
+        self.cloud_sync_timer.setInterval(60000)
+        self.cloud_sync_timer.timeout.connect(lambda: self._start_background_sync(force=False))
+        self.cloud_sync_timer.start()
+
         self._build_ui()
         self.load_data()
 
@@ -1690,7 +1842,7 @@ class AccessHubWidget(QWidget):
             }
             QPushButton:hover { background: #F7F8FA; color: #14372e; border-color: #14372e; }
         """)
-        self.btn_refresh.clicked.connect(self.load_data)
+        self.btn_refresh.clicked.connect(self._on_refresh_clicked_manual)
         hl.addWidget(self.btn_refresh)
 
         main_layout.addWidget(header_frame)
@@ -2407,7 +2559,7 @@ class AccessHubWidget(QWidget):
 
     def load_data(self):
         self.btn_refresh.setEnabled(False)
-        self.btn_refresh.setText("جاري التحميل...")
+        self.btn_refresh.setText("⏳")
 
         query = self.search_input.text().strip()
         self.loader_thread = DataLoaderThread(
@@ -2425,7 +2577,7 @@ class AccessHubWidget(QWidget):
 
     def _on_data_loaded(self, data):
         self.btn_refresh.setEnabled(True)
-        self.btn_refresh.setText("🔄 تحديث")
+        self.btn_refresh.setText("🔄")
         self.current_data = data
 
         # تحديد وتطبيق الصلاحية المؤسسية لهذا الجهاز (RBAC Engine)
@@ -2769,7 +2921,7 @@ class AccessHubWidget(QWidget):
 
     def _on_data_error(self, err):
         self.btn_refresh.setEnabled(True)
-        self.btn_refresh.setText("🔄 تحديث")
+        self.btn_refresh.setText("🔄")
         QMessageBox.warning(self, "تنبيه", f"تعذر استرجاع البيانات: {err}")
 
     def _on_file_combo_changed(self):
@@ -2954,6 +3106,114 @@ class AccessHubWidget(QWidget):
             clipboard.setText(text)
             QMessageBox.information(self, "تم النسخ", "تم نسخ بيانات القيد بالكامل إلى الحافظة بنجاح.")
 
+    def _start_background_sync(self, force=False):
+        """بدء عملية فحص ومزامنة الطفرات السحابية في الخلفية بدون تجميد الواجهة"""
+        if self.sync_worker and self.sync_worker.isRunning():
+            return
+        self.sync_worker = CloudSyncWorker(force=force)
+        self.sync_worker.sync_completed.connect(self._on_sync_worker_finished)
+        self.sync_worker.start()
+
+    def _on_sync_worker_finished(self, updated: bool):
+        """عند اكتمال مزامنة الخلفية، إذا تم جلب قيود جديدة نقوم بتحديث الجدول فوراً"""
+        if updated:
+            self.load_data()
+
+    def _on_refresh_clicked_manual(self):
+        """تحديث فوري وإجباري عند الضغط على زر التحديث، يفحص السحابة والقرص المحلي"""
+        self.btn_refresh.setEnabled(False)
+        self.btn_refresh.setText("⏳")
+        self.btn_refresh.setToolTip("جاري جلب أحدث السجلات من السحابة...")
+
+        def on_done(updated):
+            self.btn_refresh.setEnabled(True)
+            self.btn_refresh.setText("🔄")
+            self.btn_refresh.setToolTip("تحديث فوري للسجلات من السحابة")
+            self.load_data()
+
+        if self.sync_worker and self.sync_worker.isRunning():
+            self.sync_worker.wait(1000)
+
+        self.sync_worker = CloudSyncWorker(force=True)
+        self.sync_worker.sync_completed.connect(on_done)
+        self.sync_worker.start()
+
+    def _apply_local_add(self, record: dict):
+        """تخزين وتثبيت القيد المضاف محلياً فوراً وتحديث الذاكرة"""
+        local_dir = get_local_data_dir()
+        mut = load_local_mutations(local_dir)
+        adds = mut.setdefault("adds", [])
+        rec_id = record.get("_adh_id")
+        if rec_id:
+            adds = [a for a in adds if a.get("_adh_id") != rec_id]
+        adds.insert(0, record)
+        mut["adds"] = adds
+        mut["last_sync"] = datetime.now(timezone.utc).isoformat()
+        save_local_mutations(mut, local_dir)
+
+    def _apply_local_update(self, record_id: str, updates: dict):
+        """تحديث بيانات القيد محلياً فوراً"""
+        local_dir = get_local_data_dir()
+        mut = load_local_mutations(local_dir)
+        updated_in_adds = False
+        for a in mut.get("adds", []):
+            if a.get("_adh_id") == record_id:
+                a.update(updates)
+                a["_adh_updated_at"] = datetime.now(timezone.utc).isoformat()
+                updated_in_adds = True
+                break
+        if not updated_in_adds:
+            up_map = mut.setdefault("updates", {})
+            cur = up_map.get(record_id, {})
+            cur.update(updates)
+            cur["_adh_updated_at"] = datetime.now(timezone.utc).isoformat()
+            up_map[record_id] = cur
+        mut["last_sync"] = datetime.now(timezone.utc).isoformat()
+        save_local_mutations(mut, local_dir)
+
+    def _apply_local_delete(self, record_id: str):
+        """حذف القيد محلياً فوراً"""
+        local_dir = get_local_data_dir()
+        mut = load_local_mutations(local_dir)
+        mut["adds"] = [a for a in mut.get("adds", []) if a.get("_adh_id") != record_id]
+        deletes = mut.setdefault("deletes", [])
+        if record_id not in deletes:
+            deletes.append(record_id)
+        if record_id in mut.get("updates", {}):
+            del mut["updates"][record_id]
+        mut["last_sync"] = datetime.now(timezone.utc).isoformat()
+        save_local_mutations(mut, local_dir)
+
+    def _apply_local_add_column(self, file_name: str, table_name: str, col_name: str):
+        """إضافة حقل جديد محلياً وتعميمه فورياً"""
+        local_dir = get_local_data_dir()
+        mut = load_local_mutations(local_dir)
+        ac = mut.setdefault("added_columns", {})
+        key = f"{file_name}_{table_name}"
+        col_list = ac.setdefault(key, [])
+        if col_name not in col_list:
+            col_list.append(col_name)
+        dc = mut.setdefault("deleted_columns", {})
+        if key in dc and col_name in dc[key]:
+            dc[key].remove(col_name)
+        mut["last_sync"] = datetime.now(timezone.utc).isoformat()
+        save_local_mutations(mut, local_dir)
+
+    def _apply_local_del_column(self, file_name: str, table_name: str, col_name: str):
+        """حذف حقل محلياً فورياً"""
+        local_dir = get_local_data_dir()
+        mut = load_local_mutations(local_dir)
+        dc = mut.setdefault("deleted_columns", {})
+        key = f"{file_name}_{table_name}"
+        col_list = dc.setdefault(key, [])
+        if col_name not in col_list:
+            col_list.append(col_name)
+        ac = mut.setdefault("added_columns", {})
+        if key in ac and col_name in ac[key]:
+            ac[key].remove(col_name)
+        mut["last_sync"] = datetime.now(timezone.utc).isoformat()
+        save_local_mutations(mut, local_dir)
+
     def _on_add_column_clicked(self):
         """إضافة حقل جديد إلى الجدول"""
         if not self.current_data:
@@ -2972,6 +3232,7 @@ class AccessHubWidget(QWidget):
                     "guid": my_guid,
                 }, headers={"x-machine-guid": my_guid}, timeout=10)
                 if r.status_code == 200:
+                    self._apply_local_add_column(target_file, self.active_table, new_col)
                     QMessageBox.information(self, "نجاح", f"تمت إضافة الحقل '{new_col}' سحابياً بنجاح وتعميمه للجميع.")
                     self.load_data()
                 else:
@@ -3000,6 +3261,7 @@ class AccessHubWidget(QWidget):
                     "guid": my_guid,
                 }, headers={"x-machine-guid": my_guid}, timeout=10)
                 if r.status_code == 200:
+                    self._apply_local_del_column(target_file, self.active_table, col_to_del)
                     QMessageBox.information(self, "نجاح", f"تم حذف الحقل '{col_to_del}' سحابياً بنجاح.")
                     self.load_data()
                 else:
@@ -3029,6 +3291,21 @@ class AccessHubWidget(QWidget):
                     "guid": my_guid,
                 }, headers={"x-machine-guid": my_guid}, timeout=10)
                 if r.status_code == 200:
+                    resp_json = {}
+                    try:
+                        resp_json = r.json()
+                    except Exception:
+                        pass
+                    created_record = resp_json.get("record")
+                    if not created_record or not isinstance(created_record, dict):
+                        import time, random
+                        created_record = dict(new_data)
+                        created_record["_adh_id"] = f"{target_file}_{self.active_table}_{int(time.time()*1000)}_{random.randint(1000, 9999)}"
+                        created_record["_adh_file"] = target_file
+                        created_record["_adh_table"] = self.active_table
+                        created_record["_adh_created_at"] = datetime.now(timezone.utc).isoformat()
+
+                    self._apply_local_add(created_record)
                     QMessageBox.information(self, "نجاح", "تمت إضافة القيد بنجاح ومزامنته سحابياً لجميع الأجهزة.")
                     self.load_data()
                 else:
@@ -3061,6 +3338,7 @@ class AccessHubWidget(QWidget):
                     "guid": my_guid,
                 }, headers={"x-machine-guid": my_guid}, timeout=10)
                 if r.status_code == 200:
+                    self._apply_local_update(row_data["_adh_id"], updates)
                     QMessageBox.information(self, "نجاح", "تم تعديل السجل ومزامنته فورياً مع كافة الموظفين.")
                     self.load_data()
                 else:
@@ -3174,6 +3452,7 @@ class AccessHubWidget(QWidget):
                     "guid": my_guid,
                 }, headers={"x-machine-guid": my_guid}, timeout=10)
                 if r.status_code == 200:
+                    self._apply_local_update(row_data.get("_adh_id"), updates)
                     QMessageBox.information(self, "نجاح", "تم تعديل السجل ومزامنته فورياً مع كافة الموظفين.")
                     self.load_data()
                 else:
@@ -3201,6 +3480,7 @@ class AccessHubWidget(QWidget):
                     timeout=10
                 )
                 if r.status_code == 200:
+                    self._apply_local_delete(row_data.get('_adh_id'))
                     QMessageBox.information(self, "نجاح", "تم حذف السجل ومزامنته مع النظام السحابي.")
                     self.load_data()
                 else:

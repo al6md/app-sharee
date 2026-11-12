@@ -886,7 +886,7 @@ export default function AccessHubPage() {
           const meta = TABLE_META[tbl] || { icon: '🏷️', title: tbl };
           const count =
             activeFile === 'all'
-              ? (data?.files || []).reduce((acc, f) => acc + (f.table_counts[tbl] || 0), 0)
+              ? (data?.files || []).reduce((acc, f) => acc + (f.table_counts[tbl] || 0) + (tbl === 'الدلالين' ? (f.table_counts['دلالين'] || 0) : 0), 0)
               : data?.files.find((f) => f.name === activeFile)?.table_counts[tbl] || 0;
           return (
             <button

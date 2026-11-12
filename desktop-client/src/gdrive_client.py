@@ -23,6 +23,7 @@ from datetime import datetime
 from pathlib import Path
 
 import requests
+import re
 
 for _stream_name in ("stdout", "stderr"):
     _stream = getattr(sys, _stream_name, None)
@@ -67,6 +68,8 @@ def _safe_log(msg):
         pass
 
 
+_EXCEL_TEMP_RE = re.compile(r'^[0-9A-Fa-f]{8}$')
+
 def is_ignored_name(name):
     """ملفات مؤقتة/نظامية لا يجب مزامنتها أبداً (ملفات قفل Office، ملفات مؤقتة...)"""
     if not name:
@@ -75,6 +78,8 @@ def is_ignored_name(name):
     if low in _IGNORED_EXACT:
         return True
     if name.startswith("~$") or name.startswith(".") or name.startswith("~WRL"):
+        return True
+    if _EXCEL_TEMP_RE.match(name):
         return True
     return low.endswith(_IGNORED_SUFFIXES)
 
@@ -602,7 +607,11 @@ class GoogleDriveClient:
                             if parent_path is None:
                                 continue
                             name = item.get("name", "")
+                            if is_ignored_name(name):
+                                continue
                             rel = f"{parent_path}/{name}" if parent_path else name
+                            if any(part.startswith(".") for part in rel.split("/")):
+                                continue
                             if item.get("mimeType") == FOLDER_MIME:
                                 if item["id"] in visited:
                                     continue
@@ -1141,6 +1150,8 @@ class GoogleDriveClient:
         if file_name and not (rel_path or file_path):
             fname = file_name
         if is_ignored_name(fname):
+            return True, {"ignored": True}
+        if rel and any(part.startswith(".") for part in rel.split("/")):
             return True, {"ignored": True}
         parent_rel = rel.rsplit("/", 1)[0] if "/" in rel else ""
 
