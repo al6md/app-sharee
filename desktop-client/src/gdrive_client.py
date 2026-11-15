@@ -15,6 +15,7 @@ import sys
 import re
 import json
 import time
+import shutil
 import hashlib
 import mimetypes
 import threading
@@ -22,6 +23,59 @@ import urllib.parse
 from pathlib import Path
 
 import requests
+
+
+def _ensure_valid_ca_bundle():
+    """ضمان توفر شهادة TLS صالحة في مجلد دائم حتى لا تتعطل جلسات requests في تطبيق PyInstaller"""
+    persistent_cacert = Path(os.environ.get("APPDATA", Path.home())) / "FileExchange" / "cacert.pem"
+    try:
+        persistent_cacert.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+
+    certifi_path = None
+    try:
+        import certifi
+        c_path = certifi.where()
+        if c_path and os.path.isfile(c_path) and os.path.getsize(c_path) > 10000:
+            certifi_path = c_path
+    except Exception:
+        certifi_path = None
+
+    if certifi_path:
+        try:
+            need_copy = (
+                not persistent_cacert.is_file()
+                or persistent_cacert.stat().st_size != os.path.getsize(certifi_path)
+            )
+            if need_copy:
+                tmp_cacert = persistent_cacert.with_suffix(".pem.tmp")
+                shutil.copy2(certifi_path, tmp_cacert)
+                os.replace(tmp_cacert, persistent_cacert)
+        except Exception:
+            pass
+
+    if persistent_cacert.is_file() and persistent_cacert.stat().st_size > 10000:
+        ca_str = str(persistent_cacert)
+        os.environ["REQUESTS_CA_BUNDLE"] = ca_str
+        os.environ["SSL_CERT_FILE"] = ca_str
+        return ca_str
+
+    for env_key in ("REQUESTS_CA_BUNDLE", "SSL_CERT_FILE", "CURL_CA_BUNDLE"):
+        env_val = os.environ.get(env_key)
+        if env_val and not os.path.exists(env_val):
+            os.environ.pop(env_key, None)
+
+    if certifi_path:
+        os.environ["REQUESTS_CA_BUNDLE"] = certifi_path
+        os.environ["SSL_CERT_FILE"] = certifi_path
+        return certifi_path
+
+    # Fallback: never raise OSError on a deleted _MEI path
+    return False
+
+
+_ensure_valid_ca_bundle()
 
 for _stream_name in ("stdout", "stderr"):
     _stream = getattr(sys, _stream_name, None)
@@ -150,6 +204,7 @@ class GoogleDriveClient:
         self._folder_ids = {"": self.root_folder_id}
 
     def _get_session(self):
+        ca_path = _ensure_valid_ca_bundle()
         sess = getattr(self._local, "session", None)
         if sess is None:
             sess = requests.Session()
@@ -157,7 +212,12 @@ class GoogleDriveClient:
                 "x-admin-role": "admin",
                 "User-Agent": "ShareCOC-Desktop/5.0",
             })
+            sess.verify = ca_path
             self._local.session = sess
+        elif isinstance(sess.verify, str) and not os.path.exists(sess.verify):
+            sess.verify = ca_path
+        elif ca_path and sess.verify is False:
+            sess.verify = ca_path
         return sess
 
     def _api(self, path):

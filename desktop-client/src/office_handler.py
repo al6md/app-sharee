@@ -280,7 +280,7 @@ class OfficeHandler:
             exe_path = OfficeHandler.get_office_executable(path.suffix)
             if exe_path and os.path.exists(exe_path):
                 try:
-                    subprocess.Popen([exe_path, path_str])
+                    subprocess.Popen([exe_path, path_str], close_fds=True)
                     OfficeHandler._bring_window_to_front(path_str, synchronous=synchronous)
                     return True
                 except Exception as e_direct:
@@ -294,12 +294,12 @@ class OfficeHandler:
             except Exception as e_startfile:
                 # الطريقة الثالثة البديلة الآمنة: استدعاء مستكشف ويندوز بدون وسيط الشل (منع حقن الأوامر)
                 try:
-                    subprocess.Popen(['explorer.exe', path_str], shell=False)
+                    subprocess.Popen(['explorer.exe', path_str], shell=False, close_fds=True)
                     OfficeHandler._bring_window_to_front(path_str, synchronous=synchronous)
                     return True
                 except Exception as e_exp:
                     try:
-                        subprocess.Popen(['cmd.exe', '/c', 'start', '', path_str], shell=False)
+                        subprocess.Popen(['cmd.exe', '/c', 'start', '', path_str], shell=False, close_fds=True)
                         OfficeHandler._bring_window_to_front(path_str, synchronous=synchronous)
                         return True
                     except Exception as e_cmd:

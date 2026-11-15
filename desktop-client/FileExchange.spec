@@ -2,6 +2,8 @@
 """
 PyInstaller Spec File for FileExchangeSetup.exe / share coc.exe
 """
+import certifi
+
 block_cipher = None
 
 a = Analysis(
@@ -10,7 +12,8 @@ a = Analysis(
     binaries=[],
     datas=[
         ('assets', 'assets'),
-        ('gdrive_credentials.json', '.')
+        ('gdrive_credentials.json', '.'),
+        (certifi.where(), 'certifi'),
     ],
     hiddenimports=[
         'PyQt6',

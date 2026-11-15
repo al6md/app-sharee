@@ -27,6 +27,45 @@ try:
 except Exception:
     pass
 
+
+def _clean_pyinstaller_child_env():
+    """تنظيف متغيرات بيئة PyInstaller عند تشغيل نسخة جديدة مستقلة من التطبيق"""
+    env = os.environ.copy()
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    for key in list(env.keys()):
+        if key == "_MEIPASS2" or key.startswith("_PYI_") or key in ("REQUESTS_CA_BUNDLE", "SSL_CERT_FILE", "CURL_CA_BUNDLE"):
+            env.pop(key, None)
+    return env
+
+
+def _repair_startup_ca_bundle():
+    """حفظ وإصلاح مسار شهادات TLS عند بدء التشغيل لمنع فقدانها عند خروج العملية المرسلة"""
+    try:
+        import shutil
+        import certifi
+        persistent_cacert = Path(os.environ.get("APPDATA", Path.home())) / "FileExchange" / "cacert.pem"
+        persistent_cacert.parent.mkdir(parents=True, exist_ok=True)
+        c_path = certifi.where()
+        if c_path and os.path.isfile(c_path) and os.path.getsize(c_path) > 10000:
+            if not persistent_cacert.is_file() or persistent_cacert.stat().st_size != os.path.getsize(c_path):
+                tmp_cacert = persistent_cacert.with_suffix(".pem.tmp")
+                shutil.copy2(c_path, tmp_cacert)
+                os.replace(tmp_cacert, persistent_cacert)
+        if persistent_cacert.is_file() and persistent_cacert.stat().st_size > 10000:
+            os.environ["REQUESTS_CA_BUNDLE"] = str(persistent_cacert)
+            os.environ["SSL_CERT_FILE"] = str(persistent_cacert)
+            return
+    except Exception:
+        pass
+    for env_key in ("REQUESTS_CA_BUNDLE", "SSL_CERT_FILE", "CURL_CA_BUNDLE"):
+        env_val = os.environ.get(env_key)
+        if env_val and not os.path.exists(env_val):
+            os.environ.pop(env_key, None)
+
+
+_repair_startup_ca_bundle()
+
+
 def _safe_log_err(msg):
     try:
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -421,7 +460,12 @@ def main():
                 # تشغيل تطبيق الحاسوب في صينية النظام (System Tray) ليبقى متصلاً ومتاحاً للطلبات التالية
                 try:
                     if getattr(sys, 'frozen', False):
-                        subprocess.Popen([sys.executable], creationflags=getattr(subprocess, 'DETACHED_PROCESS', 0x00000008))
+                        subprocess.Popen(
+                            [sys.executable],
+                            env=_clean_pyinstaller_child_env(),
+                            creationflags=getattr(subprocess, 'DETACHED_PROCESS', 0x00000008),
+                            close_fds=True,
+                        )
                 except Exception:
                     pass
                 sys.exit(0)

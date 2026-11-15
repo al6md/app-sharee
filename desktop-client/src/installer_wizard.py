@@ -35,6 +35,16 @@ from windows_integration import (
 )
 
 
+def _clean_child_env():
+    """تنظيف متغيرات PyInstaller لضمان استقلالية التطبيق بعد الإقلاع من المعالج"""
+    env = os.environ.copy()
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    for key in list(env.keys()):
+        if key == "_MEIPASS2" or key.startswith("_PYI_") or key in ("REQUESTS_CA_BUNDLE", "SSL_CERT_FILE", "CURL_CA_BUNDLE"):
+            env.pop(key, None)
+    return env
+
+
 def _get_bundle_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys._MEIPASS)
@@ -570,7 +580,12 @@ class ShareCOCInstallerWizard(QMainWindow):
                 pass
         if self.chk_launch_now.isChecked() and self.installed_exe_path and os.path.exists(self.installed_exe_path):
             try:
-                subprocess.Popen([self.installed_exe_path], cwd=str(Path(self.installed_exe_path).parent))
+                subprocess.Popen(
+                    [self.installed_exe_path],
+                    cwd=str(Path(self.installed_exe_path).parent),
+                    env=_clean_child_env(),
+                    close_fds=True,
+                )
             except Exception as e:
                 print(f"[Launch error]: {e}")
         self.close()
@@ -634,7 +649,9 @@ def run_uninstaller(quiet: bool = False):
         cmd = f'ping 127.0.0.1 -n 3 > nul & rmdir /s /q "{install_dir}"'
         subprocess.Popen(
             ["cmd.exe", "/c", cmd],
+            env=_clean_child_env(),
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            close_fds=True,
         )
 
     if not quiet:
