@@ -1,0 +1,226 @@
+{
+  "version": 3,
+  "updatedAt": "2026-11-10T09:47:52.066Z",
+  "adminCredentials": {
+    "username": "ali",
+    "password": "al6md",
+    "updatedAt": "2026-11-09T07:35:04.811Z"
+  },
+  "devices": [
+    {
+      "id": "dev-1794206617008-fedp5",
+      "name": "حاسوب Windows (١‏/١١‏/٢٠٢٦)",
+      "user": "حاسوب Windows (١‏/١١‏/٢٠٢٦)",
+      "os": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36 Edg/157.0.0.0",
+      "machineGuid": "WEB-dc743da9-7722-4cfc-9bb3-a3f1c5feab79",
+      "isAuthorized": true,
+      "lastSeen": "متصل الآن",
+      "status": "متصل الآن",
+      "department": "مركز بيانات Access",
+      "authorizedDepts": [
+        "سجل التجاري",
+        "القسم العام"
+      ],
+      "registeredAt": "2026-11-09T06:43:37.008Z",
+      "accessRole": "data_entry"
+    },
+    {
+      "id": "dev-1794206659488-yx0z1",
+      "name": "حاسوب Windows (١‏/١١‏/٢٠٢٦)",
+      "user": "حاسوب Windows (١‏/١١‏/٢٠٢٦)",
+      "os": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36 Edg/157.0.0.0",
+      "machineGuid": "WEB-58be5409-8cda-48ee-8293-49af7a892b5d",
+      "isAuthorized": true,
+      "lastSeen": "متصل الآن",
+      "status": "متصل الآن",
+      "department": "مركز بيانات Access",
+      "authorizedDepts": [
+        "سجل التجاري",
+        "القسم العام"
+      ],
+      "registeredAt": "2026-11-09T06:44:19.488Z",
+      "accessRole": "data_entry"
+    },
+    {
+      "id": "dev-1794206731415-ctye4",
+      "name": "حاسوب Windows (١‏/١١‏/٢٠٢٦)",
+      "user": "حاسوب Windows (١‏/١١‏/٢٠٢٦)",
+      "os": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36 Edg/157.0.0.0",
+      "machineGuid": "WEB-b8e725f4-b9fd-4abb-a08b-c9b4348da006",
+      "isAuthorized": true,
+      "lastSeen": "متصل الآن",
+      "status": "متصل الآن",
+      "department": "مركز بيانات Access",
+      "authorizedDepts": [
+        "مركز بيانات Access"
+      ],
+      "registeredAt": "2026-11-09T06:45:31.415Z",
+      "accessRole": "data_entry"
+    },
+    {
+      "id": "dev-1794206890196-cue2a",
+      "name": "جهاز Mac (٨‏/١١‏/٢٠٢٦)",
+      "user": "جهاز Mac (٨‏/١١‏/٢٠٢٦)",
+      "os": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0.1 Mobile/15E148 Safari/604.1",
+      "machineGuid": "WEB-43e3f1ca-06ea-462b-ba82-004d00c81b80",
+      "isAuthorized": true,
+      "lastSeen": "متصل الآن",
+      "status": "متصل الآن",
+      "department": "مركز بيانات Access",
+      "authorizedDepts": [
+        "سجل التجاري",
+        "القسم العام"
+      ],
+      "registeredAt": "2026-11-09T06:48:10.196Z",
+      "accessRole": "data_entry"
+    },
+    {
+      "id": "dev-1794209763842-li1jk",
+      "name": "علي ماجد ويب",
+      "user": "علي ماجد ويب",
+      "os": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36 Edg/157.0.0.0",
+      "machineGuid": "WEB-fdfbc724-01fa-492d-80c2-c6c38a0fdb54",
+      "isAuthorized": true,
+      "lastSeen": "متصل الآن",
+      "status": "متصل الآن",
+      "department": "مركز بيانات Access",
+      "authorizedDepts": [
+        "مركز بيانات Access"
+      ],
+      "registeredAt": "2026-11-09T07:36:03.842Z",
+      "accessRole": "data_entry"
+    },
+    {
+      "id": "dev-1794224752482-10pdh",
+      "name": "علي مبايل",
+      "user": "علي مبايل",
+      "os": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0.1 Mobile/15E148 Safari/604.1",
+      "machineGuid": "WEB-50f1fc0e-e852-40df-b7d2-5954c5af00b4",
+      "isAuthorized": true,
+      "lastSeen": "متصل الآن",
+      "status": "متصل الآن",
+      "department": "مركز بيانات Access",
+      "authorizedDepts": [
+        "سجل التجاري",
+        "القسم العام"
+      ],
+      "registeredAt": "2026-11-09T11:45:52.482Z",
+      "accessRole": "data_entry"
+    },
+    {
+      "id": "dev-1794234060859-nwyim",
+      "name": "X30J-2IN1-TH11",
+      "user": "X30J-2IN1-TH11",
+      "os": "Windows 11 Desktop",
+      "machineGuid": "a4853371-9b2f-45a7-b095-0d250d161bd1",
+      "isAuthorized": true,
+      "lastSeen": "متصل الآن",
+      "status": "متصل الآن",
+      "department": "مركز بيانات Access",
+      "authorizedDepts": [
+        "مركز بيانات Access"
+      ],
+      "registeredAt": "2026-11-09T14:21:00.859Z",
+      "accessRole": "data_entry"
+    },
+    {
+      "id": "dev-1794291070024-vfwki",
+      "name": "DESKTOP-84NKSR3",
+      "user": "DESKTOP-84NKSR3",
+      "os": "Windows 11 Desktop",
+      "machineGuid": "6499bfa7-ea3c-489d-979e-0e13bd7c6271",
+      "isAuthorized": true,
+      "lastSeen": "متصل الآن",
+      "status": "متصل الآن",
+      "department": "مركز بيانات Access",
+      "authorizedDepts": [
+        "سجل التجاري",
+        "القسم العام"
+      ],
+      "registeredAt": "2026-11-10T06:11:10.024Z",
+      "accessRole": "data_entry"
+    },
+    {
+      "id": "dev-1794304072066-m8pkl",
+      "name": "DESKTOP-OQIEROH",
+      "user": "DESKTOP-OQIEROH",
+      "os": "Windows 11 Desktop",
+      "machineGuid": "235a6140-6eb0-458a-859a-7deca0803969",
+      "isAuthorized": true,
+      "lastSeen": "متصل الآن",
+      "status": "متصل الآن",
+      "department": "مركز بيانات Access",
+      "authorizedDepts": [
+        "مركز بيانات Access"
+      ],
+      "accessRole": "data_entry",
+      "registeredAt": "2026-11-10T09:47:52.066Z"
+    }
+  ],
+  "departments": {
+    "مركز بيانات Access": {
+      "departmentName": "مركز بيانات Access",
+      "canView": true,
+      "canDownload": true,
+      "canUpload": true,
+      "canCreateFolder": true,
+      "canEdit": true,
+      "canRename": true,
+      "canMove": true,
+      "canDelete": true,
+      "canPermanentDelete": true,
+      "pinCode": "2004",
+      "deptUsername": "coc",
+      "deptPassword": "al2mdal6md",
+      "authorizedDevices": [
+        "WEB-dc743da9-7722-4cfc-9bb3-a3f1c5feab79",
+        "WEB-58be5409-8cda-48ee-8293-49af7a892b5d",
+        "WEB-b8e725f4-b9fd-4abb-a08b-c9b4348da006",
+        "WEB-43e3f1ca-06ea-462b-ba82-004d00c81b80",
+        "WEB-fdfbc724-01fa-492d-80c2-c6c38a0fdb54",
+        "WEB-50f1fc0e-e852-40df-b7d2-5954c5af00b4",
+        "a4853371-9b2f-45a7-b095-0d250d161bd1",
+        "6499bfa7-ea3c-489d-979e-0e13bd7c6271",
+        "235a6140-6eb0-458a-859a-7deca0803969"
+      ],
+      "updatedAt": "2026-11-10T09:47:52.066Z"
+    }
+  },
+  "accessHubSecurity": {
+    "enabled": true,
+    "username": "coc",
+    "password": "al2mdal6md",
+    "pinCode": "2004",
+    "authorizedDevices": [
+      "WEB-dc743da9-7722-4cfc-9bb3-a3f1c5feab79",
+      "WEB-58be5409-8cda-48ee-8293-49af7a892b5d",
+      "WEB-b8e725f4-b9fd-4abb-a08b-c9b4348da006",
+      "WEB-43e3f1ca-06ea-462b-ba82-004d00c81b80",
+      "WEB-fdfbc724-01fa-492d-80c2-c6c38a0fdb54",
+      "WEB-50f1fc0e-e852-40df-b7d2-5954c5af00b4",
+      "a4853371-9b2f-45a7-b095-0d250d161bd1",
+      "6499bfa7-ea3c-489d-979e-0e13bd7c6271",
+      "235a6140-6eb0-458a-859a-7deca0803969"
+    ],
+    "roles": {
+      "dev-1794056910402": "data_entry",
+      "WEB-dc743da9-7722-4cfc-9bb3-a3f1c5feab79": "data_entry",
+      "WEB-58be5409-8cda-48ee-8293-49af7a892b5d": "data_entry",
+      "WEB-b8e725f4-b9fd-4abb-a08b-c9b4348da006": "data_entry",
+      "WEB-43e3f1ca-06ea-462b-ba82-004d00c81b80": "data_entry",
+      "WEB-fdfbc724-01fa-492d-80c2-c6c38a0fdb54": "data_entry",
+      "dev-1794206617008-fedp5": "data_entry",
+      "dev-1794206659488-yx0z1": "data_entry",
+      "dev-1794206731415-ctye4": "data_entry",
+      "dev-1794209763842-li1jk": "data_entry",
+      "WEB-50f1fc0e-e852-40df-b7d2-5954c5af00b4": "data_entry",
+      "a4853371-9b2f-45a7-b095-0d250d161bd1": "data_entry",
+      "6499bfa7-ea3c-489d-979e-0e13bd7c6271": "data_entry",
+      "dev-1794206890196-cue2a": "data_entry",
+      "dev-1794224752482-10pdh": "data_entry",
+      "dev-1794291070024-vfwki": "data_entry",
+      "235a6140-6eb0-458a-859a-7deca0803969": "data_entry"
+    },
+    "updatedAt": "2026-11-10T09:47:52.066Z"
+  }
+}

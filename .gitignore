@@ -35,6 +35,10 @@ local_state.db
 *.sqlite
 *.sqlite3
 
+# Local server storage runtime
+web-dashboard/storage/
+web-dashboard/storage/*
+
 # Office temporary lock files
 ~$*
 *.tmp

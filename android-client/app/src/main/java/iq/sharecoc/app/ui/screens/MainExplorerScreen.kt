@@ -110,7 +110,7 @@ fun MainExplorerScreen(viewModel: DriveViewModel) {
                     IconButton(onClick = {
                         val intent = android.content.Intent(
                             android.content.Intent.ACTION_VIEW,
-                            android.net.Uri.parse("https://web-dashboard-pi-self.vercel.app/access-hub")
+                            android.net.Uri.parse("https://share.162.35.16.252.sslip.io/access-hub")
                         )
                         context.startActivity(intent)
                     }) {

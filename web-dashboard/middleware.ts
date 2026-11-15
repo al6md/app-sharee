@@ -9,7 +9,7 @@ import { NextRequest, NextResponse } from 'next/server';
  * - PROPFIND: يرد بخصائص الملف (207 Multi-Status) كـ XML سليم لـ Office.
  * - LOCK:     يمنح Office رمز قفل صالح (Lock Token) لإلغاء القراءة فقط وتفعيل التعديل.
  * - UNLOCK:   يحرر القفل (204 No Content).
- * - PUT:      يمر إلى route.ts ليقوم برفع وتحديث المحتوى في Google Drive مباشرة.
+ * - PUT:      يمر إلى route.ts ليقوم برفع وتحديث المحتوى في خادم ShareCOC المحلي مباشرة.
  */
 
 const DAV_HEADERS: Record<string, string> = {

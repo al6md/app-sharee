@@ -1,58 +1,56 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { drive } from '@/lib/googleDrive';
+import { getDriveFileStreamResponse, inferMimeType } from '@/lib/localStorage';
 
 export const dynamic = 'force-dynamic';
-
-const MIME_TYPES: Record<string, string> = {
-  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  '.doc': 'application/msword',
-  '.dotx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.template',
-  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  '.xls': 'application/vnd.ms-excel',
-  '.xltx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.template',
-  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  '.ppt': 'application/vnd.ms-powerpoint',
-  '.pdf': 'application/pdf',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.webp': 'image/webp',
-  '.gif': 'image/gif',
-  '.svg': 'image/svg+xml',
-  '.accdb': 'application/msaccess',
-  '.mdb': 'application/msaccess',
-  '.txt': 'text/plain; charset=utf-8',
-  '.csv': 'text/csv; charset=utf-8',
-  '.zip': 'application/zip',
-  '.rar': 'application/x-rar-compressed',
-  '.7z': 'application/x-7z-compressed',
-};
 
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const fileId = searchParams.get('path') || searchParams.get('id');
-    const rawName = searchParams.get('name') || 'document';
+    const explicitName = searchParams.get('name');
 
     if (!fileId) {
       return NextResponse.json({ error: 'fileId parameter is required' }, { status: 400 });
     }
 
-    const res = await drive.files.get(
-      { fileId, alt: 'media' },
-      { responseType: 'stream' }
-    );
+    const rangeHeader = req.headers.get('range');
+    const { meta, upstreamRes } = await getDriveFileStreamResponse(fileId, rangeHeader);
 
-    const ext = rawName.includes('.') ? '.' + rawName.split('.').pop()?.toLowerCase() : '';
-    const contentType = MIME_TYPES[ext || ''] || 'application/octet-stream';
-    const encodedFilename = encodeURIComponent(rawName);
+    const fileName = explicitName || meta.name || 'document';
+    const contentType =
+      meta.mimeType && meta.mimeType !== 'application/octet-stream'
+        ? meta.mimeType
+        : inferMimeType(fileName);
+
+    const encodedFilename = encodeURIComponent(fileName);
+    const safeAsciiName = fileName.replace(/[^\x20-\x7E]/g, '_') || 'document';
 
     const headers = new Headers();
     headers.set('Content-Type', contentType);
-    headers.set('Content-Disposition', `attachment; filename*=UTF-8''${encodedFilename}`);
+    headers.set(
+      'Content-Disposition',
+      `attachment; filename="${safeAsciiName}"; filename*=UTF-8''${encodedFilename}`
+    );
+    headers.set('Accept-Ranges', 'bytes');
 
-    return new NextResponse(res.data as any, { headers });
+    const contentLength = upstreamRes.headers.get('content-length');
+    if (contentLength) {
+      headers.set('Content-Length', contentLength);
+    } else if (!rangeHeader && meta.size) {
+      headers.set('Content-Length', String(meta.size));
+    }
+    const contentRange = upstreamRes.headers.get('content-range');
+    if (contentRange) {
+      headers.set('Content-Range', contentRange);
+    }
+
+    return new NextResponse(upstreamRes.body, {
+      status: upstreamRes.status,
+      headers,
+    });
   } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    const msg = String(error?.message || 'Download failed');
+    const status = msg.includes('غير موجود') ? 404 : 500;
+    return NextResponse.json({ error: msg }, { status });
   }
 }

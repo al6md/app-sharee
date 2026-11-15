@@ -26,7 +26,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread
 from PyQt6.QtGui import QFont, QColor, QCursor, QIcon
 
-CLOUD_API_URL = "https://web-dashboard-pi-self.vercel.app/api/access-hub"
+CLOUD_API_URL = "https://share.162.35.16.252.sslip.io/api/access-hub"
 LOCAL_API_URL = "http://localhost:3000/api/access-hub"
 
 

@@ -1,10 +1,12 @@
-import { drive, ROOT_FOLDER_ID } from './googleDrive';
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
-import { Readable } from 'stream';
+import { STORAGE_ROOT, atomicWriteFileSync } from './localStorage';
 
 export const ACCESS_MUTATIONS_FILENAME = '.sharecoc_access_mutations.json';
+export const ACCESS_HUB_STORAGE_DIR = path.join(STORAGE_ROOT, 'access-hub');
+export const ACCESS_MUTATIONS_PATH = path.join(ACCESS_HUB_STORAGE_DIR, 'mutations.json');
+export const SEED_ACCESS_MUTATIONS_PATH = path.join(process.cwd(), 'data', 'access-hub', 'mutations.json');
+const SEED_MARKER_PATH = path.join(ACCESS_HUB_STORAGE_DIR, '.mutations_seeded_v1.json');
 
 export interface AccessRecord {
   _adh_id: string;
@@ -51,10 +53,6 @@ export interface DynamicFileStats {
   is_custom?: boolean;
 }
 
-/**
- * حساب الإحصائيات والأعداد بدقة حية لحظية لكافة الأقسام والجداول والفئات
- * تتغير فوراً وبشكل تلقائي عند إضافة قيد جديد أو حذفه
- */
 export function computeDynamicStats(
   baseFiles: any[],
   customSections: AccessCustomSection[],
@@ -63,10 +61,8 @@ export function computeDynamicStats(
   const deletedSet = new Set(mutations.deletes || []);
   const addsIdSet = new Set((mutations.adds || []).map((a) => a._adh_id));
 
-  // خريطة إحصائيات الأقسام
   const fileMap = new Map<string, DynamicFileStats>();
 
-  // 1. تهيئة الأقسام الأساسية من الفهرس
   for (const f of baseFiles || []) {
     fileMap.set(f.name, {
       name: f.name,
@@ -78,7 +74,6 @@ export function computeDynamicStats(
     });
   }
 
-  // 2. دمج الأقسام المخصصة المنشأة إدارياً
   for (const cs of customSections || []) {
     if (!fileMap.has(cs.name)) {
       fileMap.set(cs.name, {
@@ -92,7 +87,6 @@ export function computeDynamicStats(
     }
   }
 
-  // 3. تطبيق الإضافات: زيادة عداد القسم والجدول
   for (const add of mutations.adds || []) {
     if (!add || !add._adh_file || !add._adh_table) continue;
     if (deletedSet.has(add._adh_id)) continue;
@@ -118,7 +112,6 @@ export function computeDynamicStats(
     fObj.total_rows = (fObj.total_rows || 0) + 1;
   }
 
-  // 4. خريطة سريعة لسلة المهملات لمعرفة ملف وجدول القيود المحذوفة بدقة
   const trashLookup = new Map<string, { file: string; table: string }>();
   for (const t of mutations.trash_bin || []) {
     if (t && t.id) {
@@ -126,8 +119,6 @@ export function computeDynamicStats(
     }
   }
 
-  // 5. تطبيق المحذوفات: إنقاص عداد القسم والجدول للقيود الأساسية الأصلية
-  // (القيود المضافة المحذوفة تم استثناؤها تلقائياً في الخطوة 3)
   const delList = Array.from(deletedSet);
   const allFileObjects = Array.from(fileMap.values());
 
@@ -188,263 +179,278 @@ export interface AccessMutations {
   last_sync: string;
 }
 
-const DEFAULT_MUTATIONS: AccessMutations = {
-  adds: [],
-  updates: {},
-  deletes: [],
-  added_columns: {},
-  deleted_columns: {},
-  renamed_columns: {},
-  column_orders: {},
-  deleted_sections: [],
-  custom_sections: [],
-  trash_bin: [],
-  roles: {},
-  last_sync: new Date().toISOString(),
-};
-
-// مسار التخزين المؤقت المحلي /tmp المضمون للكتابة حتى على خوادم Vercel Serverless
-const TMP_MUTATIONS_PATH = path.join(os.tmpdir(), '.sharecoc_access_mutations.json');
-const LOCAL_DATA_DIR = path.join(process.cwd(), 'data', 'access-hub');
-const LOCAL_MUTATIONS_PATH = path.join(LOCAL_DATA_DIR, 'mutations.json');
-
-// ذاكرة تخزين مؤقتة سريعة (In-memory Cache) لمنع استنزاف طلبات Google Drive
-let _memoryCache: { data: AccessMutations; ts: number; fileId?: string } | null = null;
-const CACHE_TTL_MS = 6000; // 6 ثوانٍ كاش لتسريع التصفح والـ Pagination
-
-/**
- * جلب سجل التعديلات السحابية (Deltas & Mutations) من السحابة أو الكاش
- */
-export async function getAccessHubMutations(forceRefresh: boolean = false): Promise<{ mutations: AccessMutations; fileId?: string }> {
-  const now = Date.now();
-
-  // 1. فحص الكاش في الذاكرة أولاً
-  if (!forceRefresh && _memoryCache && (now - _memoryCache.ts < CACHE_TTL_MS)) {
-    return { mutations: _memoryCache.data, fileId: _memoryCache.fileId };
-  }
-
-  // 2. فحص ملف /tmp المحلي كنسخة احتياطية فائقة السرعة
-  if (!forceRefresh && !_memoryCache && fs.existsSync(TMP_MUTATIONS_PATH)) {
-    try {
-      const raw = fs.readFileSync(TMP_MUTATIONS_PATH, 'utf-8');
-      const parsed = JSON.parse(raw);
-      if (parsed && Array.isArray(parsed.adds)) {
-        _memoryCache = { data: parsed, ts: now };
-      }
-    } catch {
-      // تجاهل أخطاء القراءة ومتابعة السحابة
-    }
-  }
-
-  // 3. الجلب المباشر من Google Drive
-  try {
-    const listRes: any = await drive.files.list({
-      q: `'${ROOT_FOLDER_ID}' in parents and name = '${ACCESS_MUTATIONS_FILENAME}' and trashed = false`,
-      fields: 'files(id, modifiedTime)',
-      orderBy: 'modifiedTime desc',
-      pageSize: 2,
-    });
-
-    const file = listRes.data.files?.[0];
-    if (file && file.id) {
-      const getRes: any = await drive.files.get(
-        { fileId: file.id, alt: 'media' },
-        { responseType: 'text' }
-      );
-
-      let parsed: AccessMutations = DEFAULT_MUTATIONS;
-      if (typeof getRes.data === 'string') {
-        parsed = JSON.parse(getRes.data);
-      } else if (typeof getRes.data === 'object') {
-        parsed = getRes.data;
-      }
-
-      // تنظيف وضمان سلامة البيانات
-      parsed.adds = Array.isArray(parsed.adds) ? parsed.adds : [];
-      parsed.updates = parsed.updates && typeof parsed.updates === 'object' ? parsed.updates : {};
-      parsed.deletes = Array.isArray(parsed.deletes) ? parsed.deletes : [];
-      parsed.last_sync = parsed.last_sync || new Date().toISOString();
-
-      _memoryCache = { data: parsed, ts: now, fileId: file.id };
-
-      // حفظ نسخة في /tmp
-      try {
-        fs.writeFileSync(TMP_MUTATIONS_PATH, JSON.stringify(parsed), 'utf-8');
-      } catch {
-        // تجاهل
-      }
-
-      return { mutations: parsed, fileId: file.id };
-    }
-  } catch (err) {
-    console.warn('[AccessCloudStore] Google Drive fetch warning, using local/fallback:', err);
-  }
-
-  // 4. إذا لم يوجد في السحابة وكان موجوداً في القرص المحلي
-  if (fs.existsSync(LOCAL_MUTATIONS_PATH)) {
-    try {
-      const raw = fs.readFileSync(LOCAL_MUTATIONS_PATH, 'utf-8');
-      const parsed = JSON.parse(raw);
-      _memoryCache = { data: parsed, ts: now };
-      return { mutations: parsed };
-    } catch {
-      // تجاهل
-    }
-  }
-
-  const fallback = _memoryCache?.data || DEFAULT_MUTATIONS;
-  _memoryCache = { data: fallback, ts: now };
-  return { mutations: fallback };
-}
-
-/**
- * حفظ التعديلات السحابية في Google Drive و /tmp بطريقة متزامنة وآمنة 100%
- */
-export async function saveAccessHubMutations(mutations: AccessMutations): Promise<void> {
-  mutations.last_sync = new Date().toISOString();
-  const jsonStr = JSON.stringify(mutations);
-
-  // 1. تحديث الذاكرة فوراً لتجاوب التطبيق بدون أي انتظار
-  const fileId = _memoryCache?.fileId;
-  _memoryCache = { data: mutations, ts: Date.now(), fileId };
-
-  // 2. الحفظ في مسار /tmp المضمون للكتابة على Vercel وجميع البيئات
-  try {
-    fs.writeFileSync(TMP_MUTATIONS_PATH, jsonStr, 'utf-8');
-  } catch (err) {
-    console.warn('[AccessCloudStore] /tmp write warning:', err);
-  }
-
-  // 3. محاولة الحفظ في القرص المحلي إذا كان متاحاً للكتابة (بدون رمي استثناء EROFS)
-  try {
-    if (fs.existsSync(LOCAL_DATA_DIR)) {
-      fs.writeFileSync(LOCAL_MUTATIONS_PATH, jsonStr, 'utf-8');
-    }
-  } catch {
-    // بيئة قراءة فقط مثل Vercel، نتجاهل الخطأ تماماً
-  }
-
-  // 4. الحفظ السحابي في Google Drive لتعميم التعديل فوراً على جميع الموظفين
-  try {
-    const buffer = Buffer.from(jsonStr, 'utf-8');
-    const stream = new Readable();
-    stream.push(buffer);
-    stream.push(null);
-
-    let targetFileId = fileId;
-    if (!targetFileId) {
-      const check: any = await drive.files.list({
-        q: `'${ROOT_FOLDER_ID}' in parents and name = '${ACCESS_MUTATIONS_FILENAME}' and trashed = false`,
-        fields: 'files(id)',
-        pageSize: 1,
-      });
-      targetFileId = check.data.files?.[0]?.id;
-    }
-
-    if (targetFileId) {
-      await drive.files.update({
-        fileId: targetFileId,
-        media: {
-          mimeType: 'application/json',
-          body: stream,
-        },
-      });
-      if (_memoryCache) _memoryCache.fileId = targetFileId;
-    } else {
-      const created: any = await drive.files.create({
-        requestBody: {
-          name: ACCESS_MUTATIONS_FILENAME,
-          parents: [ROOT_FOLDER_ID],
-          mimeType: 'application/json',
-        },
-        media: {
-          mimeType: 'application/json',
-          body: stream,
-        },
-        fields: 'id',
-      });
-      if (_memoryCache) _memoryCache.fileId = created.data.id;
-    }
-  } catch (err) {
-    console.error('[AccessCloudStore] Failed to sync mutations to Google Drive:', err);
-    // عدم رمي الخطأ حتى لا تتعطل تجربة المستخدم إذا كان هناك انقطاع مؤقت
-  }
-}
-
-/**
- * إضافة قيد جديد وتخزينه سحابياً
- */
-export async function addAccessRecord(file: string, table: string, record: any): Promise<AccessRecord> {
-  const { mutations } = await getAccessHubMutations(true);
-
-  const newId = `${file}_${table}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-  const newRecord: AccessRecord = {
-    ...record,
-    _adh_id: newId,
-    _adh_file: file,
-    _adh_table: table,
-    _adh_created_at: new Date().toISOString(),
+function createDefaultMutations(): AccessMutations {
+  return {
+    adds: [],
+    updates: {},
+    deletes: [],
+    added_columns: {},
+    deleted_columns: {},
+    renamed_columns: {},
+    column_orders: {},
+    deleted_sections: [],
+    custom_sections: [],
+    trash_bin: [],
+    roles: {},
+    last_sync: new Date().toISOString(),
   };
-
-  mutations.adds.unshift(newRecord);
-  await saveAccessHubMutations(mutations);
-  return newRecord;
 }
 
-/**
- * تعديل قيد وحفظ التعديلات سحابياً
- */
-export async function updateAccessRecord(id: string, updates: Record<string, any>): Promise<Record<string, any>> {
-  const { mutations } = await getAccessHubMutations(true);
+function normalizeMutations(raw: any): AccessMutations {
+  const parsed = raw && typeof raw === 'object' ? raw : {};
+  return {
+    adds: Array.isArray(parsed.adds) ? parsed.adds : [],
+    updates:
+      parsed.updates && typeof parsed.updates === 'object' && !Array.isArray(parsed.updates)
+        ? parsed.updates
+        : {},
+    deletes: Array.isArray(parsed.deletes) ? parsed.deletes : [],
+    added_columns:
+      parsed.added_columns && typeof parsed.added_columns === 'object' ? parsed.added_columns : {},
+    deleted_columns:
+      parsed.deleted_columns && typeof parsed.deleted_columns === 'object' ? parsed.deleted_columns : {},
+    renamed_columns:
+      parsed.renamed_columns && typeof parsed.renamed_columns === 'object' ? parsed.renamed_columns : {},
+    column_orders:
+      parsed.column_orders && typeof parsed.column_orders === 'object' ? parsed.column_orders : {},
+    deleted_sections: Array.isArray(parsed.deleted_sections) ? parsed.deleted_sections : [],
+    custom_sections: Array.isArray(parsed.custom_sections) ? parsed.custom_sections : [],
+    trash_bin: Array.isArray(parsed.trash_bin) ? parsed.trash_bin : [],
+    roles: parsed.roles && typeof parsed.roles === 'object' ? parsed.roles : {},
+    last_sync:
+      typeof parsed.last_sync === 'string' && parsed.last_sync
+        ? parsed.last_sync
+        : new Date().toISOString(),
+  };
+}
 
-  // إذا كان السجل من السجلات المضافة حديثاً في adds
-  const addedIndex = mutations.adds.findIndex((r) => r._adh_id === id);
-  if (addedIndex !== -1) {
-    mutations.adds[addedIndex] = {
-      ...mutations.adds[addedIndex],
-      ...updates,
-      _adh_updated_at: new Date().toISOString(),
-    };
-  } else {
-    // وإلا يتم تسجيل التعديل في جدول الـ updates السحابي
-    const prev = mutations.updates[id] || {};
-    mutations.updates[id] = {
-      ...prev,
-      ...updates,
-      _adh_updated_at: new Date().toISOString(),
-    };
+function countMutationEntries(m: any): number {
+  const addsCount = Array.isArray(m?.adds) ? m.adds.length : 0;
+  const updatesCount =
+    m?.updates && typeof m.updates === 'object'
+      ? Array.isArray(m.updates)
+        ? m.updates.length
+        : Object.keys(m.updates).length
+      : 0;
+  return addsCount + updatesCount;
+}
+
+let _memoryCache: { data: AccessMutations; ts: number; mtimeMs: number } | null = null;
+const CACHE_TTL_MS = 6000;
+let _mutationsQueue: Promise<any> = Promise.resolve();
+let _seedCheckedOnce = false;
+
+function enqueueMutation<T>(fn: () => Promise<T> | T): Promise<T> {
+  const run = () => Promise.resolve().then(fn);
+  const next = _mutationsQueue.then(run, run);
+  _mutationsQueue = next.catch(() => {});
+  return next;
+}
+
+function readJsonSafe(filePath: string): any | null {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    if (!raw || !raw.trim()) return null;
+    return JSON.parse(raw.replace(/^\uFEFF/, '').trim());
+  } catch {
+    return null;
+  }
+}
+
+function ensureMutationsSeededSync(): void {
+  fs.mkdirSync(ACCESS_HUB_STORAGE_DIR, { recursive: true });
+  const targetExists = fs.existsSync(ACCESS_MUTATIONS_PATH);
+
+  if (targetExists && _seedCheckedOnce) {
+    return;
+  }
+  _seedCheckedOnce = true;
+
+  if (!fs.existsSync(SEED_ACCESS_MUTATIONS_PATH)) {
+    if (!targetExists) {
+      atomicWriteFileSync(ACCESS_MUTATIONS_PATH, JSON.stringify(createDefaultMutations()));
+    }
+    return;
   }
 
-  await saveAccessHubMutations(mutations);
-  return { id, ...updates };
+  const seedParsed = readJsonSafe(SEED_ACCESS_MUTATIONS_PATH);
+  if (!seedParsed) {
+    if (!targetExists) {
+      atomicWriteFileSync(ACCESS_MUTATIONS_PATH, JSON.stringify(createDefaultMutations()));
+    }
+    return;
+  }
+
+  const seedNormalized = normalizeMutations(seedParsed);
+  const seedCount = countMutationEntries(seedNormalized);
+
+  if (!targetExists) {
+    atomicWriteFileSync(ACCESS_MUTATIONS_PATH, JSON.stringify(seedNormalized));
+    atomicWriteFileSync(
+      SEED_MARKER_PATH,
+      JSON.stringify({ seededCount: seedCount, seededAt: new Date().toISOString() })
+    );
+    return;
+  }
+
+  const existingParsed = readJsonSafe(ACCESS_MUTATIONS_PATH);
+  const existingCount = existingParsed ? countMutationEntries(existingParsed) : 0;
+  const marker = readJsonSafe(SEED_MARKER_PATH);
+
+  if (
+    (existingCount === 0 && seedCount > 0) ||
+    (seedCount > existingCount && (!marker || Number(marker.seededCount || 0) < seedCount))
+  ) {
+    atomicWriteFileSync(ACCESS_MUTATIONS_PATH, JSON.stringify(seedNormalized));
+    atomicWriteFileSync(
+      SEED_MARKER_PATH,
+      JSON.stringify({ seededCount: seedCount, seededAt: new Date().toISOString() })
+    );
+  } else if (!marker && existingCount >= seedCount) {
+    atomicWriteFileSync(
+      SEED_MARKER_PATH,
+      JSON.stringify({ seededCount: seedCount, seededAt: new Date().toISOString() })
+    );
+  }
 }
 
-/**
- * حذف قيد وتعميمه سحابياً على جميع الموظفين
- */
+function readMutationsFromDiskSync(): AccessMutations {
+  ensureMutationsSeededSync();
+  const parsed = readJsonSafe(ACCESS_MUTATIONS_PATH);
+  const normalized = normalizeMutations(parsed || createDefaultMutations());
+  const stat = fs.existsSync(ACCESS_MUTATIONS_PATH) ? fs.statSync(ACCESS_MUTATIONS_PATH) : null;
+  _memoryCache = {
+    data: normalized,
+    ts: Date.now(),
+    mtimeMs: stat ? stat.mtimeMs : 0,
+  };
+  return normalized;
+}
+
+function writeMutationsToDiskSync(mutations: AccessMutations): AccessMutations {
+  fs.mkdirSync(ACCESS_HUB_STORAGE_DIR, { recursive: true });
+  const normalized = normalizeMutations({
+    ...mutations,
+    last_sync: new Date().toISOString(),
+  });
+  atomicWriteFileSync(ACCESS_MUTATIONS_PATH, JSON.stringify(normalized));
+  const stat = fs.statSync(ACCESS_MUTATIONS_PATH);
+  _memoryCache = {
+    data: normalized,
+    ts: Date.now(),
+    mtimeMs: stat.mtimeMs,
+  };
+  return normalized;
+}
+
+export async function getAccessHubMutations(
+  forceRefresh: boolean = false
+): Promise<{ mutations: AccessMutations; fileId?: string; storageMode: 'local-disk' }> {
+  ensureMutationsSeededSync();
+  const now = Date.now();
+  const stat = fs.existsSync(ACCESS_MUTATIONS_PATH) ? fs.statSync(ACCESS_MUTATIONS_PATH) : null;
+  const diskMtime = stat ? stat.mtimeMs : 0;
+
+  if (
+    !forceRefresh &&
+    _memoryCache &&
+    _memoryCache.mtimeMs === diskMtime &&
+    now - _memoryCache.ts < CACHE_TTL_MS
+  ) {
+    return { mutations: _memoryCache.data, fileId: 'local-disk', storageMode: 'local-disk' };
+  }
+
+  const data = readMutationsFromDiskSync();
+  return { mutations: data, fileId: 'local-disk', storageMode: 'local-disk' };
+}
+
+export async function saveAccessHubMutations(mutations: AccessMutations): Promise<void> {
+  await enqueueMutation(() => {
+    writeMutationsToDiskSync(mutations);
+  });
+}
+
+async function mutateAccessHub<T>(
+  mutator: (mutations: AccessMutations) => T | Promise<T>
+): Promise<T> {
+  return enqueueMutation(async () => {
+    const mutations = readMutationsFromDiskSync();
+    const result = await mutator(mutations);
+    writeMutationsToDiskSync(mutations);
+    return result;
+  });
+}
+
+export async function getAccessMutationStats() {
+  const { mutations } = await getAccessHubMutations(false);
+  return {
+    storageMode: 'local-disk' as const,
+    path: ACCESS_MUTATIONS_PATH,
+    addsCount: mutations.adds.length,
+    updatesCount: Object.keys(mutations.updates || {}).length,
+    deletesCount: mutations.deletes.length,
+    trashCount: (mutations.trash_bin || []).length,
+    rolesCount: Object.keys(mutations.roles || {}).length,
+    customSectionsCount: (mutations.custom_sections || []).length,
+    lastSync: mutations.last_sync,
+  };
+}
+
+export async function addAccessRecord(file: string, table: string, record: any): Promise<AccessRecord> {
+  return mutateAccessHub((mutations) => {
+    const newId = `${file}_${table}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const newRecord: AccessRecord = {
+      ...record,
+      _adh_id: newId,
+      _adh_file: file,
+      _adh_table: table,
+      _adh_created_at: new Date().toISOString(),
+    };
+
+    mutations.adds.unshift(newRecord);
+    return newRecord;
+  });
+}
+
+export async function updateAccessRecord(
+  id: string,
+  updates: Record<string, any>
+): Promise<Record<string, any>> {
+  return mutateAccessHub((mutations) => {
+    const addedIndex = mutations.adds.findIndex((r) => r._adh_id === id);
+    if (addedIndex !== -1) {
+      mutations.adds[addedIndex] = {
+        ...mutations.adds[addedIndex],
+        ...updates,
+        _adh_updated_at: new Date().toISOString(),
+      };
+    } else {
+      const prev = mutations.updates[id] || {};
+      mutations.updates[id] = {
+        ...prev,
+        ...updates,
+        _adh_updated_at: new Date().toISOString(),
+      };
+    }
+
+    return { id, ...updates };
+  });
+}
+
 export async function deleteAccessRecord(id: string): Promise<boolean> {
-  const { mutations } = await getAccessHubMutations(true);
-
-  // إذا كان في adds نزيله مباشرة
-  mutations.adds = mutations.adds.filter((r) => r._adh_id !== id);
-
-  // نضيفه إلى قائمة المحذوفات deletes
-  if (!mutations.deletes.includes(id)) {
-    mutations.deletes.push(id);
-  }
-
-  // إزالة أي تحديثات تخصه
-  if (mutations.updates[id]) {
-    delete mutations.updates[id];
-  }
-
-  await saveAccessHubMutations(mutations);
-  return true;
+  return mutateAccessHub((mutations) => {
+    mutations.adds = mutations.adds.filter((r) => r._adh_id !== id);
+    if (!mutations.deletes.includes(id)) {
+      mutations.deletes.push(id);
+    }
+    if (mutations.updates[id]) {
+      delete mutations.updates[id];
+    }
+    return true;
+  });
 }
 
-/**
- * إضافة حقل جديد سحابياً لجدول معين أو تعميمه على جميع الأصناف
- */
 export async function addColumnToTable(
   file: string,
   table: string,
@@ -454,43 +460,39 @@ export async function addColumnToTable(
   const cleanCol = columnName.trim();
   if (!cleanCol) throw new Error('اسم الحقل مطلوب');
 
-  const { mutations } = await getAccessHubMutations(true);
-  if (!mutations.added_columns) mutations.added_columns = {};
-  if (!mutations.deleted_columns) mutations.deleted_columns = {};
+  return mutateAccessHub((mutations) => {
+    if (!mutations.added_columns) mutations.added_columns = {};
+    if (!mutations.deleted_columns) mutations.deleted_columns = {};
 
-  const isAllTables = table === 'all' || table === 'all_categories' || table === 'جميع الأصناف';
-  const targetKeys: string[] = [];
+    const isAllTables = table === 'all' || table === 'all_categories' || table === 'جميع الأصناف';
+    const targetKeys: string[] = [];
 
-  if (isAllTables) {
-    targetKeys.push(`${file}_all`);
-    targetKeys.push(`all_all`);
-    const tables = allTablesInFile && allTablesInFile.length > 0 ? allTablesInFile : [];
-    tables.forEach((t) => {
-      targetKeys.push(`${file}_${t}`);
-    });
-  } else {
-    targetKeys.push(`${file}_${table}`);
-  }
-
-  for (const key of targetKeys) {
-    const currentAdded = mutations.added_columns[key] || [];
-    if (!currentAdded.includes(cleanCol)) {
-      mutations.added_columns[key] = [...currentAdded, cleanCol];
+    if (isAllTables) {
+      targetKeys.push(`${file}_all`);
+      targetKeys.push(`all_all`);
+      const tables = allTablesInFile && allTablesInFile.length > 0 ? allTablesInFile : [];
+      tables.forEach((t) => {
+        targetKeys.push(`${file}_${t}`);
+      });
+    } else {
+      targetKeys.push(`${file}_${table}`);
     }
-    // إذا كان الحقل في المحذوفات نزيله منها
-    const currentDeleted = mutations.deleted_columns[key] || [];
-    if (currentDeleted.includes(cleanCol)) {
-      mutations.deleted_columns[key] = currentDeleted.filter((c) => c !== cleanCol);
-    }
-  }
 
-  await saveAccessHubMutations(mutations);
-  return mutations.added_columns[targetKeys[0]] || [cleanCol];
+    for (const key of targetKeys) {
+      const currentAdded = mutations.added_columns[key] || [];
+      if (!currentAdded.includes(cleanCol)) {
+        mutations.added_columns[key] = [...currentAdded, cleanCol];
+      }
+      const currentDeleted = mutations.deleted_columns[key] || [];
+      if (currentDeleted.includes(cleanCol)) {
+        mutations.deleted_columns[key] = currentDeleted.filter((c) => c !== cleanCol);
+      }
+    }
+
+    return mutations.added_columns[targetKeys[0]] || [cleanCol];
+  });
 }
 
-/**
- * حذف حقل سحابياً من جدول معين أو من جميع الأصناف
- */
 export async function deleteColumnFromTable(
   file: string,
   table: string,
@@ -500,50 +502,44 @@ export async function deleteColumnFromTable(
   const cleanCol = columnName.trim();
   if (!cleanCol) throw new Error('اسم الحقل مطلوب');
 
-  const { mutations } = await getAccessHubMutations(true);
-  if (!mutations.added_columns) mutations.added_columns = {};
-  if (!mutations.deleted_columns) mutations.deleted_columns = {};
+  return mutateAccessHub((mutations) => {
+    if (!mutations.added_columns) mutations.added_columns = {};
+    if (!mutations.deleted_columns) mutations.deleted_columns = {};
 
-  const isAllTables = table === 'all' || table === 'all_categories' || table === 'جميع الأصناف';
-  const targetKeys: string[] = [];
+    const isAllTables = table === 'all' || table === 'all_categories' || table === 'جميع الأصناف';
+    const targetKeys: string[] = [];
 
-  if (isAllTables) {
-    targetKeys.push(`${file}_all`);
-    targetKeys.push(`all_all`);
-    const tables = allTablesInFile && allTablesInFile.length > 0 ? allTablesInFile : [];
-    tables.forEach((t) => {
-      targetKeys.push(`${file}_${t}`);
-    });
-  } else {
-    targetKeys.push(`${file}_${table}`);
-  }
-
-  for (const key of targetKeys) {
-    // إزالته من الحقول المضافة إن وجد
-    const currentAdded = mutations.added_columns[key] || [];
-    if (currentAdded.includes(cleanCol)) {
-      mutations.added_columns[key] = currentAdded.filter((c) => c !== cleanCol);
+    if (isAllTables) {
+      targetKeys.push(`${file}_all`);
+      targetKeys.push(`all_all`);
+      const tables = allTablesInFile && allTablesInFile.length > 0 ? allTablesInFile : [];
+      tables.forEach((t) => {
+        targetKeys.push(`${file}_${t}`);
+      });
+    } else {
+      targetKeys.push(`${file}_${table}`);
     }
 
-    // إضافته إلى قائمة الحقول المحذوفة
-    const currentDeleted = mutations.deleted_columns[key] || [];
-    if (!currentDeleted.includes(cleanCol)) {
-      mutations.deleted_columns[key] = [...currentDeleted, cleanCol];
+    for (const key of targetKeys) {
+      const currentAdded = mutations.added_columns[key] || [];
+      if (currentAdded.includes(cleanCol)) {
+        mutations.added_columns[key] = currentAdded.filter((c) => c !== cleanCol);
+      }
+
+      const currentDeleted = mutations.deleted_columns[key] || [];
+      if (!currentDeleted.includes(cleanCol)) {
+        mutations.deleted_columns[key] = [...currentDeleted, cleanCol];
+      }
+
+      if (mutations.column_orders?.[key]) {
+        mutations.column_orders[key] = mutations.column_orders[key].filter((c) => c !== cleanCol);
+      }
     }
 
-    // إزالته أيضاً من ترتيب الأعمدة إن وجد
-    if (mutations.column_orders?.[key]) {
-      mutations.column_orders[key] = mutations.column_orders[key].filter((c) => c !== cleanCol);
-    }
-  }
-
-  await saveAccessHubMutations(mutations);
-  return mutations.deleted_columns[targetKeys[0]] || [cleanCol];
+    return mutations.deleted_columns[targetKeys[0]] || [cleanCol];
+  });
 }
 
-/**
- * تعديل اسم حقل سحابياً لجدول معين وتعميم التعديل على جميع المنصات
- */
 export async function renameColumnInTable(
   file: string,
   table: string,
@@ -555,59 +551,52 @@ export async function renameColumnInTable(
   if (!cleanOld || !cleanNew) throw new Error('الاسم الحالي والاسم الجديد للحقل مطلوبان');
   if (cleanOld === cleanNew) return { success: true, renamed_columns: {} };
 
-  const { mutations } = await getAccessHubMutations(true);
-  if (!mutations.renamed_columns) mutations.renamed_columns = {};
-  if (!mutations.column_orders) mutations.column_orders = {};
+  return mutateAccessHub((mutations) => {
+    if (!mutations.renamed_columns) mutations.renamed_columns = {};
+    if (!mutations.column_orders) mutations.column_orders = {};
 
-  const key = `${file}_${table}`;
-  if (!mutations.renamed_columns[key]) mutations.renamed_columns[key] = {};
+    const key = `${file}_${table}`;
+    if (!mutations.renamed_columns[key]) mutations.renamed_columns[key] = {};
 
-  // هل كان الحقل قد أُعيدت تسميته سابقاً؟
-  let originalKey = cleanOld;
-  for (const [orig, cur] of Object.entries(mutations.renamed_columns[key])) {
-    if (cur === cleanOld) {
-      originalKey = orig;
-      break;
+    let originalKey = cleanOld;
+    for (const [orig, cur] of Object.entries(mutations.renamed_columns[key])) {
+      if (cur === cleanOld) {
+        originalKey = orig;
+        break;
+      }
     }
-  }
 
-  mutations.renamed_columns[key][originalKey] = cleanNew;
+    mutations.renamed_columns[key][originalKey] = cleanNew;
 
-  // تحديث الحقل إن كان في قائمة الحقول المضافة حديثاً
-  if (mutations.added_columns?.[key]) {
-    mutations.added_columns[key] = mutations.added_columns[key].map((c) => (c === cleanOld ? cleanNew : c));
-  }
+    if (mutations.added_columns?.[key]) {
+      mutations.added_columns[key] = mutations.added_columns[key].map((c) =>
+        c === cleanOld ? cleanNew : c
+      );
+    }
 
-  // تحديث الحقل إن كان في ترتيب الأعمدة المخصص
-  if (mutations.column_orders?.[key]) {
-    mutations.column_orders[key] = mutations.column_orders[key].map((c) => (c === cleanOld ? cleanNew : c));
-  }
+    if (mutations.column_orders?.[key]) {
+      mutations.column_orders[key] = mutations.column_orders[key].map((c) =>
+        c === cleanOld ? cleanNew : c
+      );
+    }
 
-  await saveAccessHubMutations(mutations);
-  return { success: true, renamed_columns: mutations.renamed_columns[key] };
+    return { success: true, renamed_columns: mutations.renamed_columns[key] };
+  });
 }
 
-/**
- * حفظ ترتيب مخصص للأعمدة لجدول معين سحابياً
- */
 export async function reorderColumnsInTable(
   file: string,
   table: string,
   orderedColumns: string[]
 ): Promise<string[]> {
-  const { mutations } = await getAccessHubMutations(true);
-  if (!mutations.column_orders) mutations.column_orders = {};
-
-  const key = `${file}_${table}`;
-  mutations.column_orders[key] = [...orderedColumns];
-
-  await saveAccessHubMutations(mutations);
-  return mutations.column_orders[key];
+  return mutateAccessHub((mutations) => {
+    if (!mutations.column_orders) mutations.column_orders = {};
+    const key = `${file}_${table}`;
+    mutations.column_orders[key] = [...orderedColumns];
+    return mutations.column_orders[key];
+  });
 }
 
-/**
- * نقل مكان حقل (إلى البداية، إلى النهاية، للأعلى، أو للأسفل)
- */
 export async function moveColumnInTable(
   file: string,
   table: string,
@@ -637,11 +626,12 @@ export async function moveColumnInTable(
   return await reorderColumnsInTable(file, table, currentList);
 }
 
-/**
- * استخراج قائمة الأعمدة النهائية بدمج الأعمدة المضافة وتصفية المحذوفة وتطبيق الأسماء المعدلة والترتيب المخصص
- * تدعم دمج وتوريث الحقول المضافة لـ "جميع الأصناف" (all) وتعميمها على كافة الجداول
- */
-export function getCustomColumns(file: string, table: string, baseColumns: string[], mutations: AccessMutations): string[] {
+export function getCustomColumns(
+  file: string,
+  table: string,
+  baseColumns: string[],
+  mutations: AccessMutations
+): string[] {
   const key = `${file}_${table}`;
   const allKey = `all_${table}`;
   const fileAllKey = `${file}_all`;
@@ -651,29 +641,27 @@ export function getCustomColumns(file: string, table: string, baseColumns: strin
     ...(mutations.deleted_columns?.[key] || []),
     ...(mutations.deleted_columns?.[allKey] || []),
     ...(mutations.deleted_columns?.[fileAllKey] || []),
-    ...(mutations.deleted_columns?.[allAllKey] || [])
+    ...(mutations.deleted_columns?.[allAllKey] || []),
   ]);
 
   const addedList = [
     ...(mutations.added_columns?.[allAllKey] || []),
     ...(mutations.added_columns?.[fileAllKey] || []),
     ...(mutations.added_columns?.[allKey] || []),
-    ...(mutations.added_columns?.[key] || [])
+    ...(mutations.added_columns?.[key] || []),
   ];
 
   const renamedMap: Record<string, string> = {
     ...(mutations.renamed_columns?.[allAllKey] || {}),
     ...(mutations.renamed_columns?.[fileAllKey] || {}),
     ...(mutations.renamed_columns?.[allKey] || {}),
-    ...(mutations.renamed_columns?.[key] || {})
+    ...(mutations.renamed_columns?.[key] || {}),
   };
 
-  // 1. تصفية الحقول المحذوفة وتبديل أسماء الحقول المعاد تسميتها
-  let finalCols = baseColumns
+  const finalCols = baseColumns
     .filter((c) => !deletedSet.has(c))
     .map((c) => renamedMap[c] || c);
 
-  // 2. إضافة الحقول المضافة حديثاً إذا لم تكن موجودة بالفعل
   for (const col of addedList) {
     const displayCol = renamedMap[col] || col;
     if (!deletedSet.has(col) && !finalCols.includes(displayCol)) {
@@ -681,7 +669,6 @@ export function getCustomColumns(file: string, table: string, baseColumns: strin
     }
   }
 
-  // 3. تطبيق الترتيب المخصص إن وجد (نقل للبداية أو النهاية أو ترتيب إداري)
   const customOrder =
     mutations.column_orders?.[key] ||
     mutations.column_orders?.[allKey] ||
@@ -701,9 +688,6 @@ export function getCustomColumns(file: string, table: string, baseColumns: strin
   return finalCols;
 }
 
-/**
- * دمج التعديلات السحابية مع السجلات الأصلية بدقة 100%
- */
 export function applyMutations(
   fileName: string,
   tableName: string,
@@ -717,11 +701,10 @@ export function applyMutations(
   const allKey = `all_${tableName}`;
   const renamedMap: Record<string, string> = {
     ...(mutations.renamed_columns?.[allKey] || {}),
-    ...(mutations.renamed_columns?.[key] || {})
+    ...(mutations.renamed_columns?.[key] || {}),
   };
   const hasRenames = Object.keys(renamedMap).length > 0;
 
-  // 1. تصفية وتحديث السجلات الأساسية
   const processedBase: any[] = [];
   for (let i = 0; i < baseRows.length; i++) {
     const row = baseRows[i];
@@ -729,7 +712,11 @@ export function applyMutations(
     if (deletesSet.has(id)) {
       continue;
     }
-    let finalRow = updatesMap[id] ? { ...row, ...updatesMap[id], _adh_id: id } : (row._adh_id ? { ...row } : { ...row, _adh_id: id });
+    const finalRow = updatesMap[id]
+      ? { ...row, ...updatesMap[id], _adh_id: id }
+      : row._adh_id
+        ? { ...row }
+        : { ...row, _adh_id: id };
     if (hasRenames) {
       for (const [orig, renamed] of Object.entries(renamedMap)) {
         if (finalRow[orig] !== undefined && finalRow[renamed] === undefined) {
@@ -740,7 +727,6 @@ export function applyMutations(
     processedBase.push(finalRow);
   }
 
-  // 2. استخراج السجلات المضافة حديثاً الخاصة بهذا الملف والجدول
   const relevantAdds: any[] = [];
   for (const added of mutations.adds || []) {
     if (deletesSet.has(added._adh_id)) {
@@ -766,44 +752,32 @@ export function applyMutations(
     }
   }
 
-  // السجلات المضافة تكون دائماً في الأعلى (أحدث السجلات أولاً)
   return [...relevantAdds, ...processedBase];
 }
 
-/**
- * حذف أو أرشفة قسم/ملف من قواعد بيانات Access
- */
 export async function deleteAccessSection(fileName: string): Promise<string[]> {
   const cleanName = fileName.trim();
   if (!cleanName) throw new Error('اسم القسم مطلوب');
 
-  const { mutations } = await getAccessHubMutations(true);
-  if (!mutations.deleted_sections) mutations.deleted_sections = [];
-
-  if (!mutations.deleted_sections.includes(cleanName)) {
-    mutations.deleted_sections.push(cleanName);
-  }
-
-  await saveAccessHubMutations(mutations);
-  return mutations.deleted_sections;
+  return mutateAccessHub((mutations) => {
+    if (!mutations.deleted_sections) mutations.deleted_sections = [];
+    if (!mutations.deleted_sections.includes(cleanName)) {
+      mutations.deleted_sections.push(cleanName);
+    }
+    return mutations.deleted_sections;
+  });
 }
 
-/**
- * استعادة قسم/ملف تم حذفه أو أرشفتها سابقاً
- */
 export async function restoreAccessSection(fileName: string): Promise<string[]> {
   const cleanName = fileName.trim();
-  const { mutations } = await getAccessHubMutations(true);
-  if (!mutations.deleted_sections) mutations.deleted_sections = [];
 
-  mutations.deleted_sections = mutations.deleted_sections.filter((s) => s !== cleanName);
-  await saveAccessHubMutations(mutations);
-  return mutations.deleted_sections;
+  return mutateAccessHub((mutations) => {
+    if (!mutations.deleted_sections) mutations.deleted_sections = [];
+    mutations.deleted_sections = mutations.deleted_sections.filter((s) => s !== cleanName);
+    return mutations.deleted_sections;
+  });
 }
 
-/**
- * حذف قيد أمنياً وإيداعه في سلة المحذوفات الإدارية مع سجل التدقيق
- */
 export async function deleteRecordToTrash(
   id: string,
   file: string,
@@ -811,90 +785,74 @@ export async function deleteRecordToTrash(
   record: any,
   deletedBy: string = 'الإدارة'
 ): Promise<boolean> {
-  const { mutations } = await getAccessHubMutations(true);
+  return mutateAccessHub((mutations) => {
+    if (!mutations.trash_bin) mutations.trash_bin = [];
+    if (!mutations.deletes.includes(id)) {
+      mutations.deletes.push(id);
+    }
 
-  if (!mutations.trash_bin) mutations.trash_bin = [];
-  if (!mutations.deletes.includes(id)) {
-    mutations.deletes.push(id);
-  }
+    mutations.trash_bin.unshift({
+      id,
+      file,
+      table,
+      record: record || {},
+      deleted_at: new Date().toISOString(),
+      deleted_by: deletedBy,
+    });
 
-  // إضافة إلى سلة المحذوفات
-  mutations.trash_bin.unshift({
-    id,
-    file,
-    table,
-    record: record || {},
-    deleted_at: new Date().toISOString(),
-    deleted_by: deletedBy,
+    mutations.adds = mutations.adds.filter((r) => r._adh_id !== id);
+    return true;
   });
-
-  // إزالة من قائمة الإضافات الحديثة إن وجد
-  mutations.adds = mutations.adds.filter((r) => r._adh_id !== id);
-
-  await saveAccessHubMutations(mutations);
-  return true;
 }
 
-/**
- * استعادة قيد من سلة المحذوفات
- */
 export async function restoreRecordFromTrash(id: string): Promise<boolean> {
-  const { mutations } = await getAccessHubMutations(true);
-
-  mutations.deletes = mutations.deletes.filter((d) => d !== id);
-  if (mutations.trash_bin) {
-    mutations.trash_bin = mutations.trash_bin.filter((item) => item.id !== id);
-  }
-
-  await saveAccessHubMutations(mutations);
-  return true;
+  return mutateAccessHub((mutations) => {
+    mutations.deletes = mutations.deletes.filter((d) => d !== id);
+    if (mutations.trash_bin) {
+      mutations.trash_bin = mutations.trash_bin.filter((item) => item.id !== id);
+    }
+    return true;
+  });
 }
 
-/**
- * حفظ أو تحديث صلاحيات جهاز ومستخدم Access Hub
- */
 export async function setAccessHubRole(
   guid: string,
   name: string,
   role: 'admin' | 'supervisor' | 'data_entry' | 'viewer',
   allowedSections?: string[]
 ): Promise<AccessRole> {
-  const { mutations } = await getAccessHubMutations(true);
-  if (!mutations.roles) mutations.roles = {};
+  return mutateAccessHub((mutations) => {
+    if (!mutations.roles) mutations.roles = {};
 
-  const record: AccessRole = {
-    guid,
-    name: name || 'مستخدم غير مسمى',
-    role,
-    allowedSections: Array.isArray(allowedSections) ? allowedSections : mutations.roles[guid]?.allowedSections || [],
-    lastSeen: new Date().toISOString(),
-  };
+    const record: AccessRole = {
+      guid,
+      name: name || 'مستخدم غير مسمى',
+      role,
+      allowedSections: Array.isArray(allowedSections)
+        ? allowedSections
+        : mutations.roles[guid]?.allowedSections || [],
+      lastSeen: new Date().toISOString(),
+    };
 
-  mutations.roles[guid] = record;
-  mutations.last_sync = new Date().toISOString();
-  await saveAccessHubMutations(mutations);
-  return record;
+    mutations.roles[guid] = record;
+    mutations.last_sync = new Date().toISOString();
+    return record;
+  });
 }
 
-/**
- * حذف وسحب صلاحية جهاز بالكامل من سجل الطفرات السحابية
- */
 export async function deleteAccessHubRole(guid: string): Promise<boolean> {
   const cleanGuid = String(guid || '').trim();
   if (!cleanGuid) return false;
-  const { mutations } = await getAccessHubMutations(true);
-  if (mutations.roles && mutations.roles[cleanGuid]) {
-    delete mutations.roles[cleanGuid];
-    mutations.last_sync = new Date().toISOString();
-    await saveAccessHubMutations(mutations);
-    return true;
-  }
-  return false;
+  return mutateAccessHub((mutations) => {
+    if (mutations.roles && mutations.roles[cleanGuid]) {
+      delete mutations.roles[cleanGuid];
+      mutations.last_sync = new Date().toISOString();
+      return true;
+    }
+    return false;
+  });
 }
 
-/**
- * إضافة قسم / قاعدة بيانات جديدة في مركز بيانات Access سحابياً
- */
 export async function addAccessSection(section: {
   name: string;
   tables: string[];
@@ -903,45 +861,48 @@ export async function addAccessSection(section: {
   const cleanName = String(section.name || '').trim();
   if (!cleanName) throw new Error('اسم القسم الجديد مطلوب');
 
-  const { mutations } = await getAccessHubMutations(true);
-  if (!mutations.custom_sections) mutations.custom_sections = [];
+  return mutateAccessHub((mutations) => {
+    if (!mutations.custom_sections) mutations.custom_sections = [];
 
-  // إذا كان القسم موجوداً مسبقاً في سلة المحذوفات أو الأرشيف، نخرجه منها
-  if (mutations.deleted_sections) {
-    mutations.deleted_sections = mutations.deleted_sections.filter((s) => s !== cleanName);
-  }
+    if (mutations.deleted_sections) {
+      mutations.deleted_sections = mutations.deleted_sections.filter((s) => s !== cleanName);
+    }
 
-  const cleanTables = Array.isArray(section.tables) && section.tables.length > 0
-    ? section.tables.map((t) => String(t).trim()).filter(Boolean)
-    : ['التجار', 'الشركات', 'الدلالين', 'التعديل', 'الشطب'];
+    const cleanTables =
+      Array.isArray(section.tables) && section.tables.length > 0
+        ? section.tables.map((t) => String(t).trim()).filter(Boolean)
+        : ['التجار', 'الشركات', 'الدلالين', 'التعديل', 'الشطب'];
 
-  const tableCounts: Record<string, number> = {};
-  cleanTables.forEach((t) => {
-    tableCounts[t] = 0;
-  });
+    const tableCounts: Record<string, number> = {};
+    cleanTables.forEach((t) => {
+      tableCounts[t] = 0;
+    });
 
-  const existingIdx = mutations.custom_sections.findIndex((s) => s.name === cleanName);
-  const newSec: AccessCustomSection = {
-    name: cleanName,
-    tables: cleanTables,
-    table_counts: tableCounts,
-    total_rows: 0,
-    size_kb: 0.1,
-    created_at: new Date().toISOString(),
-    created_by: section.created_by || 'الإدارة',
-  };
-
-  if (existingIdx >= 0) {
-    mutations.custom_sections[existingIdx] = {
-      ...mutations.custom_sections[existingIdx],
+    const existingIdx = mutations.custom_sections.findIndex((s) => s.name === cleanName);
+    const newSec: AccessCustomSection = {
+      name: cleanName,
       tables: cleanTables,
-      table_counts: { ...tableCounts, ...(mutations.custom_sections[existingIdx].table_counts || {}) },
+      table_counts: tableCounts,
+      total_rows: 0,
+      size_kb: 0.1,
+      created_at: new Date().toISOString(),
+      created_by: section.created_by || 'الإدارة',
     };
-  } else {
-    mutations.custom_sections.push(newSec);
-  }
 
-  mutations.last_sync = new Date().toISOString();
-  await saveAccessHubMutations(mutations);
-  return mutations.custom_sections;
+    if (existingIdx >= 0) {
+      mutations.custom_sections[existingIdx] = {
+        ...mutations.custom_sections[existingIdx],
+        tables: cleanTables,
+        table_counts: {
+          ...tableCounts,
+          ...(mutations.custom_sections[existingIdx].table_counts || {}),
+        },
+      };
+    } else {
+      mutations.custom_sections.push(newSec);
+    }
+
+    mutations.last_sync = new Date().toISOString();
+    return mutations.custom_sections;
+  });
 }

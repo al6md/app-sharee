@@ -50,7 +50,7 @@ import {
   List,
   Unlock
 } from 'lucide-react';
-// Google Drive Connected
+// ShareCOC Local Server Connected
 
 interface FileItem {
   id: string;
@@ -830,7 +830,7 @@ export default function FilesPage() {
           size: formatSize(f.size || 0),
           rawSize: f.size || 0,
           version: 1,
-          lastModifiedBy: 'سحابة Google Drive',
+          lastModifiedBy: 'خادم ShareCOC المحلي',
           lastModifiedAt: f.modifiedTime ? new Date(f.modifiedTime).toLocaleDateString('ar-IQ', {
             month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
           }) : 'الآن',
@@ -842,17 +842,17 @@ export default function FilesPage() {
         }));
         setFiles(mapped);
       } else {
-        const errMsg = String(data.error || 'تعذر الاتصال بالسحابة');
+        const errMsg = String(data.error || 'تعذر الاتصال بخادم ShareCOC المحلي');
         setMicroSyncInfo({
           status: 'error',
-          message: errMsg.includes('invalid_grant') ? 'انتهت صلاحية رمز السحابة (Refresh Token)' : errMsg
+          message: errMsg
         });
       }
     } catch (err: any) {
       console.error('Error fetching files:', err);
       setMicroSyncInfo({
         status: 'error',
-        message: 'فشل جلب ملفات السحابة'
+        message: 'فشل جلب الملفات من خادم ShareCOC المحلي'
       });
     } finally {
       if (!silent) {
@@ -1033,8 +1033,8 @@ export default function FilesPage() {
     });
   };
 
-  // دالة رفع ذكية ومحصنة تدعم كافة أحجام الملفات عبر التجزئة السحابية الحقيقية (Resumable Chunked Upload)
-  // مع تتبع فعلي للبايتات والسرعة والميغابايت وعدم القفز الوهمي إلى 100% قبل تأكيد Google Drive
+  // دالة رفع ذكية ومحصنة تدعم كافة أحجام الملفات عبر التجزئة المرحلية الحقيقية (Resumable Chunked Upload)
+  // مع تتبع فعلي للبايتات والسرعة والميغابايت وعدم القفز الوهمي إلى 100% قبل تأكيد خادم ShareCOC المحلي
   const uploadFileRobustly = async (
     file: File,
     fileName: string,
@@ -1048,16 +1048,16 @@ export default function FilesPage() {
     transferAbortedRef.current = false;
     const totalSize = Math.max(1, file.size);
 
-    // اختيار حجم الجزء (مضاعفات 256KB = 262,144 بايت القياسية في Google Drive)
-    // تم ضبط الحد الأقصى للجزء على 2 ميجابايت (KB256 * 8) لضمان عدم تجاوز سقف 4.5MB الصارم في دوال Vercel Serverless
-    // مما يمنع نهائياً ظهور خطأ (HTTP 413 Payload Too Large) حتى مع الملفات الضخمة بمئات الميجابايت
+    // اختيار حجم الجزء (مضاعفات 256KB = 262,144 بايت)
+    // تم ضبط الحد الأقصى للجزء على 2 ميجابايت (KB256 * 8) لضمان استقرار الرفع عبر الوكلاء العكسيين
+    // ومنع أخطاء حجم الطلب (HTTP 413 Payload Too Large) حتى مع الملفات الضخمة بمئات الميجابايت
     const KB256 = 256 * 1024;
     let CHUNK_SIZE = KB256 * 4; // 1 MB للملفات حتى 8 ميجابايت
     if (file.size > 8 * 1024 * 1024) {
-      CHUNK_SIZE = KB256 * 8; // 2 MB كحد أقصى (آمن تماماً داخل سقف 4.5MB في Vercel)
+      CHUNK_SIZE = KB256 * 8; // 2 MB كحد أقصى
     }
 
-    // تهيئة جلسة رفع مجزأة قابلة للاستئناف في Google Drive لجميع الملفات (> 0 بايت)
+    // تهيئة جلسة رفع مجزأة قابلة للاستئناف في خادم ShareCOC المحلي لجميع الملفات (> 0 بايت)
     if (file.size > 0) {
       const initRes = await fetch('/api/drive/files', {
         method: 'POST',
@@ -1073,7 +1073,7 @@ export default function FilesPage() {
       });
       const initData = await initRes.json();
       if (!initRes.ok || !initData.success || !initData.sessionUri) {
-        throw new Error(initData.error || 'تعذر بدء جلسة الرفع السحابي إلى Google Drive');
+        throw new Error(initData.error || 'تعذر بدء جلسة الرفع إلى خادم ShareCOC المحلي');
       }
 
       const sessionUri: string = initData.sessionUri;
@@ -1103,7 +1103,7 @@ export default function FilesPage() {
             throw new Error('تم إلغاء العملية');
           }
 
-          // إذا كانت محاولة إعادة إرسال بعد انقطاع مؤقت، نستفسر من Google Drive عن البايتات المستلمة فعلياً
+          // إذا كانت محاولة إعادة إرسال بعد انقطاع مؤقت، نستفسر من خادم ShareCOC المحلي عن البايتات المستلمة فعلياً
           if (attempt > 0) {
             try {
               const statusCheckRes = await fetch('/api/drive/files', {
@@ -1179,7 +1179,7 @@ export default function FilesPage() {
         }
 
         if (!chunkSent) {
-          throw lastErr || new Error('تعذر رفع جزء من الملف إلى السحابة بعد عدة محاولات');
+          throw lastErr || new Error('تعذر رفع جزء من الملف إلى خادم ShareCOC المحلي بعد عدة محاولات');
         }
 
         if (uploadedFileResult && offset >= file.size) {
@@ -1220,7 +1220,7 @@ export default function FilesPage() {
     try {
       setActionLoading(true);
       setToastMessage({
-        text: `⏳ جاري رفع النسخة المعدلة لـ "${targetFile.name}" وحفظها في Google Drive...`,
+        text: `⏳ جاري رفع النسخة المعدلة لـ "${targetFile.name}" وحفظها في خادم ShareCOC المحلي...`,
         type: 'info'
       });
 
@@ -1256,7 +1256,7 @@ export default function FilesPage() {
       }, 2200);
 
       alert(
-        `✅ تم حفظ التعديلات بنجاح في Google Drive!\n\n` +
+        `✅ تم حفظ التعديلات بنجاح في خادم ShareCOC المحلي!\n\n` +
         `📄 المستند: ${targetFile.name}\n` +
         `👥 تمت مزامنة التعديلات فوراً مع تطبيق الحاسوب وكافة المستخدمين.`
       );
@@ -1441,7 +1441,7 @@ export default function FilesPage() {
             setMicroSyncInfo({
               status: 'syncing',
               fileName: file.name,
-              message: `جاري رفع ومزامنة "${file.name}" مع Google Drive...`
+              message: `جاري رفع ومزامنة "${file.name}" مع خادم ShareCOC المحلي...`
             });
 
             // مهلة 450ms ثم الرفع التلقائي
@@ -1470,7 +1470,7 @@ export default function FilesPage() {
                   message: `تم حفظ ومزامنة "${file.name}" بنجاح في ${timeStr}`
                 });
                 setToastMessage({
-                  text: `🎉 تم حفظ وتحديث "${file.name}" في Google Drive بنجاح!`,
+                  text: `🎉 تم حفظ وتحديث "${file.name}" في خادم ShareCOC المحلي بنجاح!`,
                   type: 'success'
                 });
                 setTimeout(() => {
@@ -1626,7 +1626,7 @@ export default function FilesPage() {
       if (uniqueFolderPaths.size > 0) {
         progressUpdater(
           0,
-          'جاري تهيئة وهيكلة المجلدات في Google Drive...',
+          'جاري تهيئة وهيكلة المجلدات في خادم ShareCOC المحلي...',
           rawFiles[0].file.size,
           0,
           undefined,
@@ -1765,7 +1765,7 @@ export default function FilesPage() {
     }
   };
 
-  // رفع مجلد كامل مع الحفاظ على هيكلية المجلدات الفرعية ومزامنتها بالكامل في Google Drive
+  // رفع مجلد كامل مع الحفاظ على هيكلية المجلدات الفرعية ومزامنتها بالكامل في خادم ShareCOC المحلي
   const handleFolderUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const fileList = event.target.files;
     if (!fileList || fileList.length === 0) return;
@@ -1911,8 +1911,8 @@ export default function FilesPage() {
     }
 
     const msg = isPermanent
-      ? `⚠️ تحذير: سيتم حذف (${allIds.length}) عنصر نهائياً من Google Drive وكافة المنصات ولا يمكن استرجاعها. هل تريد المتابعة؟`
-      : `هل أنت متأكد من نقل (${allIds.length}) عنصر محدد إلى سلة المحذوفات في السحابة وكافة الأجهزة؟`;
+      ? `⚠️ تحذير: سيتم حذف (${allIds.length}) عنصر نهائياً من خادم ShareCOC المحلي وكافة المنصات ولا يمكن استرجاعها. هل تريد المتابعة؟`
+      : `هل أنت متأكد من نقل (${allIds.length}) عنصر محدد إلى سلة المحذوفات في خادم ShareCOC المحلي وكافة الأجهزة؟`;
     if (!confirm(msg)) return;
 
     try {
@@ -2089,7 +2089,7 @@ export default function FilesPage() {
       alert(`⛔ عذراً، صلاحية الحذف النهائي مقيدة لقسم "${file.department}" من قِبل الإدارة.`);
       return;
     }
-    if (!confirm(`⚠️ تحذير: سيتم حذف المستند "${file.name}" نهائياً من Google Drive ولا يمكن استرجاعه. هل تود المتابعة؟`)) return;
+    if (!confirm(`⚠️ تحذير: سيتم حذف المستند "${file.name}" نهائياً من خادم ShareCOC المحلي ولا يمكن استرجاعه. هل تود المتابعة؟`)) return;
     try {
       setActionLoading(true);
       const res = await fetch(`/api/drive/files?id=${file.id}&permanent=true`, { method: 'DELETE' });
@@ -2662,7 +2662,7 @@ export default function FilesPage() {
       setShowNewFolderModal(false);
       setNewFolderName('');
       await loadData();
-      alert(`📁 تم إنشاء المجلد "${fName}" في Google Drive بنجاح.`);
+      alert(`📁 تم إنشاء المجلد "${fName}" في خادم ShareCOC المحلي بنجاح.`);
     } catch (e: any) {
       alert(`تعذر إنشاء المجلد: ${e.message || e}`);
     } finally {
@@ -2729,7 +2729,7 @@ export default function FilesPage() {
       setShowRenameModal(false);
       setItemToRename(null);
       await loadData();
-      alert(`✏️ تم تعديل الاسم إلى "${newName}" بنجاح في Google Drive.`);
+      alert(`✏️ تم تعديل الاسم إلى "${newName}" بنجاح في خادم ShareCOC المحلي.`);
     } catch (e: any) {
       alert(`تعذر تعديل الاسم: ${e.message || e}`);
     } finally {
@@ -3609,10 +3609,10 @@ export default function FilesPage() {
               <div className="w-14 h-14 bg-red-100 rounded-full text-red-600 flex items-center justify-center border border-red-200">
                 <AlertCircle className="w-7 h-7" />
               </div>
-              <h4 className="text-[15px] font-bold text-red-900">تعذر الاتصال بسحابة Google Drive</h4>
+              <h4 className="text-[15px] font-bold text-red-900">تعذر الاتصال بخادم ShareCOC المحلي</h4>
               <p className="text-[13px] text-red-700 max-w-md leading-relaxed">
-                انتهت صلاحية رمز الربط السحابي (Google OAuth Token Expired).<br />
-                <span className="font-semibold text-red-950">ملفاتكم آمنة وموجودة بالكامل في السحابة</span>، ولكن النظام يحتاج لتجديد رمز الربط من قِبل مسؤول النظام لتظهر الملفات مجدداً.
+                {microSyncInfo.message || 'تعذر الاتصال بخادم التخزين المحلي في الوقت الحالي.'}<br />
+                <span className="font-semibold text-red-950">ملفاتكم آمنة وموجودة بالكامل على خادم ShareCOC المحلي</span>، يرجى التحقق من اتصال الشبكة أو تحديث الصفحة لإعادة المحاولة.
               </p>
             </div>
           ) : (
@@ -4200,7 +4200,7 @@ export default function FilesPage() {
                       ? 'تنزيل المستند من السحابة'
                       : 'رفع المستندات إلى السحابة'}
                   </h3>
-                  <p className="text-[11px] text-white/70">غرفة تجارة كربلاء المقدسة • Google Drive</p>
+                  <p className="text-[11px] text-white/70">غرفة تجارة كربلاء المقدسة • خادم ShareCOC المحلي</p>
                 </div>
               </div>
 
@@ -5103,7 +5103,7 @@ export default function FilesPage() {
             setMicroSyncInfo({
               status: 'syncing',
               fileName: activeWatchedFile.name,
-              message: `جاري رفع ومزامنة "${activeWatchedFile.name}" مع Google Drive...`
+              message: `جاري رفع ومزامنة "${activeWatchedFile.name}" مع خادم ShareCOC المحلي...`
             });
 
             const targetPath = activeWatchedFile.folder && activeWatchedFile.folder !== 'القسم العام' ? activeWatchedFile.folder : '';
@@ -5129,7 +5129,7 @@ export default function FilesPage() {
               message: `تم حفظ ومزامنة "${activeWatchedFile.name}" بنجاح في ${timeStr}`
             });
             setToastMessage({
-              text: `🎉 تم حفظ وتحديث "${activeWatchedFile.name}" في Google Drive بنجاح!`,
+              text: `🎉 تم حفظ وتحديث "${activeWatchedFile.name}" في خادم ShareCOC المحلي بنجاح!`,
               type: 'success'
             });
             setTimeout(() => {

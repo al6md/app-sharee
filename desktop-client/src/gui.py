@@ -2747,7 +2747,7 @@ class FileExchangeMainWindow(QMainWindow):
         try:
             import requests
             r = requests.post(
-                "https://web-dashboard-pi-self.vercel.app/api/drive/permissions",
+                "https://share.162.35.16.252.sslip.io/api/drive/permissions",
                 json={
                     "action": "REGISTER_ACCESS_HUB_DEVICE",
                     "username": ent_u,
@@ -2919,7 +2919,7 @@ class FileExchangeMainWindow(QMainWindow):
                             try:
                                 import requests
                                 requests.post(
-                                    "https://web-dashboard-pi-self.vercel.app/api/drive/permissions",
+                                    "https://share.162.35.16.252.sslip.io/api/drive/permissions",
                                     json={
                                         "action": "REGISTER_DEPARTMENT_DEVICE",
                                         "departmentName": target_dept,
