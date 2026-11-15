@@ -30,7 +30,7 @@ data class AuthorizedDeviceConfig(
     @SerializedName("lastSeen") var lastSeen: String = "متصل الآن",
     @SerializedName("status") var status: String? = "متصل الآن",
     @SerializedName("department") val department: String? = null,
-    @SerializedName("authorizedDepts") val authorizedDepts: List<String> = emptyList(),
+    @SerializedName("authorizedDepts") var authorizedDepts: List<String> = emptyList(),
     @SerializedName("registeredAt") val registeredAt: String? = null
 )
 

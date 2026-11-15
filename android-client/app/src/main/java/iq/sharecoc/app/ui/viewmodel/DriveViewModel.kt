@@ -269,7 +269,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 val store = apiClient.loadPermissionsConfig()
-                val dept = store.departments[deptName] ?: DepartmentPermissionConfig()
+                val dept = store.departments[deptName] ?: DepartmentPermissionConfig(departmentName = deptName)
                 val authList = dept.authorizedDevices.toMutableList()
                 if (!authList.contains(guid)) {
                     authList.add(guid)
