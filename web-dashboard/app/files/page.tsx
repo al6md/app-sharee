@@ -868,7 +868,7 @@ export default function FilesPage() {
     let lastKnownBridgeSync = 0;
     let bridgeInterval: any = null;
 
-    if (typeof window !== 'undefined' && window.location.protocol === 'http:') {
+    if (typeof window !== 'undefined') {
       bridgeInterval = setInterval(async () => {
         try {
           const bridgeRes = await fetch('http://127.0.0.1:18290/status', {
@@ -2616,9 +2616,14 @@ export default function FilesPage() {
   };
   // 4. إظهار الملف داخل مجلد الويندوز (Reveal in Explorer)
   const handleRevealInExplorer = async (file: FileItem) => {
-    if (typeof window !== 'undefined' && window.location.protocol === 'http:') {
+    if (typeof window !== 'undefined') {
       try {
-        const res = await fetch(`http://127.0.0.1:18290/reveal?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}`);
+        const res = await fetch(`http://127.0.0.1:18290/reveal?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}&storage_path=${encodeURIComponent(file.storagePath || file.id || '')}`, {
+          method: 'GET',
+          mode: 'cors',
+          cache: 'no-store',
+          signal: AbortSignal.timeout(1500),
+        });
         if (res.ok) {
           setToastMessage({
             text: `📂 تم إظهار المستند في مجلد الويندوز FileExchangeShared.`,

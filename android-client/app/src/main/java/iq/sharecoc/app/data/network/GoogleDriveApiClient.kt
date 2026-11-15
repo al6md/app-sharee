@@ -1,5 +1,6 @@
 package iq.sharecoc.app.data.network
 
+import android.util.Base64
 import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.JsonObject
@@ -8,20 +9,24 @@ import iq.sharecoc.app.data.models.CloudAdminStore
 import iq.sharecoc.app.data.models.DriveItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.*
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 import java.io.FileOutputStream
 import java.io.RandomAccessFile
+import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 class GoogleDriveApiClient private constructor() {
 
     companion object {
-        private const val TAG = "GoogleDriveApiClient"
+        private const val TAG = "ShareCocApiClient"
+        private const val LEGACY_ROOT_ID = "1BF6mDMuwuaS5c4Ekq9KPcEXaAOxGOmfB"
 
         @Volatile
         private var instance: GoogleDriveApiClient? = null
@@ -34,223 +39,234 @@ class GoogleDriveApiClient private constructor() {
     }
 
     private val gson = Gson()
+    private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(AppConfig.CONNECT_TIMEOUT_SEC, TimeUnit.SECONDS)
         .readTimeout(AppConfig.READ_TIMEOUT_SEC, TimeUnit.SECONDS)
         .writeTimeout(AppConfig.READ_TIMEOUT_SEC, TimeUnit.SECONDS)
         .build()
 
-    private var currentAccessToken: String? = null
-    private var tokenExpiryTimeMs: Long = 0
+    private fun normalizeFolderId(id: String): String {
+        return if (id.isBlank() || id == LEGACY_ROOT_ID) "root" else id
+    }
 
-    /**
-     * تجديد واستخراج Access Token من خلال الـ Refresh Token المعتمد
-     */
-    suspend fun getAccessToken(forceRefresh: Boolean = false): String = withContext(Dispatchers.IO) {
-        val now = System.currentTimeMillis()
-        if (!forceRefresh && currentAccessToken != null && now < tokenExpiryTimeMs - 60_000) {
-            return@withContext currentAccessToken!!
-        }
-
-        val formBody = FormBody.Builder()
-            .add("client_id", AppConfig.clientId)
-            .add("client_secret", AppConfig.clientSecret)
-            .add("refresh_token", AppConfig.refreshToken)
-            .add("grant_type", "refresh_token")
-            .build()
-
-        val request = Request.Builder()
-            .url(AppConfig.OAUTH_TOKEN_URL)
-            .post(formBody)
-            .build()
-
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                throw Exception("فشل تجديد توكن الوصول إلى Google Drive: ${response.code} ${response.message}")
+    private fun decodeFolderPath(folderId: String): String {
+        val norm = normalizeFolderId(folderId)
+        if (norm == "root") return ""
+        if (norm.startsWith("loc_")) {
+            return try {
+                val encoded = norm.removePrefix("loc_")
+                val bytes = Base64.decode(encoded, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+                String(bytes, Charsets.UTF_8).trim('/')
+            } catch (_: Exception) {
+                ""
             }
-            val body = response.body?.string() ?: throw Exception("استجابة التوكن فارغة")
-            val json = gson.fromJson(body, JsonObject::class.java)
-            val token = json.get("access_token").asString
-            val expiresInSec = json.get("expires_in")?.asLong ?: 3600L
+        }
+        return ""
+    }
 
-            currentAccessToken = token
-            tokenExpiryTimeMs = now + (expiresInSec * 1000)
-            Log.d(TAG, "تم تجديد Google Drive Access Token بنجاح. الصلاحية: $expiresInSec ثانية")
-            return@withContext token
+    private fun postJsonAction(payload: JsonObject): JsonObject {
+        val req = Request.Builder()
+            .url("${AppConfig.SERVER_BASE_URL}/api/drive/files")
+            .addHeader("x-admin-role", "admin")
+            .post(payload.toString().toRequestBody(jsonMediaType))
+            .build()
+
+        client.newCall(req).execute().use { response ->
+            val body = response.body?.string() ?: ""
+            if (!response.isSuccessful) {
+                throw Exception("فشل تنفيذ العملية (${response.code}): ${response.message}")
+            }
+            return gson.fromJson(body.ifBlank { "{}" }, JsonObject::class.java) ?: JsonObject()
         }
     }
 
+    suspend fun getAccessToken(forceRefresh: Boolean = false): String = withContext(Dispatchers.IO) {
+        return@withContext "local-server-token"
+    }
+
     /**
-     * جلب قائمة الملفات والمجلدات داخل مجلد محدد (أو الجذر الافتراضي)
+     * جلب قائمة الملفات والمجلدات داخل مجلد محدد من خادم Share COC المحلي
      */
     suspend fun listItems(
         parentId: String = AppConfig.rootFolderId,
         includeTrashed: Boolean = false
     ): List<DriveItem> = withContext(Dispatchers.IO) {
-        val token = getAccessToken()
-        val trashedQuery = if (includeTrashed) "trashed = true" else "trashed = false"
-        val q = "'$parentId' in parents and $trashedQuery"
-
-        val url = "${AppConfig.DRIVE_API_BASE_URL}/files".toHttpUrl().newBuilder()
-            .addQueryParameter("q", q)
-            .addQueryParameter("pageSize", "200")
-            .addQueryParameter("fields", "files(id, name, mimeType, size, md5Checksum, modifiedTime, createdTime, parents)")
-            .addQueryParameter("orderBy", "folder,name_natural")
+        val normParent = normalizeFolderId(parentId)
+        val url = "${AppConfig.SERVER_BASE_URL}/api/drive/files".toHttpUrl().newBuilder()
+            .addQueryParameter("refresh", "1")
+            .addQueryParameter("t", System.currentTimeMillis().toString())
             .build()
 
         val request = Request.Builder()
             .url(url)
-            .addHeader("Authorization", "Bearer $token")
+            .addHeader("x-admin-role", "admin")
             .get()
             .build()
 
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
-                throw Exception("فشل جلب الملفات من Google Drive: ${response.code} ${response.message}")
+                throw Exception("فشل جلب الملفات من الخادم: ${response.code} ${response.message}")
             }
             val body = response.body?.string() ?: return@withContext emptyList()
-            val json = gson.fromJson(body, JsonObject::class.java)
-            val filesArray = json.getAsJsonArray("files") ?: return@withContext emptyList()
+            val json = gson.fromJson(body, JsonObject::class.java) ?: return@withContext emptyList()
+            val result = mutableListOf<DriveItem>()
 
-            val items = mutableListOf<DriveItem>()
-            for (element in filesArray) {
-                val item = gson.fromJson(element, DriveItem::class.java)
-                // تجاهل ملفات النظام المؤقتة وملف الصلاحيات من القائمة العادية
-                if (!item.name.startsWith("~$") && !item.name.startsWith(".") && item.name != "desktop.ini") {
-                    items.add(item)
+            val allFolders = json.getAsJsonArray("allFolders")
+            var currentFolderPath = decodeFolderPath(normParent)
+            if (currentFolderPath.isBlank() && normParent != "root" && allFolders != null) {
+                for (el in allFolders) {
+                    val obj = el.asJsonObject
+                    if (obj.get("id")?.asString == normParent) {
+                        currentFolderPath = obj.get("path")?.asString ?: ""
+                        break
+                    }
                 }
             }
-            return@withContext items
+
+            if (!includeTrashed && allFolders != null) {
+                for (el in allFolders) {
+                    val fObj = el.asJsonObject
+                    val fParentPath = fObj.get("parentPath")?.asString ?: ""
+                    if (fParentPath == currentFolderPath) {
+                        val fName = fObj.get("name")?.asString ?: continue
+                        if (fName.startsWith(".") || fName.startsWith("~$")) continue
+                        result.add(
+                            DriveItem(
+                                id = fObj.get("id")?.asString ?: "",
+                                name = fName,
+                                mimeType = AppConfig.FOLDER_MIME,
+                                sizeString = null,
+                                modifiedTime = fObj.get("modifiedTime")?.asString,
+                                parents = listOf(normParent)
+                            )
+                        )
+                    }
+                }
+            }
+
+            val filesArray = json.getAsJsonArray("files")
+            if (filesArray != null) {
+                for (el in filesArray) {
+                    val fObj = el.asJsonObject
+                    val isDeleted = fObj.get("isDeleted")?.asBoolean ?: false
+                    if (includeTrashed && !isDeleted) continue
+                    if (!includeTrashed && isDeleted) continue
+
+                    val fname = fObj.get("name")?.asString ?: continue
+                    if (fname.startsWith("~$") || fname.startsWith(".") || fname.equals("desktop.ini", true)) {
+                        continue
+                    }
+
+                    val itemFolderId = normalizeFolderId(fObj.get("folderId")?.asString ?: "root")
+                    val itemFolder = fObj.get("folder")?.asString ?: ""
+                    val matchesParent = if (includeTrashed) {
+                        true
+                    } else if (normParent == "root") {
+                        itemFolderId == "root" || itemFolder == "القسم العام" || itemFolder.isBlank()
+                    } else {
+                        itemFolderId == normParent || itemFolder == currentFolderPath
+                    }
+
+                    if (!matchesParent) continue
+
+                    result.add(
+                        DriveItem(
+                            id = fObj.get("id")?.asString ?: "",
+                            name = fname,
+                            mimeType = fObj.get("mimeType")?.asString ?: "application/octet-stream",
+                            sizeString = fObj.get("size")?.asString,
+                            md5Checksum = fObj.get("md5Checksum")?.asString,
+                            modifiedTime = fObj.get("modifiedTime")?.asString,
+                            parents = listOf(itemFolderId)
+                        )
+                    )
+                }
+            }
+
+            return@withContext result
         }
     }
 
     /**
-     * قراءة ملف الصلاحيات والأجهزة المشترك (.sharecoc_permissions.json)
+     * قراءة إعدادات الصلاحيات والأجهزة من /api/drive/permissions
      */
     suspend fun loadPermissionsConfig(): CloudAdminStore = withContext(Dispatchers.IO) {
-        val token = getAccessToken()
-        val q = "'${AppConfig.rootFolderId}' in parents and name = '${AppConfig.PERMISSIONS_CONFIG_FILENAME}' and trashed = false"
-
-        val url = "${AppConfig.DRIVE_API_BASE_URL}/files".toHttpUrl().newBuilder()
-            .addQueryParameter("q", q)
-            .addQueryParameter("fields", "files(id, name)")
-            .build()
-
         val request = Request.Builder()
-            .url(url)
-            .addHeader("Authorization", "Bearer $token")
+            .url("${AppConfig.SERVER_BASE_URL}/api/drive/permissions?admin=1&force=1&t=${System.currentTimeMillis()}")
+            .addHeader("x-admin-role", "admin")
             .get()
             .build()
 
-        var fileId: String? = null
         client.newCall(request).execute().use { response ->
-            if (response.isSuccessful) {
-                val body = response.body?.string() ?: ""
-                val json = gson.fromJson(body, JsonObject::class.java)
-                val files = json.getAsJsonArray("files")
-                if (files != null && files.size() > 0) {
-                    fileId = files[0].asJsonObject.get("id").asString
-                }
-            }
-        }
-
-        if (fileId == null) {
-            return@withContext CloudAdminStore()
-        }
-
-        // تنزيل محتوى الملف وقراءته
-        val downloadUrl = "${AppConfig.DRIVE_API_BASE_URL}/files/$fileId?alt=media"
-        val dlRequest = Request.Builder()
-            .url(downloadUrl)
-            .addHeader("Authorization", "Bearer $token")
-            .get()
-            .build()
-
-        client.newCall(dlRequest).execute().use { response ->
             if (!response.isSuccessful) return@withContext CloudAdminStore()
             val content = response.body?.string() ?: return@withContext CloudAdminStore()
             try {
-                return@withContext gson.fromJson(content, CloudAdminStore::class.java)
+                val raw = gson.fromJson(content, JsonObject::class.java) ?: return@withContext CloudAdminStore()
+                val normalized = JsonObject().apply {
+                    addProperty("version", 3)
+                    add("departments", raw.get("permissions") ?: JsonObject())
+                    raw.get("adminCredentials")?.let { add("adminCredentials", it) }
+                    raw.get("devices")?.let { add("devices", it) }
+                    raw.get("accessHubSecurity")?.let { add("accessHubSecurity", it) }
+                }
+                return@withContext gson.fromJson(normalized, CloudAdminStore::class.java)
             } catch (e: Exception) {
-                Log.e(TAG, "خطأ في معالجة ملف الصلاحيات: ${e.message}")
+                Log.e(TAG, "خطأ في معالجة الصلاحيات: ${e.message}")
                 return@withContext CloudAdminStore()
             }
         }
     }
 
     /**
-     * حفظ وتحديث ملف الصلاحيات والأجهزة المشترك (.sharecoc_permissions.json)
+     * حفظ وتحديث الصلاحيات والأجهزة عبر /api/drive/permissions
      */
     suspend fun savePermissionsConfig(store: CloudAdminStore): Boolean = withContext(Dispatchers.IO) {
-        val token = getAccessToken()
-        val jsonContent = gson.toJson(store)
-
-        // البحث أولاً إن كان الملف موجوداً
-        val q = "'${AppConfig.rootFolderId}' in parents and name = '${AppConfig.PERMISSIONS_CONFIG_FILENAME}' and trashed = false"
-        val searchUrl = "${AppConfig.DRIVE_API_BASE_URL}/files".toHttpUrl().newBuilder()
-            .addQueryParameter("q", q)
-            .addQueryParameter("fields", "files(id)")
-            .build()
-
-        var existingId: String? = null
-        client.newCall(Request.Builder().url(searchUrl).addHeader("Authorization", "Bearer $token").get().build())
-            .execute().use { response ->
-                if (response.isSuccessful) {
-                    val body = response.body?.string() ?: ""
-                    val json = gson.fromJson(body, JsonObject::class.java)
-                    val files = json.getAsJsonArray("files")
-                    if (files != null && files.size() > 0) {
-                        existingId = files[0].asJsonObject.get("id").asString
-                    }
-                }
+        try {
+            val permsPayload = JsonObject().apply {
+                addProperty("isAdmin", true)
+                add("permissions", gson.toJsonTree(store.departments))
             }
-
-        val requestBody = jsonContent.toRequestBody("application/json; charset=utf-8".toMediaType())
-
-        if (existingId != null) {
-            val updateUrl = "${AppConfig.DRIVE_UPLOAD_BASE_URL}/files/$existingId?uploadType=media"
-            val updateRequest = Request.Builder()
-                .url(updateUrl)
-                .addHeader("Authorization", "Bearer $token")
-                .patch(requestBody)
+            val permsReq = Request.Builder()
+                .url("${AppConfig.SERVER_BASE_URL}/api/drive/permissions")
+                .addHeader("x-admin-role", "admin")
+                .post(permsPayload.toString().toRequestBody(jsonMediaType))
                 .build()
-            return@withContext client.newCall(updateRequest).execute().isSuccessful
-        } else {
-            val metadata = JsonObject().apply {
-                addProperty("name", AppConfig.PERMISSIONS_CONFIG_FILENAME)
-                addProperty("mimeType", "application/json")
-                add("parents", gson.toJsonTree(listOf(AppConfig.rootFolderId)))
+            val permsOk = client.newCall(permsReq).execute().use { it.isSuccessful }
+
+            val devsPayload = JsonObject().apply {
+                addProperty("action", "SAVE_DEVICES")
+                addProperty("isAdmin", true)
+                add("devices", gson.toJsonTree(store.devices))
             }
-            val multipart = MultipartBody.Builder()
-                .setType(MultipartBody.FORM)
-                .addFormDataPart("metadata", null, metadata.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
-                .addFormDataPart("media", AppConfig.PERMISSIONS_CONFIG_FILENAME, requestBody)
+            val devsReq = Request.Builder()
+                .url("${AppConfig.SERVER_BASE_URL}/api/drive/permissions")
+                .addHeader("x-admin-role", "admin")
+                .post(devsPayload.toString().toRequestBody(jsonMediaType))
                 .build()
+            val devsOk = client.newCall(devsReq).execute().use { it.isSuccessful }
 
-            val createUrl = "${AppConfig.DRIVE_UPLOAD_BASE_URL}/files?uploadType=multipart"
-            val createRequest = Request.Builder()
-                .url(createUrl)
-                .addHeader("Authorization", "Bearer $token")
-                .post(multipart)
-                .build()
-            return@withContext client.newCall(createRequest).execute().isSuccessful
+            return@withContext permsOk && devsOk
+        } catch (e: Exception) {
+            Log.e(TAG, "خطأ حفظ الصلاحيات: ${e.message}")
+            return@withContext false
         }
     }
 
     /**
-     * تنزيل ملف من Google Drive مع مؤشر تقدم
+     * تنزيل ملف من /api/drive/stream مع مؤشر تقدم
      */
     suspend fun downloadFile(
         fileId: String,
         destinationFile: File,
         onProgress: (Float) -> Unit = {}
     ): Boolean = withContext(Dispatchers.IO) {
-        val token = getAccessToken()
-        val url = "${AppConfig.DRIVE_API_BASE_URL}/files/$fileId?alt=media"
+        val encodedId = URLEncoder.encode(fileId, "UTF-8")
+        val url = "${AppConfig.SERVER_BASE_URL}/api/drive/stream?id=$encodedId&download=1"
 
         val request = Request.Builder()
             .url(url)
-            .addHeader("Authorization", "Bearer $token")
+            .addHeader("x-admin-role", "admin")
             .get()
             .build()
 
@@ -259,7 +275,7 @@ class GoogleDriveApiClient private constructor() {
                 throw Exception("فشل تنزيل الملف: ${response.code} ${response.message}")
             }
             val body = response.body ?: throw Exception("بيانات الملف فارغة")
-            val totalBytes = body.contentLength()
+            val headerSize = response.header("X-File-Size")?.toLongOrNull() ?: body.contentLength()
             var downloadedBytes = 0L
 
             destinationFile.parentFile?.mkdirs()
@@ -270,8 +286,8 @@ class GoogleDriveApiClient private constructor() {
                     while (input.read(buffer).also { read = it } != -1) {
                         output.write(buffer, 0, read)
                         downloadedBytes += read
-                        if (totalBytes > 0) {
-                            onProgress(downloadedBytes.toFloat() / totalBytes.toFloat())
+                        if (headerSize > 0) {
+                            onProgress(downloadedBytes.toFloat() / headerSize.toFloat())
                         }
                     }
                     output.flush()
@@ -282,8 +298,79 @@ class GoogleDriveApiClient private constructor() {
         }
     }
 
+    private fun uploadChunkedToFolder(
+        folderId: String,
+        folderPath: String,
+        file: File,
+        mimeType: String,
+        onProgress: (Float) -> Unit
+    ): DriveItem {
+        val fileSize = file.length()
+        val initPayload = JsonObject().apply {
+            addProperty("action", "INIT_UPLOAD")
+            addProperty("fileName", file.name)
+            addProperty("mimeType", mimeType)
+            addProperty("fileSize", fileSize)
+            addProperty("folderId", folderId)
+            if (folderPath.isNotBlank()) addProperty("folderPath", folderPath)
+        }
+        val initRes = postJsonAction(initPayload)
+        val sessionUri = initRes.get("sessionUri")?.asString
+            ?: throw Exception("لم يتم استلام معرف جلسة الرفع sessionUri")
+
+        val chunkSize = AppConfig.CHUNK_SIZE_BYTES
+        var uploadedBytes = 0L
+        val raf = RandomAccessFile(file, "r")
+        val buffer = ByteArray(chunkSize)
+
+        try {
+            while (uploadedBytes < fileSize) {
+                val currentChunkLength = Math.min(chunkSize.toLong(), fileSize - uploadedBytes).toInt()
+                raf.seek(uploadedBytes)
+                raf.readFully(buffer, 0, currentChunkLength)
+
+                val chunkBody = buffer.toRequestBody("application/octet-stream".toMediaType(), 0, currentChunkLength)
+                val endByte = uploadedBytes + currentChunkLength - 1
+
+                val multipart = MultipartBody.Builder()
+                    .setType(MultipartBody.FORM)
+                    .addFormDataPart("action", "UPLOAD_CHUNK")
+                    .addFormDataPart("sessionUri", sessionUri)
+                    .addFormDataPart("start", uploadedBytes.toString())
+                    .addFormDataPart("end", endByte.toString())
+                    .addFormDataPart("total", fileSize.toString())
+                    .addFormDataPart("chunk", file.name, chunkBody)
+                    .build()
+
+                val chunkRequest = Request.Builder()
+                    .url("${AppConfig.SERVER_BASE_URL}/api/drive/files")
+                    .addHeader("x-admin-role", "admin")
+                    .post(multipart)
+                    .build()
+
+                client.newCall(chunkRequest).execute().use { response ->
+                    val body = response.body?.string() ?: ""
+                    if (!response.isSuccessful) {
+                        throw Exception("خطأ أثناء رفع شريحة الملف: ${response.code} ${response.message}")
+                    }
+                    val resJson = gson.fromJson(body, JsonObject::class.java)
+                    uploadedBytes += currentChunkLength
+                    onProgress(uploadedBytes.toFloat() / Math.max(fileSize, 1L).toFloat())
+                    if (resJson.get("done")?.asBoolean == true && resJson.has("file")) {
+                        onProgress(1.0f)
+                        return gson.fromJson(resJson.getAsJsonObject("file"), DriveItem::class.java)
+                    }
+                }
+            }
+        } finally {
+            raf.close()
+        }
+
+        throw Exception("انتهى الرفع دون استلام بيانات الملف النهائية")
+    }
+
     /**
-     * رفع ملف إلى Google Drive مع دعم الرفع المجزأ القابل للاستئناف (Resumable Upload)
+     * رفع ملف إلى خادم Share COC مع دعم الرفع المجزأ القابل للاستئناف
      */
     suspend fun uploadFile(
         parentId: String,
@@ -291,28 +378,25 @@ class GoogleDriveApiClient private constructor() {
         mimeType: String,
         onProgress: (Float) -> Unit = {}
     ): DriveItem = withContext(Dispatchers.IO) {
-        val token = getAccessToken()
+        val normParent = normalizeFolderId(parentId)
+        val folderPath = decodeFolderPath(normParent)
         val fileSize = file.length()
 
-        // 1. للملفات الصغيرة (أقل من أو يساوي 2MB) -> رفع سريع أحادي (Single-Shot Multipart)
         if (fileSize <= AppConfig.CHUNK_SIZE_BYTES) {
-            val metadata = JsonObject().apply {
-                addProperty("name", file.name)
-                addProperty("mimeType", mimeType)
-                add("parents", gson.toJsonTree(listOf(parentId)))
+            val fileBody = file.asRequestBody(mimeType.toMediaType())
+            val mb = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("fileName", file.name)
+                .addFormDataPart("folderId", normParent)
+                .addFormDataPart("file", file.name, fileBody)
+            if (folderPath.isNotBlank()) {
+                mb.addFormDataPart("folderPath", folderPath)
             }
 
-            val fileBody = file.asRequestBody(mimeType.toMediaType())
-            val multipart = MultipartBody.Builder()
-                .setType(MultipartBody.FORM)
-                .addFormDataPart("metadata", null, metadata.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
-                .addFormDataPart("file", file.name, fileBody)
-                .build()
-
             val request = Request.Builder()
-                .url("${AppConfig.DRIVE_UPLOAD_BASE_URL}/files?uploadType=multipart&fields=id,name,mimeType,size,md5Checksum,modifiedTime")
-                .addHeader("Authorization", "Bearer $token")
-                .post(multipart)
+                .url("${AppConfig.SERVER_BASE_URL}/api/drive/files")
+                .addHeader("x-admin-role", "admin")
+                .post(mb.build())
                 .build()
 
             client.newCall(request).execute().use { response ->
@@ -320,80 +404,18 @@ class GoogleDriveApiClient private constructor() {
                     throw Exception("فشل رفع الملف: ${response.code} ${response.message}")
                 }
                 val body = response.body?.string() ?: throw Exception("استجابة الرفع فارغة")
+                val json = gson.fromJson(body, JsonObject::class.java)
+                val fileObj = json.getAsJsonObject("file") ?: json
                 onProgress(1.0f)
-                return@withContext gson.fromJson(body, DriveItem::class.java)
+                return@withContext gson.fromJson(fileObj, DriveItem::class.java)
             }
         }
 
-        // 2. للملفات الكبيرة (> 2MB) -> رفع مجزأ قابل للاستئناف (True Resumable Chunked Upload)
-        val initMetadata = JsonObject().apply {
-            addProperty("name", file.name)
-            addProperty("mimeType", mimeType)
-            add("parents", gson.toJsonTree(listOf(parentId)))
-        }
-
-        val initRequest = Request.Builder()
-            .url("${AppConfig.DRIVE_UPLOAD_BASE_URL}/files?uploadType=resumable")
-            .addHeader("Authorization", "Bearer $token")
-            .addHeader("X-Upload-Content-Type", mimeType)
-            .addHeader("X-Upload-Content-Length", fileSize.toString())
-            .post(initMetadata.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
-            .build()
-
-        val sessionUri: String = client.newCall(initRequest).execute().use { response ->
-            if (!response.isSuccessful) {
-                throw Exception("فشل بدء جلسة الرفع المجزأ: ${response.code} ${response.message}")
-            }
-            response.header("Location") ?: throw Exception("لم يتم استلام عنوان جلسة الرفع Location")
-        }
-
-        // رفع الشرائح (Chunks)
-        val chunkSize = AppConfig.CHUNK_SIZE_BYTES
-        var uploadedBytes = 0L
-        val raf = RandomAccessFile(file, "r")
-        val buffer = ByteArray(chunkSize)
-
-        try {
-            while (uploadedBytes < fileSize) {
-                val currentChunkLength = Math.min(chunkSize.toLong(), fileSize - uploadedBytes).toInt()
-                raf.seek(uploadedBytes)
-                raf.readFully(buffer, 0, currentChunkLength)
-
-                val chunkBody = buffer.toRequestBody(mimeType.toMediaType(), 0, currentChunkLength)
-                val contentRange = "bytes $uploadedBytes-${uploadedBytes + currentChunkLength - 1}/$fileSize"
-
-                val chunkRequest = Request.Builder()
-                    .url(sessionUri)
-                    .addHeader("Content-Length", currentChunkLength.toString())
-                    .addHeader("Content-Range", contentRange)
-                    .put(chunkBody)
-                    .build()
-
-                client.newCall(chunkRequest).execute().use { response ->
-                    if (response.code == 308) {
-                        // الشريحة تم استقبالها، استمرار الرفع
-                        uploadedBytes += currentChunkLength
-                        onProgress(uploadedBytes.toFloat() / fileSize.toFloat())
-                    } else if (response.isSuccessful) {
-                        // اكتمل رفع جميع الشرائح بنجاح
-                        uploadedBytes += currentChunkLength
-                        onProgress(1.0f)
-                        val body = response.body?.string() ?: ""
-                        return@withContext gson.fromJson(body, DriveItem::class.java)
-                    } else {
-                        throw Exception("خطأ أثناء رفع شريحة الملف: ${response.code} ${response.message}")
-                    }
-                }
-            }
-        } finally {
-            raf.close()
-        }
-
-        throw Exception("انتهى الرفع دون الحصول على كائن الملف النهائي")
+        return@withContext uploadChunkedToFolder(normParent, folderPath, file, mimeType, onProgress)
     }
 
     /**
-     * تحديث محتوى ملف موجود في Google Drive فور الحفظ في تطبيق Office (PATCH Update)
+     * تحديث محتوى ملف موجود على الخادم فور الحفظ في تطبيق Office
      */
     suspend fun updateFileContent(
         fileId: String,
@@ -401,174 +423,116 @@ class GoogleDriveApiClient private constructor() {
         mimeType: String,
         onProgress: (Float) -> Unit = {}
     ): DriveItem = withContext(Dispatchers.IO) {
-        val token = getAccessToken()
         val fileSize = file.length()
-
-        // 1. للملفات الصغيرة (<= 2MB) -> PATCH مباشر فائق السرعة
-        if (fileSize <= AppConfig.CHUNK_SIZE_BYTES) {
-            val fileBody = file.asRequestBody(mimeType.toMediaType())
+        if (fileSize <= 8L * 1024L * 1024L) {
+            val encodedId = URLEncoder.encode(fileId, "UTF-8")
+            val encodedName = URLEncoder.encode(file.name, "UTF-8")
             val request = Request.Builder()
-                .url("${AppConfig.DRIVE_UPLOAD_BASE_URL}/files/$fileId?uploadType=media&fields=id,name,mimeType,size,md5Checksum,modifiedTime")
-                .addHeader("Authorization", "Bearer $token")
-                .patch(fileBody)
+                .url("${AppConfig.SERVER_BASE_URL}/api/drive/file/$encodedId/$encodedName")
+                .addHeader("x-admin-role", "admin")
+                .put(file.asRequestBody(mimeType.toMediaType()))
                 .build()
 
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     throw Exception("فشل تحديث المستند: ${response.code} ${response.message}")
                 }
-                val body = response.body?.string() ?: throw Exception("استجابة التحديث فارغة")
                 onProgress(1.0f)
-                return@withContext gson.fromJson(body, DriveItem::class.java)
+                return@withContext DriveItem(
+                    id = fileId,
+                    name = file.name,
+                    mimeType = mimeType,
+                    sizeString = fileSize.toString()
+                )
             }
         }
 
-        // 2. للملفات الكبيرة -> جلسة تحديث قابلة للاستئناف (Resumable PATCH)
-        val initRequest = Request.Builder()
-            .url("${AppConfig.DRIVE_UPLOAD_BASE_URL}/files/$fileId?uploadType=resumable")
-            .addHeader("Authorization", "Bearer $token")
-            .addHeader("X-Upload-Content-Type", mimeType)
-            .addHeader("X-Upload-Content-Length", fileSize.toString())
-            .patch("{}".toRequestBody("application/json; charset=utf-8".toMediaType()))
-            .build()
-
-        val sessionUri: String = client.newCall(initRequest).execute().use { response ->
-            if (!response.isSuccessful) {
-                throw Exception("فشل بدء جلسة تحديث الملف: ${response.code} ${response.message}")
-            }
-            response.header("Location") ?: throw Exception("لم يتم استلام عنوان جلسة التحديث Location")
-        }
-
-        val chunkSize = AppConfig.CHUNK_SIZE_BYTES
-        var uploadedBytes = 0L
-        val raf = RandomAccessFile(file, "r")
-        val buffer = ByteArray(chunkSize)
-
-        try {
-            while (uploadedBytes < fileSize) {
-                val currentChunkLength = Math.min(chunkSize.toLong(), fileSize - uploadedBytes).toInt()
-                raf.seek(uploadedBytes)
-                raf.readFully(buffer, 0, currentChunkLength)
-
-                val chunkBody = buffer.toRequestBody(mimeType.toMediaType(), 0, currentChunkLength)
-                val contentRange = "bytes $uploadedBytes-${uploadedBytes + currentChunkLength - 1}/$fileSize"
-
-                val chunkRequest = Request.Builder()
-                    .url(sessionUri)
-                    .addHeader("Content-Length", currentChunkLength.toString())
-                    .addHeader("Content-Range", contentRange)
-                    .put(chunkBody)
-                    .build()
-
-                client.newCall(chunkRequest).execute().use { response ->
-                    if (response.code == 308) {
-                        uploadedBytes += currentChunkLength
-                        onProgress(uploadedBytes.toFloat() / fileSize.toFloat())
-                    } else if (response.isSuccessful) {
-                        uploadedBytes += currentChunkLength
-                        onProgress(1.0f)
-                        val body = response.body?.string() ?: ""
-                        return@withContext gson.fromJson(body, DriveItem::class.java)
-                    } else {
-                        throw Exception("خطأ أثناء تحديث شريحة الملف: ${response.code} ${response.message}")
-                    }
-                }
-            }
-        } finally {
-            raf.close()
-        }
-
-        throw Exception("انتهى تحديث الملف دون استجابة نهائية")
+        val relPath = decodeFolderPath(fileId)
+        val parentRel = if (relPath.contains("/")) relPath.substringBeforeLast("/") else ""
+        return@withContext uploadChunkedToFolder("root", parentRel, file, mimeType, onProgress)
     }
 
     /**
-     * إنشاء مجلد جديد داخل Google Drive
+     * إنشاء مجلد جديد عبر /api/drive/files
      */
     suspend fun createFolder(parentId: String, name: String): DriveItem = withContext(Dispatchers.IO) {
-        val token = getAccessToken()
-        val metadata = JsonObject().apply {
+        val payload = JsonObject().apply {
+            addProperty("action", "CREATE_FOLDER")
             addProperty("name", name)
-            addProperty("mimeType", AppConfig.FOLDER_MIME)
-            add("parents", gson.toJsonTree(listOf(parentId)))
+            addProperty("parentId", normalizeFolderId(parentId))
         }
-
-        val request = Request.Builder()
-            .url("${AppConfig.DRIVE_API_BASE_URL}/files?fields=id,name,mimeType,createdTime,parents")
-            .addHeader("Authorization", "Bearer $token")
-            .post(metadata.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
-            .build()
-
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                throw Exception("فشل إنشاء المجلد: ${response.code} ${response.message}")
-            }
-            val body = response.body?.string() ?: throw Exception("استجابة إنشاء المجلد فارغة")
-            return@withContext gson.fromJson(body, DriveItem::class.java)
-        }
+        val res = postJsonAction(payload)
+        val folderObj = res.getAsJsonObject("folder")
+            ?: throw Exception("استجابة إنشاء المجلد فارغة")
+        return@withContext gson.fromJson(folderObj, DriveItem::class.java)
     }
 
     /**
      * إعادة تسمية عنصر
      */
     suspend fun renameItem(itemId: String, newName: String): Boolean = withContext(Dispatchers.IO) {
-        val token = getAccessToken()
-        val metadata = JsonObject().apply {
-            addProperty("name", newName)
+        return@withContext try {
+            val payload = JsonObject().apply {
+                addProperty("action", "RENAME")
+                addProperty("id", itemId)
+                addProperty("name", newName)
+            }
+            postJsonAction(payload)
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "renameItem error: ${e.message}")
+            false
         }
-        val request = Request.Builder()
-            .url("${AppConfig.DRIVE_API_BASE_URL}/files/$itemId")
-            .addHeader("Authorization", "Bearer $token")
-            .patch(metadata.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
-            .build()
-
-        return@withContext client.newCall(request).execute().isSuccessful
     }
 
     /**
      * نقل عنصر إلى سلة المحذوفات (Soft Delete)
      */
     suspend fun trashItem(itemId: String): Boolean = withContext(Dispatchers.IO) {
-        val token = getAccessToken()
-        val metadata = JsonObject().apply {
-            addProperty("trashed", true)
+        return@withContext try {
+            val payload = JsonObject().apply {
+                addProperty("action", "DELETE")
+                addProperty("id", itemId)
+            }
+            postJsonAction(payload)
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "trashItem error: ${e.message}")
+            false
         }
-        val request = Request.Builder()
-            .url("${AppConfig.DRIVE_API_BASE_URL}/files/$itemId")
-            .addHeader("Authorization", "Bearer $token")
-            .patch(metadata.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
-            .build()
-
-        return@withContext client.newCall(request).execute().isSuccessful
     }
 
     /**
      * استعادة عنصر من سلة المحذوفات (Restore)
      */
     suspend fun restoreItem(itemId: String): Boolean = withContext(Dispatchers.IO) {
-        val token = getAccessToken()
-        val metadata = JsonObject().apply {
-            addProperty("trashed", false)
+        return@withContext try {
+            val payload = JsonObject().apply {
+                addProperty("action", "RESTORE")
+                addProperty("id", itemId)
+            }
+            postJsonAction(payload)
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "restoreItem error: ${e.message}")
+            false
         }
-        val request = Request.Builder()
-            .url("${AppConfig.DRIVE_API_BASE_URL}/files/$itemId")
-            .addHeader("Authorization", "Bearer $token")
-            .patch(metadata.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
-            .build()
-
-        return@withContext client.newCall(request).execute().isSuccessful
     }
 
     /**
-     * حذف عنصر نهائياً من Google Drive (Permanent Delete)
+     * حذف عنصر نهائياً (Permanent Delete)
      */
     suspend fun permanentDeleteItem(itemId: String): Boolean = withContext(Dispatchers.IO) {
-        val token = getAccessToken()
-        val request = Request.Builder()
-            .url("${AppConfig.DRIVE_API_BASE_URL}/files/$itemId")
-            .addHeader("Authorization", "Bearer $token")
-            .delete()
-            .build()
-
-        return@withContext client.newCall(request).execute().isSuccessful
+        return@withContext try {
+            val payload = JsonObject().apply {
+                addProperty("action", "PERMANENT_DELETE")
+                addProperty("id", itemId)
+            }
+            postJsonAction(payload)
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "permanentDeleteItem error: ${e.message}")
+            false
+        }
     }
 }

@@ -1,29 +1,27 @@
 # -*- coding: utf-8 -*-
 """
-Google Drive Client for Desktop App
-كامل الصلاحيات مع Google Drive API v3
+Share COC Cloud Client for Desktop App
+كامل الصلاحيات مع خادم Share COC المحلي الدائم (https://share.162.35.16.252.sslip.io)
 
-الإصدار 4.0 – نسخة محكمة وعالية الأداء:
-  • رفع مجزأ قابل للاستئناف الحقيقي (True Resumable Chunked Upload) بحجم شريحة 2MB
-    ومؤشر تقدم لحظي (Progress Callback) لا ينقطع حتى مع الملفات الضخمة (300MB - 2GB).
-  • رفع مباشر (Single-Shot) للملفات الصغيرة (<= 2MB) لمضاعفة سرعة مزامنة ملفات Word و Excel.
+الإصدار 5.0 – نسخة السحابة المحلية المستقلة:
+  • اتصال مباشر بواجهات /api/drive/files و /api/drive/stream و /api/drive/permissions.
+  • رفع مباشر للملفات الصغيرة (<= 8MB) ورفع مجزأ قابل للاستئناف (INIT_UPLOAD / UPLOAD_CHUNK) للملفات الضخمة.
+  • تنزيل متدفق آمن إلى ملف مؤقت ثم استبدال ذري متوافق مع أقفال Microsoft Office / Access.
+  • استكشاف تغيّرات السحابة السريع (/api/drive/files?changes=1&sig=...) وتوليد Delta Changes فوري.
   • حماية كاملة من أخطاء الترميز (UTF-8 Safe Logging) في الوضع الصامت والتنفيذي (windowed exe).
-  • مرآة كاملة لشجرة المجلدات وترقيم صفحات شامل (Pagination) واتصال مستقل لكل خيط.
 """
 import os
 import sys
+import re
 import json
 import time
-import socket
-import http.client
-import urllib.parse
+import hashlib
 import mimetypes
 import threading
-from datetime import datetime
+import urllib.parse
 from pathlib import Path
 
 import requests
-import re
 
 for _stream_name in ("stdout", "stderr"):
     _stream = getattr(sys, _stream_name, None)
@@ -33,28 +31,25 @@ for _stream_name in ("stdout", "stderr"):
         except Exception:
             pass
 
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
+SHARECOC_SERVER_URL = os.environ.get(
+    "SHARECOC_SERVER_URL",
+    "https://share.162.35.16.252.sslip.io",
+).strip().rstrip("/")
 
-try:
-    import httplib2
-    import google_auth_httplib2
-except Exception:  # pragma: no cover
-    httplib2 = None
-    google_auth_httplib2 = None
-
-DEFAULT_ROOT_FOLDER_ID = "1BF6mDMuwuaS5c4Ekq9KPcEXaAOxGOmfB"
+DEFAULT_ROOT_FOLDER_ID = "root"
+LEGACY_GENERAL_DEPT = "المجلد العام"
 FOLDER_MIME = "application/vnd.google-apps.folder"
-GOOGLE_NATIVE_PREFIX = "application/vnd.google-apps."
-NETWORK_TIMEOUT = 120                     # ثانية لكل شريحة لمنع انقطاع الاتصال
-UPLOAD_CHUNK_SIZE = 16 * 1024 * 1024      # 16 ميجابايت لكل شريحة HTTP لمضاعفة سرعة الرفع القصوى (بدلاً من 512KB)
-SOCKET_STREAM_BLOCK = 256 * 1024          # 256 كيلوبايت للبث اللحظي عبر المقبس وتحديث المؤشر بسلاسة فائقة
-DOWNLOAD_CHUNK_SIZE = 8 * 1024 * 1024     # 8 ميجابايت لكل شريحة تنزيل
-LIST_FIELDS = "nextPageToken, files(id, name, mimeType, size, md5Checksum, modifiedTime, createdTime, parents)"
+PERMISSIONS_CONFIG_FILENAME = ".sharecoc_permissions.json"
+SNAPSHOT_MAX_AGE = 12.0
+NETWORK_TIMEOUT = 20
+TRANSFER_TIMEOUT = 300
+UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024      # 8 ميجابايت لكل شريحة رفع
+DOWNLOAD_CHUNK_SIZE = 1024 * 1024        # 1 ميجابايت لكل شريحة تنزيل
+PERMS_CACHE_TTL = 60.0
 
 _IGNORED_EXACT = {"desktop.ini", "thumbs.db", ".ds_store"}
 _IGNORED_SUFFIXES = (".tmp", ".laccdb", ".ldb", ".crdownload", ".partial", ".part", "~")
+_GENERAL_FOLDER_ALIASES = {"", ".", "root", "القسم العام", "المجلد العام", "__ALL__"}
 
 
 def _safe_log(msg):
@@ -68,7 +63,8 @@ def _safe_log(msg):
         pass
 
 
-_EXCEL_TEMP_RE = re.compile(r'^[0-9A-Fa-f]{8}$')
+_EXCEL_TEMP_RE = re.compile(r"^[0-9A-Fa-f]{8}$")
+
 
 def is_ignored_name(name):
     """ملفات مؤقتة/نظامية لا يجب مزامنتها أبداً (ملفات قفل Office، ملفات مؤقتة...)"""
@@ -94,79 +90,47 @@ def norm_rel(path):
     return "" if p == "." else p
 
 
-def _q_escape(value):
-    return str(value).replace("\\", "\\\\").replace("'", "\\'")
+def _md5_file(file_path):
+    h = hashlib.md5()
+    with open(file_path, "rb") as f:
+        while chunk := f.read(1024 * 1024):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def load_gdrive_config():
-    """Load Google Drive OAuth credentials from environment, local paths, or bundle fallback"""
-    # 1. Environment variables
-    if os.environ.get("GDRIVE_REFRESH_TOKEN"):
-        return {
-            "client_id": os.environ.get("GDRIVE_CLIENT_ID", ""),
-            "client_secret": os.environ.get("GDRIVE_CLIENT_SECRET", ""),
-            "refresh_token": os.environ.get("GDRIVE_REFRESH_TOKEN", ""),
-            "folder_id": os.environ.get("GDRIVE_FOLDER_ID", DEFAULT_ROOT_FOLDER_ID)
-        }
-
-    candidates = []
-
-    # 2. Check next to executable (if frozen)
-    if getattr(sys, 'frozen', False):
-        exe_dir_p = Path(sys.executable).parent / "gdrive_credentials.json"
-        candidates.append(exe_dir_p)
-
-    # 3. Standard local storage and AppData paths (active user configuration)
-    candidates.extend([
-        Path(os.environ.get("APPDATA", "C:")) / "ShareCOC" / "gdrive_credentials.json",
-        Path(os.environ.get("APPDATA", "C:")) / "FileExchange" / "gdrive_credentials.json",
-        Path(os.environ.get("LOCALAPPDATA", "C:")) / "Programs" / "ShareCOC" / "gdrive_credentials.json",
-        Path.home() / "FileExchangeShared" / ".gdrive_credentials.json",
-        Path.home() / "ShareCOCShared" / ".gdrive_credentials.json",
-        Path(r"C:\Users\tohiba\OneDrive\Desktop\ShareCOC\gdrive_credentials.json"),
-        Path(__file__).parent.parent / "gdrive_credentials.json",
-        Path(__file__).parent / "gdrive_credentials.json",
-    ])
-
-    # 4. Check frozen PyInstaller bundle (_MEIPASS) as LAST fallback only
-    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
-        candidates.append(Path(sys._MEIPASS) / "gdrive_credentials.json")
-
-    for c in candidates:
-        if c and c.exists():
-            try:
-                with open(c, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    if data.get("client_id") and data.get("client_secret") and data.get("refresh_token"):
-                        return data
-            except Exception:
-                pass
-
-    return {}
-
-
-# مدة صلاحية ذاكرة صلاحيات الأقسام (بالثواني) قبل تجديدها في الخلفية
-PERMS_CACHE_TTL = 60.0
+    """إرجاع تهيئة الاتصال بخادم Share COC المحلي (للتوافق مع بقية وحدات التطبيق)"""
+    return {
+        "server_url": os.environ.get("SHARECOC_SERVER_URL", SHARECOC_SERVER_URL).strip().rstrip("/"),
+        "folder_id": DEFAULT_ROOT_FOLDER_ID,
+    }
 
 
 class DriveSnapshot:
-    """صورة كاملة لشجرة السحابة في لحظة معينة"""
+    """صورة كاملة لشجرة الملفات والمجلدات في خادم Share COC في لحظة معينة"""
 
-    def __init__(self, root_id):
-        self.root_id = root_id
-        self.folders = {"": root_id}          # rel_folder_path -> folder id
-        self.folder_meta = {}                 # rel_folder_path -> metadata
-        self.id_to_path = {root_id: ""}       # folder id -> rel path
-        self.files = {}                       # rel_file_path -> metadata
-        self.file_ids = {}                    # file id -> rel_file_path
+    def __init__(self, root_id=DEFAULT_ROOT_FOLDER_ID):
+        self.root_id = root_id or DEFAULT_ROOT_FOLDER_ID
+        self.folders = {"": self.root_id}          # rel_folder_path -> folder id
+        self.folder_meta = {}                      # rel_folder_path -> metadata
+        self.id_to_path = {self.root_id: ""}       # folder id -> rel path
+        self.files = {}                            # rel_file_path -> metadata
+        self.file_ids = {}                         # file id -> rel_file_path
         self.taken_at = time.time()
 
 
+CloudSnapshot = DriveSnapshot
+
+
 class GoogleDriveClient:
+    """عميل التزامن الرسمي عبر خادم Share COC المستقل"""
+
     def __init__(self, root_folder_id=None):
         self.config = load_gdrive_config()
-        self.root_folder_id = root_folder_id or self.config.get("folder_id", DEFAULT_ROOT_FOLDER_ID)
+        self.server_url = self.config.get("server_url") or SHARECOC_SERVER_URL
+        self.root_folder_id = root_folder_id or DEFAULT_ROOT_FOLDER_ID
         self.sync_folder = None  # يُضبط من main.py لتحديد المسارات النسبية تلقائياً
+        self.service = True
         self._local = threading.local()
         self._snapshot_lock = threading.Lock()
         self._folder_lock = threading.RLock()
@@ -174,378 +138,40 @@ class GoogleDriveClient:
         self._path_locks_guard = threading.Lock()
         self._snapshot = None
         self.last_error = None
+        self._last_change_sig = None
+        self._last_trash_files = []
+        self._raw_cloud_devices = []
+        self._cloud_devices_list = []
+        self._has_fetched_cloud_perms = False
+        self._perms_cache_data = {}
+        self._perms_cache_ts = 0.0
+        self._perms_refreshing = False
         self._priority_uploads_active = 0
-        self._priority_lock = threading.Lock()
-        self._token_lock = threading.Lock()
-        self._access_token = None
-        self._token_expiry = 0.0
-        # ذاكرة مسارات المجلدات المعروفة: rel_path -> id
         self._folder_ids = {"": self.root_folder_id}
 
+    def _get_session(self):
+        sess = getattr(self._local, "session", None)
+        if sess is None:
+            sess = requests.Session()
+            sess.headers.update({
+                "x-admin-role": "admin",
+                "User-Agent": "ShareCOC-Desktop/5.0",
+            })
+            self._local.session = sess
+        return sess
+
+    def _api(self, path):
+        if path.startswith("http://") or path.startswith("https://"):
+            return path
+        return f"{self.server_url}{path}"
+
     def reload_config(self):
-        """إعادة تحميل الإعدادات من الملفات الخارجية في حال تحديث الرمز أثناء عمل البرنامج"""
         self.config = load_gdrive_config()
-        self.root_folder_id = self.config.get("folder_id", DEFAULT_ROOT_FOLDER_ID)
-        self._access_token = None
-        self._token_expiry = 0.0
-        self._reset_thread_service()
+        self.server_url = self.config.get("server_url") or SHARECOC_SERVER_URL
+        self._local.session = None
 
-    def _get_access_token(self, force_refresh=False):
-        """جلب رمز وصول OAuth2 نشط ومخزن مؤقتاً لعمليات البث السريع المباشر عبر المقبس"""
-        now = time.time()
-        with self._token_lock:
-            if not force_refresh and self._access_token and now < self._token_expiry - 60:
-                return self._access_token
-            resp = requests.post(
-                "https://oauth2.googleapis.com/token",
-                data={
-                    "client_id": self.config["client_id"],
-                    "client_secret": self.config["client_secret"],
-                    "refresh_token": self.config["refresh_token"],
-                    "grant_type": "refresh_token",
-                },
-                timeout=30,
-            )
-            if resp.status_code != 200 and "invalid_grant" in resp.text:
-                new_cfg = load_gdrive_config()
-                if new_cfg and new_cfg.get("refresh_token") != self.config.get("refresh_token"):
-                    self.config = new_cfg
-                    self._reset_thread_service()
-                    resp = requests.post(
-                        "https://oauth2.googleapis.com/token",
-                        data={
-                            "client_id": self.config["client_id"],
-                            "client_secret": self.config["client_secret"],
-                            "refresh_token": self.config["refresh_token"],
-                            "grant_type": "refresh_token",
-                        },
-                        timeout=30,
-                    )
-            resp.raise_for_status()
-            tok = resp.json()
-            self._access_token = tok["access_token"]
-            self._token_expiry = now + int(tok.get("expires_in", 3500))
-            return self._access_token
-
-    def _stream_resumable_upload_fast(self, file_path_str, fname, parent_id, fid, mime,
-                                      total_size, fields, progress_callback=None, is_priority=False):
-        """
-        بث سريع مباشر (High-Speed Socket Streaming Resumable Upload) إلى Google Drive:
-        يرسل شرائح HTTP كبيرة (16MB) عبر اتصال TLS مستمر (Keep-Alive) لتفادي بطء الشرائح الصغيرة،
-        مع ضخ البيانات عبر المقبس بكتل (256KB) لتحديث شريط التقدم والسرعة في الوقت الفعلي بسلاسة تامة.
-        """
-        token = self._get_access_token()
-        q_fields = urllib.parse.quote(fields)
-        if fid:
-            init_url = f"https://www.googleapis.com/upload/drive/v3/files/{fid}?uploadType=resumable&fields={q_fields}"
-            init_method = "PATCH"
-            init_payload = "{}"
-        else:
-            init_url = f"https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields={q_fields}"
-            init_method = "POST"
-            init_payload = json.dumps({"name": fname, "parents": [parent_id]})
-
-        init_headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json; charset=UTF-8",
-            "X-Upload-Content-Type": mime,
-            "X-Upload-Content-Length": str(total_size),
-        }
-        init_resp = requests.request(
-            init_method,
-            init_url,
-            data=init_payload.encode("utf-8"),
-            headers=init_headers,
-            timeout=30,
-        )
-        if init_resp.status_code == 401:
-            token = self._get_access_token(force_refresh=True)
-            init_headers["Authorization"] = f"Bearer {token}"
-            init_resp = requests.request(
-                init_method,
-                init_url,
-                data=init_payload.encode("utf-8"),
-                headers=init_headers,
-                timeout=30,
-            )
-        if init_resp.status_code == 404 and fid:
-            raise FileNotFoundError("404 Target fileId not found on Google Drive")
-        init_resp.raise_for_status()
-        session_uri = init_resp.headers.get("Location")
-        if not session_uri:
-            raise RuntimeError("Missing resumable session Location header from Google Drive")
-
-        parsed = urllib.parse.urlsplit(session_uri)
-        host = parsed.netloc
-        path_query = f"{parsed.path}?{parsed.query}" if parsed.query else parsed.path
-
-        def _open_conn():
-            c = http.client.HTTPSConnection(host, timeout=NETWORK_TIMEOUT)
-            c.connect()
-            try:
-                c.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                c.sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 524288)
-            except Exception:
-                pass
-            return c
-
-        conn = None
-        offset = 0
-        chunk_errors = 0
-        try:
-            with open(file_path_str, "rb") as f_obj:
-                while offset < total_size:
-                    if not is_priority and getattr(self, "_priority_uploads_active", 0) > 0:
-                        wait_start = time.time()
-                        while getattr(self, "_priority_uploads_active", 0) > 0 and (time.time() - wait_start < 120):
-                            time.sleep(0.25)
-
-                    chunk_end_excl = min(offset + UPLOAD_CHUNK_SIZE, total_size)
-                    chunk_len = chunk_end_excl - offset
-
-                    try:
-                        if conn is None:
-                            conn = _open_conn()
-
-                        conn.putrequest("PUT", path_query)
-                        conn.putheader("Content-Length", str(chunk_len))
-                        conn.putheader("Content-Range", f"bytes {offset}-{chunk_end_excl - 1}/{total_size}")
-                        conn.putheader("Content-Type", mime)
-                        conn.putheader("Connection", "keep-alive")
-                        conn.endheaders()
-
-                        f_obj.seek(offset)
-                        remaining = chunk_len
-                        sent_in_chunk = 0
-                        last_cb_t = 0.0
-
-                        while remaining > 0:
-                            read_sz = min(SOCKET_STREAM_BLOCK, remaining)
-                            buf = f_obj.read(read_sz)
-                            if not buf:
-                                break
-                            conn.send(buf)
-                            sent_in_chunk += len(buf)
-                            remaining -= len(buf)
-
-                            if callable(progress_callback):
-                                now_t = time.time()
-                                if (now_t - last_cb_t) >= 0.10 or remaining == 0:
-                                    last_cb_t = now_t
-                                    try:
-                                        progress_callback(offset + sent_in_chunk, total_size)
-                                    except Exception:
-                                        pass
-
-                        resp = conn.getresponse()
-                        resp_body = resp.read()
-                        status_code = resp.status
-
-                        if status_code == 308:
-                            chunk_errors = 0
-                            range_hdr = resp.getheader("Range") or resp.getheader("range")
-                            if range_hdr and "-" in range_hdr:
-                                try:
-                                    offset = int(range_hdr.split("-")[-1].strip()) + 1
-                                except Exception:
-                                    offset = chunk_end_excl
-                            else:
-                                offset = chunk_end_excl
-                            if callable(progress_callback):
-                                try:
-                                    progress_callback(offset, total_size)
-                                except Exception:
-                                    pass
-                        elif status_code in (200, 201):
-                            offset = total_size
-                            if callable(progress_callback):
-                                try:
-                                    progress_callback(total_size, total_size)
-                                except Exception:
-                                    pass
-                            return json.loads(resp_body.decode("utf-8")) if resp_body else {"id": fid or ""}
-                        elif status_code in (400, 401, 403, 404, 410):
-                            raise RuntimeError(f"Google Drive HTTP {status_code}: {resp_body.decode('utf-8', 'ignore')[:200]}")
-                        else:
-                            raise RuntimeError(f"Unexpected HTTP {status_code}")
-
-                    except Exception as chunk_exc:
-                        if conn is not None:
-                            try:
-                                conn.close()
-                            except Exception:
-                                pass
-                            conn = None
-
-                        msg = str(chunk_exc)
-                        if any(code in msg for code in ("HTTP 400", "HTTP 401", "HTTP 403", "HTTP 404", "HTTP 410")):
-                            raise
-                        chunk_errors += 1
-                        if chunk_errors > 8:
-                            raise
-                        time.sleep(min(1.5 * chunk_errors, 8.0))
-                        try:
-                            q_resp = requests.put(
-                                session_uri,
-                                headers={
-                                    "Content-Length": "0",
-                                    "Content-Range": f"bytes */{total_size}",
-                                },
-                                timeout=20,
-                            )
-                            if q_resp.status_code == 308:
-                                r_hdr = q_resp.headers.get("Range") or q_resp.headers.get("range")
-                                if r_hdr and "-" in r_hdr:
-                                    offset = int(r_hdr.split("-")[-1].strip()) + 1
-                            elif q_resp.status_code in (200, 201):
-                                if callable(progress_callback):
-                                    try:
-                                        progress_callback(total_size, total_size)
-                                    except Exception:
-                                        pass
-                                return q_resp.json()
-                        except Exception:
-                            pass
-        finally:
-            if conn is not None:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-
-    # ------------------------------------------------------------------ #
-    # الاتصال
-    # ------------------------------------------------------------------ #
     def is_configured(self):
-        """فحص فوري بدون أي اتصال شبكي (آمن للاستدعاء من واجهة المستخدم)"""
-        c = self.config
-        return bool(c.get("client_id") and c.get("client_secret") and c.get("refresh_token"))
-
-    @property
-    def service(self):
-        """خدمة Drive مستقلة لكل خيط – httplib2 غير آمن للمشاركة بين الخيوط"""
-        svc = getattr(self._local, "service", None)
-        if svc is not None:
-            return svc
-        if not self.is_configured():
-            return None
-        creds = Credentials.from_authorized_user_info({
-            "client_id": self.config["client_id"],
-            "client_secret": self.config["client_secret"],
-            "refresh_token": self.config["refresh_token"],
-            "token_uri": "https://oauth2.googleapis.com/token",
-        })
-        if httplib2 is not None and google_auth_httplib2 is not None:
-            raw_http = httplib2.Http(timeout=NETWORK_TIMEOUT)
-            # حرج جداً: استبعاد الكود 308 (Resume Incomplete) من أكواد إعادة التوجيه في httplib2
-            # لأن Google Drive يستخدم 308 للإشارة لاكتمال رفع الشريحة وليس كإعادة توجيه، وبدونه يفشل رفع أي ملف متعدد الشرائح!
-            raw_http.redirect_codes = set(getattr(raw_http, "redirect_codes", ())) - {308}
-            authed_http = google_auth_httplib2.AuthorizedHttp(creds, http=raw_http)
-            svc = build('drive', 'v3', http=authed_http, cache_discovery=False)
-        else:
-            svc = build('drive', 'v3', credentials=creds, cache_discovery=False)
-        self._local.service = svc
-        return svc
-
-    def _reset_thread_service(self):
-        self._local.service = None
-
-    def _execute(self, request_factory, retries=3):
-        """تنفيذ طلب مع إعادة المحاولة عند أخطاء الشبكة المؤقتة"""
-        last_exc = None
-        for attempt in range(retries):
-            try:
-                return request_factory(self.service).execute(num_retries=2)
-            except Exception as e:
-                last_exc = e
-                err_str = str(e).lower()
-                status = getattr(getattr(e, "resp", None), "status", None)
-                try:
-                    status = int(status) if status is not None else None
-                except Exception:
-                    status = None
-
-                # إذا انتهت صلاحية الرمز، محاولة إعادة قراءة الإعدادات المحدثة من الملفات المحلية
-                if "invalid_grant" in err_str or status in (400, 401):
-                    new_cfg = load_gdrive_config()
-                    if new_cfg and new_cfg.get("refresh_token") != self.config.get("refresh_token"):
-                        self.config = new_cfg
-                        self._reset_thread_service()
-                        continue
-
-                if status in (400, 401, 404):
-                    raise
-                self._reset_thread_service()
-                time.sleep(1.2 * (attempt + 1))
-        raise last_exc
-
-    def _execute_resumable_upload(self, request_factory, total_size, progress_callback=None, is_priority=False):
-        """
-        رفع مجزأ قابل للاستئناف (Chunked Resumable Upload) يستأنف من نفس الشريحة عند أي انقطاع
-        ولا يعيد رفع الملف الضخم من الصفر أبداً، مع منح الأولوية القصوى للرفع التفاعلي للمستخدم.
-        """
-        max_session_retries = 3
-        last_exc = None
-        for session_attempt in range(max_session_retries):
-            try:
-                req = request_factory(self.service)
-                if not getattr(req, "resumable", None):
-                    meta = req.execute(num_retries=3)
-                    if callable(progress_callback):
-                        try:
-                            progress_callback(total_size, total_size)
-                        except Exception:
-                            pass
-                    return meta
-
-                response = None
-                chunk_errors = 0
-                while response is None:
-                    # إذا كان هناك رفع تفاعلي نشط من المستخدم، يتوقف الرفع الخلفي الضخم مؤقتاً بين الشرائح لمنح كامل سرعة الإنترنت للمستخدم
-                    if not is_priority and getattr(self, "_priority_uploads_active", 0) > 0:
-                        wait_start = time.time()
-                        while getattr(self, "_priority_uploads_active", 0) > 0 and (time.time() - wait_start < 120):
-                            time.sleep(0.25)
-
-                    try:
-                        status, response = req.next_chunk(num_retries=4)
-                        chunk_errors = 0
-                        if status is not None and callable(progress_callback):
-                            try:
-                                progress_callback(int(status.resumable_progress), int(total_size or status.total_size or 1))
-                            except Exception:
-                                pass
-                    except Exception as chunk_exc:
-                        http_status = getattr(getattr(chunk_exc, "resp", None), "status", None)
-                        try:
-                            http_status = int(http_status) if http_status is not None else None
-                        except Exception:
-                            http_status = None
-                        if http_status in (400, 401, 403, 404, 410):
-                            raise
-                        chunk_errors += 1
-                        if chunk_errors > 6:
-                            raise
-                        time.sleep(min(2.0 * chunk_errors, 10.0))
-
-                if callable(progress_callback):
-                    try:
-                        progress_callback(total_size, total_size)
-                    except Exception:
-                        pass
-                return response
-            except Exception as e:
-                last_exc = e
-                http_status = getattr(getattr(e, "resp", None), "status", None)
-                try:
-                    http_status = int(http_status) if http_status is not None else None
-                except Exception:
-                    http_status = None
-                if http_status in (400, 401, 404):
-                    raise
-                self._reset_thread_service()
-                time.sleep(2.0 * (session_attempt + 1))
-        raise last_exc
+        return bool(self.server_url)
 
     def _path_lock(self, key):
         with self._path_locks_guard:
@@ -555,114 +181,275 @@ class GoogleDriveClient:
                 self._path_locks[key] = lk
             return lk
 
-    # ------------------------------------------------------------------ #
-    # قراءة الشجرة الكاملة
-    # ------------------------------------------------------------------ #
-    def _list_children(self, parent_ids):
-        """جلب كل العناصر داخل مجموعة من المجلدات مع ترقيم الصفحات الكامل"""
-        q_parents = " or ".join(f"'{pid}' in parents" for pid in parent_ids)
-        query = f"({q_parents}) and trashed = false"
-        items = []
-        page_token = None
-        while True:
-            res = self._execute(lambda s: s.files().list(
-                q=query, fields=LIST_FIELDS, pageSize=1000, pageToken=page_token,
-                spaces="drive"))
-            items.extend(res.get("files", []))
-            page_token = res.get("nextPageToken")
-            if not page_token:
-                break
-        return items
-
-    def snapshot(self, force=False, max_age=8):
-        """
-        بناء صورة كاملة لشجرة السحابة (كل المجلدات الفرعية وكل الملفات).
-        تُرجع None عند فشل الاتصال – لا تُرجع أبداً صورة ناقصة.
-        """
-        if not self.is_configured():
-            return None
-        snap = self._snapshot
-        if not force and snap is not None and (time.time() - snap.taken_at) < max_age:
-            return snap
-
-        with self._snapshot_lock:
-            snap = self._snapshot
-            if not force and snap is not None and (time.time() - snap.taken_at) < max_age:
-                return snap
-            try:
-                new = DriveSnapshot(self.root_folder_id)
-                level = [self.root_folder_id]
-                visited = {self.root_folder_id}
-                while level:
-                    next_level = []
-                    for i in range(0, len(level), 25):
-                        chunk = level[i:i + 25]
-                        for item in self._list_children(chunk):
-                            parents = item.get("parents") or []
-                            parent_path = None
-                            for pid in parents:
-                                if pid in new.id_to_path:
-                                    parent_path = new.id_to_path[pid]
-                                    break
-                            if parent_path is None:
-                                continue
-                            name = item.get("name", "")
-                            if is_ignored_name(name):
-                                continue
-                            rel = f"{parent_path}/{name}" if parent_path else name
-                            if any(part.startswith(".") for part in rel.split("/")):
-                                continue
-                            if item.get("mimeType") == FOLDER_MIME:
-                                if item["id"] in visited:
-                                    continue
-                                visited.add(item["id"])
-                                new.id_to_path[item["id"]] = rel
-                                if rel not in new.folders:
-                                    new.folders[rel] = item["id"]
-                                    new.folder_meta[rel] = item
-                                next_level.append(item["id"])
-                            else:
-                                if is_ignored_name(name):
-                                    continue
-                                if str(item.get("mimeType", "")).startswith(GOOGLE_NATIVE_PREFIX):
-                                    continue
-                                existing = new.files.get(rel)
-                                if existing is None or item.get("modifiedTime", "") > existing.get("modifiedTime", ""):
-                                    new.files[rel] = item
-                    level = next_level
-                new.file_ids = {meta["id"]: rel for rel, meta in new.files.items()}
-                new.taken_at = time.time()
-                self._snapshot = new
-                with self._folder_lock:
-                    self._folder_ids.update(new.folders)
-                self.last_error = None
-                return new
-            except Exception as e:
-                self.last_error = str(e)
-                _safe_log(f"[GDRIVE] Snapshot failed: {e}")
-                return None
+    def peek_snapshot(self):
+        """إرجاع آخر لقطة سحابية محفوظة فوراً دون أي طلب شبكة أو انتظار قفل"""
+        return self._snapshot
 
     def invalidate(self):
         snap = self._snapshot
         if snap is not None:
-            snap.taken_at = 0
+            snap.taken_at = 0.0
 
     # ------------------------------------------------------------------ #
-    # واجهات متوافقة مع الإصدارات السابقة (gui.py / local_bridge.py)
+    # قراءة الشجرة الكاملة والمراقبة
+    # ------------------------------------------------------------------ #
+    def _normalize_permissions_payload(self, depts_obj, hub_sec, devices_list):
+        normalized = {}
+        if isinstance(depts_obj, dict):
+            for dept_name, cfg in depts_obj.items():
+                if dept_name in ("version", "updatedAt") or not isinstance(cfg, dict):
+                    continue
+                can_upload = bool(cfg.get("canUpload", cfg.get("canWrite", True)))
+                can_edit = bool(cfg.get("canEdit", cfg.get("canWrite", True)))
+                can_delete = bool(cfg.get("canDelete", True))
+                auth_devs = list(cfg.get("authorizedDevices", []) or cfg.get("authorized_devices", []) or [])
+                normalized[dept_name] = {
+                    "can_view": bool(cfg.get("canView", True)),
+                    "can_download": bool(cfg.get("canDownload", True)),
+                    "can_upload": can_upload,
+                    "can_create_folder": bool(cfg.get("canCreateFolder", can_upload)),
+                    "can_edit": can_edit,
+                    "can_rename": bool(cfg.get("canRename", can_edit)),
+                    "can_move": bool(cfg.get("canMove", can_edit)),
+                    "can_delete": can_delete,
+                    "can_permanent_delete": bool(cfg.get("canPermanentDelete", can_delete)),
+                    "can_write": can_upload or can_edit,
+                    "pin_code": str(cfg.get("pinCode", "") or ""),
+                    "dept_username": str(cfg.get("deptUsername", "") or cfg.get("dept_username", "") or ""),
+                    "dept_password": str(cfg.get("deptPassword", "") or cfg.get("dept_password", "") or ""),
+                    "authorized_devices": auth_devs,
+                    "pinCode": str(cfg.get("pinCode", "") or ""),
+                    "deptUsername": str(cfg.get("deptUsername", "") or cfg.get("dept_username", "") or ""),
+                    "deptPassword": str(cfg.get("deptPassword", "") or cfg.get("dept_password", "") or ""),
+                    "authorizedDevices": auth_devs,
+                }
+
+        if hub_sec and isinstance(hub_sec, dict):
+            hub_auths = list(hub_sec.get("authorizedDevices", []) or [])
+            hub_user = str(hub_sec.get("username", "") or "")
+            hub_pass = str(hub_sec.get("password", "") or "")
+            hub_pin = str(hub_sec.get("pinCode", "") or "")
+            sec_epoch = int(hub_sec.get("securityEpoch", 0) or hub_sec.get("security_epoch", 0) or 0)
+            is_protected = bool(
+                hub_sec.get("isProtected")
+                or hub_sec.get("is_protected")
+                or hub_sec.get("enabled")
+                or hub_sec.get("hasCreds")
+                or hub_user
+                or hub_pass
+                or hub_pin
+            )
+            normalized["مركز بيانات Access"] = {
+                "can_view": True,
+                "can_download": True,
+                "can_upload": True,
+                "can_create_folder": True,
+                "can_edit": True,
+                "can_rename": True,
+                "can_move": True,
+                "can_delete": True,
+                "can_permanent_delete": True,
+                "can_write": True,
+                "pin_code": hub_pin,
+                "dept_username": hub_user,
+                "dept_password": hub_pass,
+                "authorized_devices": hub_auths,
+                "pinCode": hub_pin,
+                "deptUsername": hub_user,
+                "deptPassword": hub_pass,
+                "authorizedDevices": hub_auths,
+                "enabled": is_protected,
+                "is_protected": is_protected,
+                "isProtected": is_protected,
+                "security_epoch": sec_epoch,
+                "securityEpoch": sec_epoch,
+            }
+
+        self._raw_cloud_devices = list(devices_list or [])
+        self._cloud_devices_list = self._raw_cloud_devices
+        return normalized
+
+    def snapshot(self, force=False, max_age=SNAPSHOT_MAX_AGE):
+        """جلب الشجرة الكاملة للمجلدات والملفات من /api/drive/files"""
+        snap = self._snapshot
+        if not force and snap is not None and snap.taken_at > 0 and (time.time() - snap.taken_at) < max_age:
+            return snap
+
+        with self._snapshot_lock:
+            snap = self._snapshot
+            if not force and snap is not None and snap.taken_at > 0 and (time.time() - snap.taken_at) < max_age:
+                return snap
+            try:
+                sess = self._get_session()
+                url = self._api("/api/drive/files")
+                params = {"refresh": "1"} if force else {}
+                params["t"] = str(int(time.time() * 1000))
+                resp = sess.get(url, params=params, timeout=NETWORK_TIMEOUT)
+                resp.raise_for_status()
+                data = resp.json()
+                if not isinstance(data, dict) or not data.get("success", True):
+                    raise RuntimeError(data.get("error") if isinstance(data, dict) else "Invalid server response")
+
+                new = DriveSnapshot(self.root_folder_id)
+
+                for folder_obj in data.get("allFolders", []) or []:
+                    rel = norm_rel(folder_obj.get("path") or folder_obj.get("name") or "")
+                    fid = folder_obj.get("id") or ""
+                    if not rel or not fid:
+                        continue
+                    if any(part.startswith(".") for part in rel.split("/")):
+                        continue
+                    new.folders[rel] = fid
+                    new.folder_meta[rel] = folder_obj
+                    new.id_to_path[fid] = rel
+
+                trash_items = []
+                for item in data.get("files", []) or []:
+                    if item.get("isDeleted"):
+                        trash_items.append(item)
+                        continue
+                    fname = item.get("name") or ""
+                    if not fname or is_ignored_name(fname):
+                        continue
+                    folder_raw = norm_rel(item.get("folder") or "")
+                    folder = "" if folder_raw in _GENERAL_FOLDER_ALIASES else folder_raw
+                    rel = norm_rel(f"{folder}/{fname}") if folder else norm_rel(fname)
+                    if any(part.startswith(".") for part in rel.split("/")):
+                        continue
+                    fid = item.get("id") or ""
+                    parent_id = item.get("folderId") or (new.folders.get(folder) if folder else self.root_folder_id) or self.root_folder_id
+                    new.files[rel] = {
+                        "id": fid,
+                        "name": fname,
+                        "rel_path": rel,
+                        "folder": folder,
+                        "parent_id": parent_id,
+                        "size": int(item.get("size", 0) or 0),
+                        "md5Checksum": item.get("md5Checksum") or "",
+                        "modifiedTime": item.get("modifiedTime") or "",
+                        "mimeType": item.get("mimeType") or "application/octet-stream",
+                    }
+                    if folder and folder not in new.folders:
+                        new.folders[folder] = parent_id
+                        new.id_to_path[parent_id] = folder
+
+                new.file_ids = {meta["id"]: rel for rel, meta in new.files.items() if meta.get("id")}
+                new.taken_at = time.time()
+                self._snapshot = new
+                self._last_trash_files = trash_items
+                with self._folder_lock:
+                    self._folder_ids.update(new.folders)
+
+                if isinstance(data.get("permissions"), dict):
+                    norm_perms = self._normalize_permissions_payload(
+                        data.get("permissions"),
+                        data.get("accessHubSecurity"),
+                        data.get("devices"),
+                    )
+                    self._perms_cache_data = norm_perms
+                    self._perms_cache_ts = time.time()
+
+                self.last_error = None
+                return new
+            except Exception as e:
+                self.last_error = str(e)
+                _safe_log(f"[SHARECOC] Snapshot failed: {e}")
+                return None
+
+    def poll_changes_since_last(self):
+        """استعلام خفيف وسريع من /api/drive/files?changes=1 للكشف الفوري عن أي تعديل سحابي"""
+        try:
+            sess = self._get_session()
+            params = {"changes": "1", "t": str(int(time.time() * 1000))}
+            if self._last_change_sig:
+                params["sig"] = self._last_change_sig
+
+            resp = sess.get(self._api("/api/drive/files"), params=params, timeout=NETWORK_TIMEOUT)
+            resp.raise_for_status()
+            data = resp.json()
+            new_sig = data.get("sig")
+
+            if not self._last_change_sig:
+                self._last_change_sig = new_sig
+                return False, []
+
+            changed = bool(data.get("changed")) or bool(new_sig and new_sig != self._last_change_sig)
+            if new_sig:
+                self._last_change_sig = new_sig
+
+            if not changed:
+                return False, []
+
+            old_snap = self._snapshot
+            old_files = dict(old_snap.files) if old_snap and hasattr(old_snap, "files") else {}
+            new_snap = self.snapshot(force=True)
+            if new_snap is None:
+                return True, []
+
+            delta_changes = []
+            for rel, new_meta in new_snap.files.items():
+                old_meta = old_files.get(rel)
+                if (
+                    old_meta is None
+                    or (new_meta.get("md5Checksum") and new_meta.get("md5Checksum") != old_meta.get("md5Checksum"))
+                    or new_meta.get("modifiedTime") != old_meta.get("modifiedTime")
+                    or int(new_meta.get("size", 0) or 0) != int(old_meta.get("size", 0) or 0)
+                ):
+                    delta_changes.append({
+                        "fileId": new_meta["id"],
+                        "removed": False,
+                        "_resolved_rel": rel,
+                        "file": {
+                            "id": new_meta["id"],
+                            "name": new_meta["name"],
+                            "trashed": False,
+                            "md5Checksum": new_meta.get("md5Checksum") or "",
+                            "modifiedTime": new_meta.get("modifiedTime") or "",
+                            "size": new_meta.get("size", 0),
+                            "mimeType": new_meta.get("mimeType") or "application/octet-stream",
+                        },
+                    })
+
+            for rel, old_meta in old_files.items():
+                if rel not in new_snap.files:
+                    delta_changes.append({
+                        "fileId": old_meta["id"],
+                        "removed": True,
+                        "_resolved_rel": rel,
+                        "file": {
+                            "id": old_meta["id"],
+                            "name": old_meta["name"],
+                            "trashed": True,
+                        },
+                    })
+
+            return True, delta_changes
+        except Exception as e:
+            _safe_log(f"[SHARECOC CHANGES POLL ERROR]: {e}")
+            return False, []
+
+    # ------------------------------------------------------------------ #
+    # واجهات متوافقة مع بقية وحدات التطبيق (gui.py / local_bridge.py)
     # ------------------------------------------------------------------ #
     def refresh_folders(self, force=False):
         snap = self.snapshot(force=force, max_age=15)
         if snap is None:
             return []
-        return [{"id": fid, "name": rel.split("/")[-1], "path": rel}
-                for rel, fid in snap.folders.items() if rel]
+        return [
+            {"id": fid, "name": rel.split("/")[-1], "path": rel}
+            for rel, fid in snap.folders.items() if rel
+        ]
 
     def list_folders(self):
         """الأقسام (المجلدات من المستوى الأول)"""
         snap = self.snapshot(max_age=15)
         if snap is None:
             return []
-        return [{"name": rel, "id": fid} for rel, fid in sorted(snap.folders.items()) if rel and "/" not in rel]
+        return [
+            {"name": rel, "id": fid}
+            for rel, fid in sorted(snap.folders.items())
+            if rel and "/" not in rel
+        ]
 
     def list_all_folder_paths(self):
         snap = self.snapshot(max_age=15)
@@ -679,17 +466,17 @@ class GoogleDriveClient:
             folder = rel.rsplit("/", 1)[0] if "/" in rel else ""
             dept = rel.split("/")[0] if "/" in rel else "القسم العام"
             out.append({
-                'id': item['id'],
-                'file_name': item['name'],
-                'file_path': rel,
-                'department': dept,
-                'folder': folder or dept,
-                'storage_path': item['id'],
-                'file_size': int(item.get('size', 0) or 0),
-                'md5': item.get('md5Checksum'),
-                'updated_at': item.get('modifiedTime', ''),
-                'last_modified_by_name': 'Google Drive',
-                'is_deleted': False
+                "id": item["id"],
+                "file_name": item["name"],
+                "file_path": rel,
+                "department": dept,
+                "folder": folder or dept,
+                "storage_path": item["id"],
+                "file_size": int(item.get("size", 0) or 0),
+                "md5": item.get("md5Checksum"),
+                "updated_at": item.get("modifiedTime", ""),
+                "last_modified_by_name": "خادم Share COC",
+                "is_deleted": False,
             })
         return out
 
@@ -697,30 +484,18 @@ class GoogleDriveClient:
         return self.list_files()
 
     def list_deleted_files(self):
-        """جلب قائمة الملفات المحذوفة في سلة مهملات Google Drive لتوحيد السلة بين الويب والتطبيق"""
-        if not self.is_configured():
-            return []
+        """جلب قائمة الملفات المحذوفة في سلة مهملات الخادم المحلي"""
         try:
-            snap = self.snapshot(max_age=20)
-            id_to_rel = {}
-            if snap is not None:
-                id_to_rel = {fid: rel for rel, fid in snap.folders.items()}
-            res = self._execute(lambda s: s.files().list(
-                q=f"trashed = true and mimeType != '{FOLDER_MIME}'",
-                fields="files(id, name, size, mimeType, modifiedTime, parents)",
-                orderBy="modifiedTime desc",
-                pageSize=200
-            ))
+            self.snapshot(max_age=10)
             out = []
-            for f in res.get("files", []):
+            for f in self._last_trash_files or []:
                 fname = f.get("name", "")
-                if is_ignored_name(fname):
+                if not fname or is_ignored_name(fname):
                     continue
-                parents = f.get("parents") or []
-                parent_id = parents[0] if parents else ""
-                rel_folder = id_to_rel.get(parent_id, "")
-                rel_path = f"{rel_folder}/{fname}" if rel_folder else fname
-                dept = rel_folder.split("/")[0] if rel_folder else "القسم العام"
+                folder_raw = norm_rel(f.get("folder") or "")
+                folder = "" if folder_raw in _GENERAL_FOLDER_ALIASES else folder_raw
+                rel_path = f"{folder}/{fname}" if folder else fname
+                dept = f.get("department") or (folder.split("/")[0] if folder else "القسم العام")
                 out.append({
                     "id": f.get("id"),
                     "server_file_id": f.get("id"),
@@ -734,111 +509,33 @@ class GoogleDriveClient:
                 })
             return out
         except Exception as e:
-            _safe_log(f"[GDRIVE] Error listing deleted files: {e}")
+            _safe_log(f"[SHARECOC] Error listing deleted files: {e}")
             return []
 
     def get_folder_permissions(self, force_refresh=False):
-        """قراءة الصلاحيات المفصلة للأقسام المخزنة سحابياً في ملف .sharecoc_permissions.json"""
-        if not self.is_configured():
-            return getattr(self, "_perms_cache_data", {}) or {}
+        """قراءة الصلاحيات والأجهزة المفصلة من /api/drive/permissions"""
         now = time.time()
-        cache_ts = getattr(self, "_perms_cache_ts", 0)
-        if not force_refresh and (now - cache_ts < PERMS_CACHE_TTL) and hasattr(self, "_perms_cache_data"):
+        if not force_refresh and (now - self._perms_cache_ts < PERMS_CACHE_TTL) and self._perms_cache_data:
             return self._perms_cache_data
         try:
-            res = self._execute(lambda s: s.files().list(
-                q=f"'{self.root_folder_id}' in parents and name = '.sharecoc_permissions.json' and trashed = false",
-                fields="files(id, name, modifiedTime)",
-                pageSize=5
-            ))
-            files = res.get("files", [])
-            if not files:
-                self._perms_cache_data = {}
-                self._perms_cache_ts = now
-                return {}
-            cfg_id = files[0]["id"]
-            raw_bytes = self._execute(lambda s: s.files().get_media(fileId=cfg_id))
-            if isinstance(raw_bytes, bytes):
-                raw_text = raw_bytes.decode("utf-8", errors="replace")
-            else:
-                raw_text = str(raw_bytes)
-            data = json.loads(raw_text or "{}")
-            self._raw_cloud_devices = list(data.get("devices", []) or []) if isinstance(data, dict) else []
-            depts_obj = data.get("departments", data) if isinstance(data, dict) else {}
-            normalized = {}
-            if isinstance(depts_obj, dict):
-                for dept_name, cfg in depts_obj.items():
-                    if dept_name in ("version", "updatedAt") or not isinstance(cfg, dict):
-                        continue
-                    can_upload = bool(cfg.get("canUpload", cfg.get("canWrite", True)))
-                    can_edit = bool(cfg.get("canEdit", cfg.get("canWrite", True)))
-                    can_delete = bool(cfg.get("canDelete", True))
-                    auth_devs = list(cfg.get("authorizedDevices", []) or cfg.get("authorized_devices", []) or [])
-                    normalized[dept_name] = {
-                        "can_view": bool(cfg.get("canView", True)),
-                        "can_download": bool(cfg.get("canDownload", True)),
-                        "can_upload": can_upload,
-                        "can_create_folder": bool(cfg.get("canCreateFolder", can_upload)),
-                        "can_edit": can_edit,
-                        "can_rename": bool(cfg.get("canRename", can_edit)),
-                        "can_move": bool(cfg.get("canMove", can_edit)),
-                        "can_delete": can_delete,
-                        "can_permanent_delete": bool(cfg.get("canPermanentDelete", can_delete)),
-                        "can_write": can_upload or can_edit,
-                        "pin_code": str(cfg.get("pinCode", "") or ""),
-                        "dept_username": str(cfg.get("deptUsername", "") or cfg.get("dept_username", "") or ""),
-                        "dept_password": str(cfg.get("deptPassword", "") or cfg.get("dept_password", "") or ""),
-                        "authorized_devices": auth_devs,
-                        "pinCode": str(cfg.get("pinCode", "") or ""),
-                        "deptUsername": str(cfg.get("deptUsername", "") or cfg.get("dept_username", "") or ""),
-                        "deptPassword": str(cfg.get("deptPassword", "") or cfg.get("dept_password", "") or ""),
-                        "authorizedDevices": auth_devs,
-                    }
+            sess = self._get_session()
+            params = {"admin": "1", "t": str(int(now * 1000))}
+            if force_refresh:
+                params["force"] = "1"
+            resp = sess.get(self._api("/api/drive/permissions"), params=params, timeout=NETWORK_TIMEOUT)
+            resp.raise_for_status()
+            data = resp.json()
+            if not isinstance(data, dict) or not data.get("success"):
+                return getattr(self, "_perms_cache_data", {}) or {}
 
-            # مزامنة أمان مركز بيانات Access المستقل
-            hub_sec = data.get("accessHubSecurity", {}) if isinstance(data, dict) else {}
-            if hub_sec and isinstance(hub_sec, dict):
-                hub_auths = list(hub_sec.get("authorizedDevices", []) or [])
-                hub_user = str(hub_sec.get("username", "") or "")
-                hub_pass = str(hub_sec.get("password", "") or "")
-                hub_pin = str(hub_sec.get("pinCode", "") or "")
-                sec_epoch = int(hub_sec.get("securityEpoch", 0) or hub_sec.get("security_epoch", 0) or 0)
-                is_protected = bool(
-                    hub_sec.get("isProtected") or 
-                    hub_sec.get("is_protected") or 
-                    hub_sec.get("enabled") or 
-                    hub_sec.get("hasCreds") or 
-                    hub_user or hub_pass or hub_pin
-                )
-                normalized["مركز بيانات Access"] = {
-                    "can_view": True,
-                    "can_download": True,
-                    "can_upload": True,
-                    "can_create_folder": True,
-                    "can_edit": True,
-                    "can_rename": True,
-                    "can_move": True,
-                    "can_delete": True,
-                    "can_permanent_delete": True,
-                    "can_write": True,
-                    "pin_code": hub_pin,
-                    "dept_username": hub_user,
-                    "dept_password": hub_pass,
-                    "authorized_devices": hub_auths,
-                    "pinCode": hub_pin,
-                    "deptUsername": hub_user,
-                    "deptPassword": hub_pass,
-                    "authorizedDevices": hub_auths,
-                    "enabled": is_protected,
-                    "is_protected": is_protected,
-                    "isProtected": is_protected,
-                    "security_epoch": sec_epoch,
-                    "securityEpoch": sec_epoch,
-                }
+            normalized = self._normalize_permissions_payload(
+                data.get("permissions", {}),
+                data.get("accessHubSecurity", {}),
+                data.get("devices", []),
+            )
             self._perms_cache_data = normalized
             self._perms_cache_ts = now
             self._has_fetched_cloud_perms = True
-            self._cloud_devices_list = data.get("devices", []) if isinstance(data, dict) else []
             try:
                 lf = self._get_local_perms_file()
                 lf.parent.mkdir(parents=True, exist_ok=True)
@@ -847,115 +544,76 @@ class GoogleDriveClient:
                 pass
             return normalized
         except Exception as e:
-            _safe_log(f"[GDRIVE] Error reading folder permissions: {e}")
+            _safe_log(f"[SHARECOC] Error reading folder permissions: {e}")
             return getattr(self, "_perms_cache_data", {}) or {}
 
-    def authorize_device_for_dept(self, dept_name, machine_guid, device_name, os_info="Windows"):
-        """اعتماد وتسجيل الجهاز لقسم معين سحابياً في .sharecoc_permissions.json لتثبيت الدخول للأبد"""
-        if not self.is_configured():
-            return False
+    def save_folder_permissions(self, permissions_map):
         try:
-            from googleapiclient.http import MediaInMemoryUpload
-            res = self._execute(lambda s: s.files().list(
-                q=f"'{self.root_folder_id}' in parents and name = '.sharecoc_permissions.json' and trashed = false",
-                fields="files(id, name)",
-                pageSize=5
-            ))
-            files = res.get("files", [])
-            data = {}
-            cfg_id = None
-            if files:
-                cfg_id = files[0]["id"]
-                raw_bytes = self._execute(lambda s: s.files().get_media(fileId=cfg_id))
-                raw_text = raw_bytes.decode("utf-8", errors="replace") if isinstance(raw_bytes, bytes) else str(raw_bytes)
-                data = json.loads(raw_text or "{}")
+            sess = self._get_session()
+            resp = sess.post(
+                self._api("/api/drive/permissions"),
+                json={"permissions": permissions_map, "isAdmin": True},
+                timeout=NETWORK_TIMEOUT,
+            )
+            resp.raise_for_status()
+            self.get_folder_permissions(force_refresh=True)
+            return True
+        except Exception as e:
+            _safe_log(f"[SHARECOC] Error saving folder permissions: {e}")
+            return False
 
-            if not isinstance(data, dict):
-                data = {}
-
+    def authorize_device_for_dept(self, dept_name, machine_guid, device_name, os_info="Windows"):
+        """اعتماد وتسجيل الجهاز لقسم معين أو مركز Access عبر /api/drive/permissions"""
+        try:
             clean_guid = str(machine_guid).strip()
             clean_name = str(device_name).strip() or "حاسوب موظف"
             clean_dept = str(dept_name).strip()
+            if not clean_guid or not clean_dept:
+                return False
 
-            depts = data.setdefault("departments", {})
-            dept_cfg = depts.setdefault(clean_dept, {})
-            auth_devs = list(dept_cfg.get("authorizedDevices", []) or dept_cfg.get("authorized_devices", []) or [])
-            if clean_guid not in auth_devs:
-                auth_devs.append(clean_guid)
-            dept_cfg["authorizedDevices"] = auth_devs
-            dept_cfg["authorized_devices"] = auth_devs
-            dept_cfg["updatedAt"] = datetime.utcnow().isoformat() + "Z"
-
+            sess = self._get_session()
             if clean_dept in ("مركز بيانات Access", "__ACCESS_HUB__"):
-                hub_sec = data.setdefault("accessHubSecurity", {})
-                hub_auths = list(hub_sec.get("authorizedDevices", []) or [])
-                if clean_guid not in hub_auths:
-                    hub_auths.append(clean_guid)
-                hub_sec["authorizedDevices"] = hub_auths
-                hub_sec["updatedAt"] = datetime.utcnow().isoformat() + "Z"
-
-            # تسجيل أو تحديث الجهاز في لوحة الأدمن سحابياً
-            devs_list = data.setdefault("devices", [])
-            found = False
-            for d in devs_list:
-                if d.get("machineGuid") == clean_guid or d.get("id") == clean_guid:
-                    d["name"] = clean_name
-                    d["isAuthorized"] = True
-                    d["lastSeen"] = "متصل الآن"
-                    d["status"] = "متصل الآن"
-                    d["os"] = os_info
-                    authed_d = list(d.get("authorizedDepts", []) or [])
-                    if clean_dept not in authed_d:
-                        authed_d.append(clean_dept)
-                    d["authorizedDepts"] = authed_d
-                    d["department"] = clean_dept
-                    found = True
-                    break
-            if not found:
-                devs_list.append({
-                    "id": f"dev-{int(time.time()*1000)}",
-                    "name": clean_name,
-                    "user": clean_name,
-                    "os": os_info,
+                payload = {
+                    "action": "REGISTER_ACCESS_HUB_DEVICE",
                     "machineGuid": clean_guid,
-                    "isAuthorized": True,
-                    "lastSeen": "متصل الآن",
-                    "status": "متصل الآن",
-                    "department": clean_dept,
-                    "authorizedDepts": [clean_dept],
-                    "registeredAt": datetime.utcnow().isoformat() + "Z"
-                })
-
-            data["updatedAt"] = datetime.utcnow().isoformat() + "Z"
-            new_payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
-            media = MediaInMemoryUpload(new_payload, mimetype="application/json", resumable=False)
-
-            if cfg_id:
-                self._execute(lambda s: s.files().update(fileId=cfg_id, media_body=media))
+                    "deviceName": clean_name,
+                    "os": os_info,
+                    "user": clean_name,
+                    "isAdmin": True,
+                }
             else:
-                self._execute(lambda s: s.files().create(body={'name': '.sharecoc_permissions.json', 'parents': [self.root_folder_id]}, media_body=media))
+                payload = {
+                    "action": "REGISTER_DEPARTMENT_DEVICE",
+                    "departmentName": clean_dept,
+                    "machineGuid": clean_guid,
+                    "deviceName": clean_name,
+                    "os": os_info,
+                    "user": clean_name,
+                    "isAdmin": True,
+                }
 
-            # تحديث الكاش المحلي فورياً
+            resp = sess.post(self._api("/api/drive/permissions"), json=payload, timeout=NETWORK_TIMEOUT)
+            resp.raise_for_status()
+            res_json = resp.json()
+            if not res_json.get("success"):
+                raise RuntimeError(res_json.get("error") or "Authorization failed")
+
             self.get_folder_permissions(force_refresh=True)
-            _safe_log(f"[GDRIVE] Successfully authorized device {clean_name} ({clean_guid}) for department {clean_dept}")
+            _safe_log(f"[SHARECOC] Authorized device {clean_name} ({clean_guid}) for {clean_dept}")
             return True
         except Exception as e:
-            _safe_log(f"[GDRIVE ERROR] authorize_device_for_dept failed: {e}")
+            _safe_log(f"[SHARECOC ERROR] authorize_device_for_dept failed: {e}")
             return False
 
     def _get_local_perms_file(self):
         folder = getattr(self, "sync_folder", None)
         if not folder:
-            folder = Path(os.environ.get('USERPROFILE', 'C:')) / "FileExchangeShared"
+            folder = Path(os.environ.get("USERPROFILE", "C:")) / "FileExchangeShared"
         return Path(folder) / ".sharecoc_perms_cache.json"
 
     def get_cached_folder_permissions(self):
-        """
-        قراءة فورية للصلاحيات من الذاكرة أو الملف المحلي دون انتظار الشبكة (آمنة تماماً لخيط الواجهة).
-        يتم تحديثها بالخلفية دورياً لتجنب أي تجميد للبرنامج.
-        """
-        if not hasattr(self, "_perms_cache_data") or self._perms_cache_data is None:
-            self._perms_cache_data = {}
+        """قراءة فورية للصلاحيات من الذاكرة أو الملف المحلي مع تحديث غير حاصر في الخلفية"""
+        if not self._perms_cache_data:
             try:
                 lf = self._get_local_perms_file()
                 if lf.exists():
@@ -963,31 +621,29 @@ class GoogleDriveClient:
             except Exception:
                 pass
 
-            if not getattr(self, "_perms_refreshing", False):
+            if not self._perms_refreshing:
                 self._perms_refreshing = True
+
                 def _bg_init():
                     try:
                         self.get_folder_permissions(force_refresh=True)
                     finally:
                         self._perms_refreshing = False
+
                 threading.Thread(target=_bg_init, daemon=True).start()
-            return self._perms_cache_data
+            return self._perms_cache_data or {}
 
-        if (time.time() - getattr(self, "_perms_cache_ts", 0)) >= PERMS_CACHE_TTL:
-            if not getattr(self, "_perms_refreshing", False):
-                self._perms_refreshing = True
+        if (time.time() - self._perms_cache_ts) >= PERMS_CACHE_TTL and not self._perms_refreshing:
+            self._perms_refreshing = True
 
-                def _bg():
-                    try:
-                        self.get_folder_permissions(force_refresh=True)
-                    finally:
-                        self._perms_refreshing = False
-                threading.Thread(target=_bg, daemon=True).start()
+            def _bg():
+                try:
+                    self.get_folder_permissions(force_refresh=True)
+                finally:
+                    self._perms_refreshing = False
+
+            threading.Thread(target=_bg, daemon=True).start()
         return self._perms_cache_data or {}
-
-    def peek_snapshot(self):
-        """إرجاع آخر لقطة سحابية محفوظة فوراً دون أي طلب شبكة أو انتظار قفل"""
-        return self._snapshot
 
     def check_file_lock(self, file_name):
         return False, None
@@ -996,7 +652,7 @@ class GoogleDriveClient:
         snap = self.snapshot(max_age=30)
         if snap is None or not file_name:
             return None
-        folder = norm_rel(folder) if folder and folder != "__ALL__" else None
+        folder = norm_rel(folder) if folder and folder not in _GENERAL_FOLDER_ALIASES else None
         best = None
         for rel, item in snap.files.items():
             if item.get("name") != file_name:
@@ -1010,74 +666,80 @@ class GoogleDriveClient:
         if not best:
             return None
         rel, item = best
-        return {'id': item['id'], 'file_name': item['name'], 'file_path': rel,
-                'storage_path': item['id'], 'file_size': int(item.get('size', 0) or 0)}
+        return {
+            "id": item["id"],
+            "file_name": item["name"],
+            "file_path": rel,
+            "storage_path": item["id"],
+            "file_size": int(item.get("size", 0) or 0),
+        }
 
     # ------------------------------------------------------------------ #
     # المجلدات
     # ------------------------------------------------------------------ #
-    def _find_child_folder(self, parent_id, name):
-        res = self._execute(lambda s: s.files().list(
-            q=f"'{parent_id}' in parents and name = '{_q_escape(name)}' and mimeType = '{FOLDER_MIME}' and trashed = false",
-            fields="files(id, name, createdTime)", orderBy="createdTime", pageSize=10))
-        files = res.get("files", [])
-        return files[0]["id"] if files else None
-
     def ensure_folder(self, rel_folder):
-        """التأكد من وجود مسار مجلدات كامل (مثل: قسم/مجلد/فرعي) وإنشاؤه عند الحاجة"""
+        """التأكد من وجود مسار مجلدات كامل (مثل: قسم/مجلد/فرعي) وإنشاؤه على الخادم"""
         rel_folder = norm_rel(rel_folder)
-        if not rel_folder:
+        if not rel_folder or rel_folder in _GENERAL_FOLDER_ALIASES:
             return self.root_folder_id
         with self._folder_lock:
             cached = self._folder_ids.get(rel_folder)
             if cached:
                 return cached
-            parent_id = self.root_folder_id
-            acc = ""
-            for seg in rel_folder.split("/"):
-                acc = f"{acc}/{seg}" if acc else seg
-                fid = self._folder_ids.get(acc)
-                if not fid:
-                    fid = self._find_child_folder(parent_id, seg)
-                    if not fid:
-                        created = self._execute(lambda s: s.files().create(
-                            body={'name': seg, 'mimeType': FOLDER_MIME, 'parents': [parent_id]},
-                            fields='id, name'))
-                        fid = created['id']
-                        _safe_log(f"[GDRIVE] Created folder: {acc}")
-                    self._folder_ids[acc] = fid
-                parent_id = fid
-            self.invalidate()
-            return parent_id
+            try:
+                sess = self._get_session()
+                resp = sess.post(
+                    self._api("/api/drive/files"),
+                    json={"action": "ENSURE_FOLDER_PATH", "folderPath": rel_folder},
+                    timeout=NETWORK_TIMEOUT,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                fid = data.get("folderId")
+                if fid:
+                    self._folder_ids[rel_folder] = fid
+                    self.invalidate()
+                    return fid
+            except Exception as e:
+                _safe_log(f"[SHARECOC] ensure_folder error ({rel_folder}): {e}")
+        return self.root_folder_id
 
     def create_folder(self, folder_name):
         try:
-            return self.ensure_folder(folder_name)
+            rel = norm_rel(folder_name)
+            if not rel:
+                return None
+            sess = self._get_session()
+            resp = sess.post(
+                self._api("/api/drive/files"),
+                json={"action": "CREATE_FOLDER", "folderPath": rel, "name": rel.split("/")[-1]},
+                timeout=NETWORK_TIMEOUT,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            fid = (data.get("folder") or {}).get("id")
+            if fid:
+                with self._folder_lock:
+                    self._folder_ids[rel] = fid
+                self.invalidate()
+                return fid
+            return None
         except Exception as e:
-            _safe_log(f"[GDRIVE] Failed to create folder {folder_name}: {e}")
+            _safe_log(f"[SHARECOC] Failed to create folder {folder_name}: {e}")
             return None
 
     def resolve_folder_id(self, rel_folder, use_cache=True):
         rel_folder = norm_rel(rel_folder)
-        if not rel_folder:
+        if not rel_folder or rel_folder in _GENERAL_FOLDER_ALIASES:
             return self.root_folder_id
         if use_cache:
             with self._folder_lock:
                 if rel_folder in self._folder_ids:
                     return self._folder_ids[rel_folder]
-        snap = self.snapshot(max_age=5)
+        snap = self.snapshot(force=not use_cache, max_age=5)
         if snap is not None and rel_folder in snap.folders:
             return snap.folders.get(rel_folder)
-        # البحث المباشر عبر السلسلة إن لم تكن الصورة المسبقة محدثة
-        parent_id = self.root_folder_id
-        for seg in rel_folder.split("/"):
-            fid = self._find_child_folder(parent_id, seg)
-            if not fid:
-                return None
-            parent_id = fid
-        with self._folder_lock:
-            self._folder_ids[rel_folder] = parent_id
-        return parent_id
+        return None
 
     def _forget_folder_prefix(self, rel_folder):
         with self._folder_lock:
@@ -1088,19 +750,24 @@ class GoogleDriveClient:
 
     def delete_folder(self, folder_rel):
         folder_rel = norm_rel(folder_rel)
-        if not folder_rel or not self.is_configured():
+        if not folder_rel:
             return False
         try:
-            fid = self.resolve_folder_id(folder_rel, use_cache=False)
-            if not fid or fid == self.root_folder_id:
+            fid = self.resolve_folder_id(folder_rel, use_cache=False) or folder_rel
+            sess = self._get_session()
+            resp = sess.post(
+                self._api("/api/drive/files"),
+                json={"action": "DELETE", "id": fid},
+                timeout=NETWORK_TIMEOUT,
+            )
+            if not resp.ok:
                 return False
-            self._execute(lambda s: s.files().update(fileId=fid, body={'trashed': True}, fields='id'))
             self._forget_folder_prefix(folder_rel)
             self.invalidate()
-            _safe_log(f"[GDRIVE] Trashed folder: {folder_rel}")
+            _safe_log(f"[SHARECOC] Trashed folder: {folder_rel}")
             return True
         except Exception as e:
-            _safe_log(f"[GDRIVE] Error deleting folder {folder_rel}: {e}")
+            _safe_log(f"[SHARECOC] Error deleting folder {folder_rel}: {e}")
             return False
 
     def rename_folder(self, old_rel, new_name):
@@ -1109,19 +776,23 @@ class GoogleDriveClient:
         if not old_rel or not new_name:
             return False
         try:
-            fid = self.resolve_folder_id(old_rel, use_cache=False)
-            if not fid or fid == self.root_folder_id:
-                return False
-            self._execute(lambda s: s.files().update(fileId=fid, body={'name': new_name}, fields='id'))
+            fid = self.resolve_folder_id(old_rel, use_cache=False) or old_rel
+            sess = self._get_session()
+            resp = sess.post(
+                self._api("/api/drive/files"),
+                json={"action": "RENAME", "id": fid, "name": new_name},
+                timeout=NETWORK_TIMEOUT,
+            )
+            resp.raise_for_status()
             self._forget_folder_prefix(old_rel)
             self.invalidate()
             return True
         except Exception as e:
-            _safe_log(f"[GDRIVE] Error renaming folder: {e}")
+            _safe_log(f"[SHARECOC] Error renaming folder: {e}")
             return False
 
     # ------------------------------------------------------------------ #
-    # الملفات
+    # الملفات (رفع، تنزيل، حذف، استرجاع، نقل)
     # ------------------------------------------------------------------ #
     def _rel_from_local(self, local_path):
         if self.sync_folder:
@@ -1131,14 +802,19 @@ class GoogleDriveClient:
                 pass
         return Path(local_path).name
 
-    def upload_file(self, local_path, file_name=None, file_path=None, rel_path=None,
-                    user_name="تطبيق الحاسوب", device_name=None, existing_id=None,
-                    progress_callback=None, **kwargs):
-        """
-        رفع ملف إلى نفس مساره النسبي في السحابة (مع إنشاء المجلدات الفرعية).
-        يدعم شريط التقدم اللحظي والاستئناف التلقائي للملفات الضخمة.
-        تُرجع (True, file_metadata) عند النجاح أو (False, رسالة الخطأ).
-        """
+    def upload_file(
+        self,
+        local_path,
+        file_name=None,
+        file_path=None,
+        rel_path=None,
+        user_name="تطبيق الحاسوب",
+        device_name=None,
+        existing_id=None,
+        progress_callback=None,
+        **kwargs,
+    ):
+        """رفع ملف مباشر (<= 8MB) أو مجزأ قابل للاستئناف (> 8MB) إلى خادم Share COC"""
         if not self.is_configured():
             return False, "Service not configured"
         p = Path(local_path)
@@ -1153,26 +829,21 @@ class GoogleDriveClient:
             return True, {"ignored": True}
         if rel and any(part.startswith(".") for part in rel.split("/")):
             return True, {"ignored": True}
+
         parent_rel = rel.rsplit("/", 1)[0] if "/" in rel else ""
+        if parent_rel in _GENERAL_FOLDER_ALIASES:
+            parent_rel = ""
 
         is_priority = bool(kwargs.get("is_priority", False))
         if is_priority:
             self._priority_uploads_active += 1
+
         try:
             with self._path_lock(rel or fname):
                 try:
                     total_size = p.stat().st_size
-                    parent_id = self.ensure_folder(parent_rel)
-                    mime = mimetypes.guess_type(str(p))[0] or 'application/octet-stream'
-                    fid = existing_id
-                    if not fid:
-                        res = self._execute(lambda s: s.files().list(
-                            q=f"'{parent_id}' in parents and name = '{_q_escape(fname)}' and mimeType != '{FOLDER_MIME}' and trashed = false",
-                            fields="files(id, modifiedTime)", orderBy="modifiedTime desc", pageSize=10))
-                        found = res.get('files', [])
-                        fid = found[0]['id'] if found else None
-
-                    fields = 'id, name, size, md5Checksum, modifiedTime, parents'
+                    mime = mimetypes.guess_type(str(p))[0] or "application/octet-stream"
+                    sess = self._get_session()
 
                     if callable(progress_callback):
                         try:
@@ -1180,40 +851,103 @@ class GoogleDriveClient:
                         except Exception:
                             pass
 
-                    if total_size > 0:
-                        try:
-                            meta = self._stream_resumable_upload_fast(
-                                str(p), fname, parent_id, fid, mime,
-                                total_size, fields,
-                                progress_callback=progress_callback,
-                                is_priority=is_priority
+                    if total_size <= UPLOAD_CHUNK_SIZE:
+                        with open(p, "rb") as fh:
+                            resp = sess.post(
+                                self._api("/api/drive/files"),
+                                files={"file": (fname, fh, mime)},
+                                data={
+                                    "fileName": fname,
+                                    "folderId": self.root_folder_id,
+                                    "folderPath": parent_rel,
+                                },
+                                timeout=TRANSFER_TIMEOUT,
                             )
-                        except FileNotFoundError:
-                            if existing_id:
-                                return self.upload_file(
-                                    local_path, file_name=file_name, rel_path=rel,
-                                    progress_callback=progress_callback, is_priority=is_priority
-                                )
-                            raise
+                        resp.raise_for_status()
+                        res_json = resp.json()
+                        if not res_json.get("success"):
+                            raise RuntimeError(res_json.get("error") or "Upload failed")
+                        meta = res_json.get("file") or res_json
+                        if callable(progress_callback):
+                            try:
+                                progress_callback(total_size, total_size)
+                            except Exception:
+                                pass
                     else:
-                        if fid:
-                            def req_update(s):
-                                media = MediaFileUpload(str(p), mimetype=mime, resumable=False)
-                                return s.files().update(fileId=fid, media_body=media, fields=fields)
-                            meta = self._execute_resumable_upload(req_update, total_size, progress_callback=progress_callback, is_priority=is_priority)
-                        else:
-                            def req_create(s):
-                                media = MediaFileUpload(str(p), mimetype=mime, resumable=False)
-                                return s.files().create(body={'name': fname, 'parents': [parent_id]},
-                                                        media_body=media, fields=fields)
-                            meta = self._execute_resumable_upload(req_create, total_size, progress_callback=progress_callback, is_priority=is_priority)
+                        init_resp = sess.post(
+                            self._api("/api/drive/files"),
+                            json={
+                                "action": "INIT_UPLOAD",
+                                "fileName": fname,
+                                "mimeType": mime,
+                                "fileSize": total_size,
+                                "folderId": self.root_folder_id,
+                                "folderPath": parent_rel,
+                            },
+                            timeout=NETWORK_TIMEOUT,
+                        )
+                        init_resp.raise_for_status()
+                        init_data = init_resp.json()
+                        session_uri = init_data.get("sessionUri")
+                        if not session_uri:
+                            raise RuntimeError(init_data.get("error") or "Missing sessionUri")
 
-                    _safe_log(f"[GDRIVE] Uploaded: {rel} ({total_size} bytes)")
+                        meta = None
+                        offset = 0
+                        with open(p, "rb") as fh:
+                            while offset < total_size:
+                                if not is_priority and self._priority_uploads_active > 0:
+                                    wait_start = time.time()
+                                    while self._priority_uploads_active > 0 and (time.time() - wait_start < 120):
+                                        time.sleep(0.25)
+
+                                fh.seek(offset)
+                                chunk_bytes = fh.read(UPLOAD_CHUNK_SIZE)
+                                if not chunk_bytes:
+                                    break
+                                end = offset + len(chunk_bytes) - 1
+
+                                chunk_resp = sess.post(
+                                    self._api("/api/drive/files"),
+                                    data={
+                                        "action": "UPLOAD_CHUNK",
+                                        "sessionUri": session_uri,
+                                        "start": str(offset),
+                                        "end": str(end),
+                                        "total": str(total_size),
+                                    },
+                                    files={"chunk": (fname, chunk_bytes, "application/octet-stream")},
+                                    timeout=TRANSFER_TIMEOUT,
+                                )
+                                chunk_resp.raise_for_status()
+                                chunk_data = chunk_resp.json()
+                                if not chunk_data.get("success"):
+                                    raise RuntimeError(chunk_data.get("error") or "Chunk upload failed")
+
+                                offset = end + 1
+                                if callable(progress_callback):
+                                    try:
+                                        progress_callback(offset, total_size)
+                                    except Exception:
+                                        pass
+                                if chunk_data.get("done") and chunk_data.get("file"):
+                                    meta = chunk_data["file"]
+
+                        if not meta:
+                            raise RuntimeError("Chunked upload finished without file metadata")
+
+                    if isinstance(meta, dict) and not meta.get("md5Checksum"):
+                        try:
+                            meta["md5Checksum"] = _md5_file(p)
+                        except Exception:
+                            pass
+
+                    _safe_log(f"[SHARECOC] Uploaded: {rel} ({total_size} bytes)")
                     self.invalidate()
                     return True, meta
                 except Exception as e:
                     self.last_error = str(e)
-                    _safe_log(f"[GDRIVE UPLOAD ERROR] {rel}: {e}")
+                    _safe_log(f"[SHARECOC UPLOAD ERROR] {rel}: {e}")
                     return False, str(e)
         finally:
             if is_priority:
@@ -1226,35 +960,63 @@ class GoogleDriveClient:
         return self.upload_file(local_path, rel_path=dest)[0]
 
     def download_file(self, file_name, local_dest_path, storage_path=None, progress_callback=None):
-        """تنزيل آمن إلى ملف مؤقت ثم استبدال ذري – لا تظهر ملفات نصف منزّلة أبداً"""
+        """تنزيل متدفق آمن من /api/drive/stream إلى ملف مؤقت ثم استبدال ذري"""
         if not self.is_configured():
             return False, "No service"
         try:
             fid = None
-            if storage_path and len(storage_path) > 15 and "/" not in storage_path and "." not in storage_path:
-                fid = storage_path
+            sp = str(storage_path or "").strip()
+            if sp:
+                if sp.startswith("loc_") or sp.startswith("trash_"):
+                    fid = sp
+                elif "/" not in sp and len(sp) > 15 and "." not in sp:
+                    # قد يكون معرفاً قديماً موجوداً في gdrive-id-map.json على الخادم أو مساراً نسبياً
+                    fid = self.resolve_file_id(file_name) or sp
+                else:
+                    fid = self.resolve_file_id(sp) or sp
             else:
                 info = self.get_file_by_name(file_name)
                 if info:
-                    fid = info['id']
+                    fid = info.get("id")
+                if not fid:
+                    fid = self.resolve_file_id(file_name)
+
             if not fid:
-                return False, f"File {file_name} not found in cloud"
+                return False, f"File {file_name} not found in server"
 
             dest = Path(local_dest_path)
             dest.parent.mkdir(parents=True, exist_ok=True)
-            tmp = dest.parent / f".sharecoc-dl-{os.getpid()}-{threading.get_ident()}-{int(time.time()*1000)}.part"
+            tmp = dest.parent / f".sharecoc-dl-{os.getpid()}-{threading.get_ident()}-{int(time.time() * 1000)}.part"
             try:
-                req = self.service.files().get_media(fileId=fid)
-                with open(tmp, 'wb') as fh:
-                    downloader = MediaIoBaseDownload(fh, req, chunksize=DOWNLOAD_CHUNK_SIZE)
-                    done = False
-                    while not done:
-                        status, done = downloader.next_chunk(num_retries=4)
-                        if status is not None and callable(progress_callback):
-                            try:
-                                progress_callback(int(status.resumable_progress), int(status.total_size or 1))
-                            except Exception:
-                                pass
+                sess = self._get_session()
+                url = self._api("/api/drive/stream")
+                with sess.get(
+                    url,
+                    params={"id": fid, "download": "1"},
+                    stream=True,
+                    timeout=TRANSFER_TIMEOUT,
+                ) as resp:
+                    if resp.status_code != 200:
+                        raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+                    total_bytes = int(resp.headers.get("X-File-Size") or resp.headers.get("Content-Length") or 0)
+                    done_bytes = 0
+                    with open(tmp, "wb") as fh:
+                        for chunk in resp.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
+                            if not chunk:
+                                continue
+                            fh.write(chunk)
+                            done_bytes += len(chunk)
+                            if callable(progress_callback) and total_bytes > 0:
+                                try:
+                                    progress_callback(done_bytes, total_bytes)
+                                except Exception:
+                                    pass
+                if callable(progress_callback):
+                    try:
+                        progress_callback(max(done_bytes, total_bytes, 1), max(total_bytes, done_bytes, 1))
+                    except Exception:
+                        pass
+
                 try:
                     os.replace(tmp, dest)
                 except (PermissionError, OSError) as os_err:
@@ -1271,11 +1033,11 @@ class GoogleDriveClient:
                         tmp.unlink(missing_ok=True)
                     except Exception:
                         pass
-            _safe_log(f"[GDRIVE] Downloaded: {file_name} -> {dest}")
+
+            _safe_log(f"[SHARECOC] Downloaded: {file_name} -> {dest}")
             return True, "Downloaded successfully"
         except Exception as e:
-            self._reset_thread_service()
-            _safe_log(f"[GDRIVE DOWNLOAD ERROR]: {e}")
+            _safe_log(f"[SHARECOC DOWNLOAD ERROR]: {e}")
             return False, str(e)
 
     def download_file_from_storage(self, storage_path, local_dest_path):
@@ -1293,83 +1055,79 @@ class GoogleDriveClient:
             for f_rel, meta in snap.files.items():
                 if meta.get("name") == rel_path or f_rel.endswith("/" + rel_path):
                     return meta.get("id")
-        parent_rel = rel_path.rsplit("/", 1)[0] if "/" in rel_path else ""
-        name = rel_path.split("/")[-1]
-        parent_id = self.resolve_folder_id(parent_rel)
-        if not parent_id:
-            return None
-        res = self._execute(lambda s: s.files().list(
-            q=f"'{parent_id}' in parents and name = '{_q_escape(name)}' and mimeType != '{FOLDER_MIME}' and trashed = false",
-            fields="files(id)", pageSize=10))
-        files = res.get("files", [])
-        return files[0]["id"] if files else None
+        return None
 
     def trash_by_id(self, file_id):
-        if not file_id or not self.is_configured():
+        if not file_id:
             return False
-        self._execute(lambda s: s.files().update(fileId=file_id, body={'trashed': True}, fields='id'))
+        sess = self._get_session()
+        resp = sess.post(
+            self._api("/api/drive/files"),
+            json={"action": "DELETE", "id": file_id},
+            timeout=NETWORK_TIMEOUT,
+        )
+        resp.raise_for_status()
         self.invalidate()
         return True
 
     def restore_by_id(self, file_id):
-        if not file_id or not self.is_configured():
+        if not file_id:
             return False
         try:
-            self._execute(lambda s: s.files().update(fileId=file_id, body={'trashed': False}, fields='id'))
+            sess = self._get_session()
+            resp = sess.post(
+                self._api("/api/drive/files"),
+                json={"action": "RESTORE", "id": file_id},
+                timeout=NETWORK_TIMEOUT,
+            )
+            resp.raise_for_status()
             self.invalidate()
             return True
         except Exception as e:
-            _safe_log(f"[GDRIVE RESTORE ERROR]: {e}")
+            _safe_log(f"[SHARECOC RESTORE ERROR]: {e}")
             return False
 
     def purge_by_id(self, file_id):
-        """حذف نهائي لعنصر من سحابة Google Drive باستخدام معرفه"""
-        if not file_id or not self.is_configured():
+        if not file_id:
             return False
         try:
-            self._execute(lambda s: s.files().delete(fileId=file_id))
+            sess = self._get_session()
+            resp = sess.post(
+                self._api("/api/drive/files"),
+                json={"action": "PERMANENT_DELETE", "id": file_id},
+                timeout=NETWORK_TIMEOUT,
+            )
+            resp.raise_for_status()
             self.invalidate()
             return True
         except Exception as e:
-            _safe_log(f"[GDRIVE PURGE BY ID ERROR] {file_id}: {e}")
+            _safe_log(f"[SHARECOC PURGE BY ID ERROR] {file_id}: {e}")
             return False
 
     def purge_file(self, rel_path=None, file_id=None, file_name=None):
-        """حذف نهائي لملف أو مجلد من Google Drive (سواء كان في السلة أو نشطاً)"""
-        if not self.is_configured():
-            return False
         try:
-            if file_id:
-                if self.purge_by_id(file_id):
-                    return True
+            if file_id and self.purge_by_id(file_id):
+                return True
             if rel_path:
                 fid = self.resolve_file_id(rel_path) or self.resolve_folder_id(rel_path, use_cache=False)
                 if fid and fid != self.root_folder_id:
                     return self.purge_by_id(fid)
             fname = file_name or (rel_path.split("/")[-1] if rel_path else "")
             if fname:
-                res = self._execute(lambda s: s.files().list(
-                    q=f"trashed = true and name = '{_q_escape(fname)}'",
-                    fields="files(id, name)",
-                    pageSize=10
-                ))
-                for f in res.get("files", []):
-                    if f.get("id"):
-                        self.purge_by_id(f["id"])
+                for t in self.list_deleted_files():
+                    if t.get("file_name") == fname and t.get("id"):
+                        self.purge_by_id(t["id"])
                 return True
         except Exception as e:
-            _safe_log(f"[GDRIVE PURGE FILE ERROR]: {e}")
+            _safe_log(f"[SHARECOC PURGE FILE ERROR]: {e}")
         return False
 
     def delete_file(self, file_path, server_file_id=None, **kwargs):
-        """نقل ملف أو مجلد إلى سلة محذوفات السحابة حسب معرفه أو مساره الكامل فوراً"""
-        if not self.is_configured():
-            return False
         try:
             if server_file_id:
                 try:
                     self.trash_by_id(server_file_id)
-                    _safe_log(f"[GDRIVE] Trashed by ID: {server_file_id} ({file_path})")
+                    _safe_log(f"[SHARECOC] Trashed by ID: {server_file_id} ({file_path})")
                     return True
                 except Exception:
                     pass
@@ -1382,175 +1140,93 @@ class GoogleDriveClient:
                     return self.delete_folder(file_path)
                 return False
             self.trash_by_id(fid)
-            _safe_log(f"[GDRIVE] Moved to trash: {file_path}")
+            _safe_log(f"[SHARECOC] Moved to trash: {file_path}")
             return True
         except Exception as e:
-            _safe_log(f"[GDRIVE DELETE ERROR]: {e}")
+            _safe_log(f"[SHARECOC DELETE ERROR]: {e}")
             return False
 
     def move_file(self, file_id, new_rel_path):
-        """نقل/إعادة تسمية ملف أو مجلد في السحابة مع الحفاظ على معرّفه وسجل إصداراته"""
+        """نقل/إعادة تسمية ملف أو مجلد في الخادم عبر /api/drive/files (MOVE + RENAME)"""
         new_rel_path = norm_rel(new_rel_path)
         new_name = new_rel_path.split("/")[-1]
         new_parent_rel = new_rel_path.rsplit("/", 1)[0] if "/" in new_rel_path else ""
-        new_parent_id = self.ensure_folder(new_parent_rel)
-        cur = self._execute(lambda s: s.files().get(fileId=file_id, fields="parents"))
-        old_parents = ",".join(cur.get("parents", []))
-        kwargs = {"fileId": file_id, "body": {"name": new_name},
-                  "fields": "id, name, size, md5Checksum, modifiedTime, parents"}
-        if new_parent_id not in cur.get("parents", []):
-            kwargs["addParents"] = new_parent_id
-            kwargs["removeParents"] = old_parents
-        meta = self._execute(lambda s: s.files().update(**kwargs))
+        if new_parent_rel in _GENERAL_FOLDER_ALIASES:
+            new_parent_rel = ""
+
+        sess = self._get_session()
+        current_id = file_id
+        meta = {"id": current_id, "name": new_name}
+
+        snap = self.peek_snapshot()
+        old_rel = None
+        if snap:
+            old_rel = snap.file_ids.get(file_id) or snap.id_to_path.get(file_id)
+        old_name = old_rel.split("/")[-1] if old_rel else None
+        old_parent_rel = (old_rel.rsplit("/", 1)[0] if "/" in old_rel else "") if old_rel else None
+
+        if old_parent_rel is None or old_parent_rel != new_parent_rel:
+            move_payload = {
+                "action": "MOVE",
+                "id": current_id,
+                "targetFolderId": self.root_folder_id,
+            }
+            if new_parent_rel:
+                move_payload["targetFolderPath"] = new_parent_rel
+            resp = sess.post(self._api("/api/drive/files"), json=move_payload, timeout=NETWORK_TIMEOUT)
+            resp.raise_for_status()
+            m_data = resp.json()
+            if m_data.get("item"):
+                meta = m_data["item"]
+                current_id = meta.get("id") or current_id
+
+        if old_name is None or old_name != new_name:
+            resp = sess.post(
+                self._api("/api/drive/files"),
+                json={"action": "RENAME", "id": current_id, "name": new_name},
+                timeout=NETWORK_TIMEOUT,
+            )
+            resp.raise_for_status()
+            r_data = resp.json()
+            if r_data.get("item"):
+                meta = r_data["item"]
+
         self.invalidate()
         return meta
 
     def move_path_in_cloud(self, old_rel_path, new_rel_path, is_folder=False, server_file_id=None):
-        """نقل ملف أو مجلد من مسار نسبي قديم إلى مسار نسبي جديد في Google Drive"""
-        if not self.is_configured():
-            return False, None
         try:
             old_rel_path = norm_rel(old_rel_path)
             new_rel_path = norm_rel(new_rel_path)
             fid = server_file_id
             if not fid:
-                if is_folder:
-                    fid = self.resolve_folder_id(old_rel_path, use_cache=False)
-                else:
-                    fid = self.resolve_file_id(old_rel_path)
+                fid = self.resolve_folder_id(old_rel_path, use_cache=False) if is_folder else self.resolve_file_id(old_rel_path)
             if not fid or fid == self.root_folder_id:
-                return False, "Item not found in cloud"
+                fid = old_rel_path
             meta = self.move_file(fid, new_rel_path)
             if is_folder:
                 self._forget_folder_prefix(old_rel_path)
             self.invalidate()
-            _safe_log(f"[GDRIVE] Moved in cloud: {old_rel_path} -> {new_rel_path}")
+            _safe_log(f"[SHARECOC] Moved in server: {old_rel_path} -> {new_rel_path}")
             return True, meta
         except Exception as e:
-            _safe_log(f"[GDRIVE MOVE ERROR] {old_rel_path} -> {new_rel_path}: {e}")
+            _safe_log(f"[SHARECOC MOVE ERROR] {old_rel_path} -> {new_rel_path}: {e}")
             return False, str(e)
 
-    def _apply_delta_to_snapshot(self, changes):
-        """تحديث لقطة الذاكرة السحابية فورياً من التغييرات القادمة دون الحاجة لإعادة طلب جميع الملفات"""
-        snap = getattr(self, "_snapshot", None)
-        if not snap or not hasattr(snap, "files"):
-            return
-        try:
-            invalidated = False
-            for ch in changes:
-                fid = ch.get("fileId")
-                if not fid:
-                    continue
-                is_removed = ch.get("removed", False)
-                f = ch.get("file") or {}
-                if f.get("trashed"):
-                    is_removed = True
-
-                if is_removed:
-                    if hasattr(snap, "id_to_path") and fid in snap.id_to_path:
-                        invalidated = True
-                    old_rel = snap.file_ids.pop(fid, None)
-                    if old_rel:
-                        ch["_resolved_rel"] = old_rel
-                        snap.files.pop(old_rel, None)
-                    continue
-
-                name = f.get("name", "")
-                parents = f.get("parents") or []
-                parent_path = None
-                if hasattr(snap, "id_to_path"):
-                    for pid in parents:
-                        if pid in snap.id_to_path:
-                            parent_path = snap.id_to_path[pid]
-                            break
-
-                mime = str(f.get("mimeType", ""))
-                if mime == FOLDER_MIME:
-                    if parent_path is not None and name:
-                        new_rel = f"{parent_path}/{name}" if parent_path else name
-                        if fid in snap.id_to_path and snap.id_to_path[fid] != new_rel:
-                            invalidated = True
-                        else:
-                            snap.id_to_path[fid] = new_rel
-                            snap.folders[new_rel] = fid
-                            snap.folder_meta[new_rel] = f
-                            with self._folder_lock:
-                                self._folder_ids[new_rel] = fid
-                    else:
-                        invalidated = True
-                    continue
-
-                if is_ignored_name(name) or mime.startswith(GOOGLE_NATIVE_PREFIX):
-                    continue
-
-                old_rel = snap.file_ids.get(fid)
-                if parent_path is not None and name:
-                    new_rel = f"{parent_path}/{name}" if parent_path else name
-                else:
-                    new_rel = old_rel
-
-                if old_rel and new_rel and old_rel != new_rel:
-                    snap.files.pop(old_rel, None)
-                    ch["_old_rel"] = old_rel
-
-                if new_rel:
-                    merged = dict(snap.files.get(new_rel) or {})
-                    merged.update(f)
-                    snap.files[new_rel] = merged
-                    snap.file_ids[fid] = new_rel
-                    ch["_resolved_rel"] = new_rel
-                elif parents:
-                    invalidated = True
-
-            if invalidated:
-                self.invalidate()
-            elif snap.taken_at > 0:
-                snap.taken_at = time.time()
-        except Exception as e:
-            _safe_log(f"[Snapshot delta apply error]: {e}")
-
-    def poll_changes_since_last(self):
-        """فحص خفيف وسريع عبر Google Drive Changes API لمعرفة ما إذا حدث أي تعديل أو حذف أو نقل من الويب أو الأجهزة الأخرى"""
-        if not self.is_configured():
-            return False, []
-        try:
-            token = getattr(self, "_changes_page_token", None)
-            if not token:
-                res = self._execute(lambda s: s.changes().getStartPageToken())
-                self._changes_page_token = res.get("startPageToken")
-                return False, []
-            res = self._execute(lambda s: s.changes().list(
-                pageToken=token,
-                spaces="drive",
-                includeItemsFromAllDrives=False,
-                supportsAllDrives=False,
-                fields="newStartPageToken, nextPageToken, changes(fileId, removed, file(id, name, trashed, parents, modifiedTime, md5Checksum, size, mimeType))",
-                pageSize=100
-            ))
-            changes = res.get("changes", [])
-            new_token = res.get("newStartPageToken") or res.get("nextPageToken")
-            if new_token:
-                self._changes_page_token = new_token
-            if changes:
-                self._apply_delta_to_snapshot(changes)
-                return True, changes
-            return False, []
-        except Exception as e:
-            _safe_log(f"[GDRIVE CHANGES POLL ERROR]: {e}")
-            self._changes_page_token = None
-            return False, []
-
     def rename_file(self, old_file_path, new_name):
-        if not self.is_configured() or not old_file_path or not new_name:
+        if not old_file_path or not new_name:
             return False
         try:
-            fid = self.resolve_file_id(old_file_path)
-            if not fid:
-                return False
-            old = norm_rel(old_file_path)
-            parent = old.rsplit("/", 1)[0] if "/" in old else ""
-            self.move_file(fid, f"{parent}/{new_name}" if parent else new_name)
+            fid = self.resolve_file_id(old_file_path) or norm_rel(old_file_path)
+            sess = self._get_session()
+            resp = sess.post(
+                self._api("/api/drive/files"),
+                json={"action": "RENAME", "id": fid, "name": norm_rel(new_name).split("/")[-1]},
+                timeout=NETWORK_TIMEOUT,
+            )
+            resp.raise_for_status()
+            self.invalidate()
             return True
         except Exception as e:
-            _safe_log(f"[GDRIVE RENAME ERROR]: {e}")
+            _safe_log(f"[SHARECOC RENAME ERROR]: {e}")
             return False

@@ -137,49 +137,17 @@ def save_local_mutations(mutations: dict, local_dir=None):
             print(f"[AccessHub] Error saving mutations to {d}: {e}")
 
 def fetch_cloud_mutations(known_sync_time=None) -> dict | None:
-    """جلب سجل التعديلات السحابية الأحدث من Google Drive أو Web API"""
-    # 1. المحاولة المباشرة من Google Drive عبر ملف .sharecoc_access_mutations.json
+    """جلب سجل التعديلات السحابية الأحدث مباشرة من خادم Share COC API"""
     try:
-        from gdrive_client import GoogleDriveClient
-        client = GoogleDriveClient()
-        if client.is_configured():
-            res = client._execute(lambda s: s.files().list(
-                q=f"'{client.root_folder_id}' in parents and name = '.sharecoc_access_mutations.json' and trashed = false",
-                fields="files(id, name, modifiedTime)",
-                pageSize=1
-            ))
-            files = res.get("files", [])
-            if files:
-                file_meta = files[0]
-                cloud_mod = file_meta.get("modifiedTime")
-                # إذا كانت لدينا نفس البصمة الزمنية، لا داعي لإعادة التنزيل
-                if known_sync_time and cloud_mod and cloud_mod == known_sync_time:
-                    return None
-
-                fid = file_meta["id"]
-                from googleapiclient.http import MediaIoBaseDownload
-                fh = io.BytesIO()
-                downloader = MediaIoBaseDownload(fh, client.service.files().get_media(fileId=fid))
-                done = False
-                while not done:
-                    status, done = downloader.next_chunk()
-                fh.seek(0)
-                content = fh.read().decode("utf-8")
-                parsed = json.loads(content)
-                if isinstance(parsed, dict):
-                    if cloud_mod and not parsed.get("last_sync"):
-                        parsed["last_sync"] = cloud_mod
-                    return parsed
-    except Exception as e:
-        print(f"[AccessHub] Google Drive fetch warning: {e}")
-
-    # 2. المحاولة الاحتياطية عبر Web Dashboard API
-    try:
-        r = requests.get(f"{CLOUD_API_URL}?action=mutations", timeout=7)
+        r = requests.get(f"{CLOUD_API_URL}?action=mutations", timeout=10)
         if r.status_code == 200:
             data = r.json()
-            if data.get("mutations") and isinstance(data["mutations"], dict):
-                return data["mutations"]
+            mut = data.get("mutations")
+            if isinstance(mut, dict):
+                cloud_mod = mut.get("last_sync")
+                if known_sync_time and cloud_mod and cloud_mod == known_sync_time:
+                    return None
+                return mut
     except Exception as e:
         print(f"[AccessHub] Cloud API fetch warning: {e}")
 

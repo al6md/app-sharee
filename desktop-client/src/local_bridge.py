@@ -117,18 +117,22 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
             try:
                 req_file = params.get('file', [''])[0].strip()
                 req_folder = params.get('folder', [''])[0].strip()
+                if self.cloud_client and hasattr(self.cloud_client, 'invalidate'):
+                    self.cloud_client.invalidate()
+                sync_result = {"success": True}
                 if req_file and self.sync_engine:
                     target = self._find_local_file(req_file, req_folder)
                     if target and target.exists():
                         try:
                             rel = norm_rel(target.relative_to(Path(self.sync_folder)))
-                            self.sync_engine.queue_fast_upload(rel, delay=0.0)
-                        except Exception:
-                            pass
-                if self.sync_engine:
+                            ok, meta = self.sync_engine.sync_file_now(str(target), rel_path=rel)
+                            sync_result = {"success": bool(ok), "file": rel}
+                        except Exception as sync_err:
+                            sync_result = {"success": False, "error": str(sync_err)}
+                elif self.sync_engine:
                     self.sync_engine.wake(delay=0.05)
                 self._set_headers(200)
-                self.wfile.write(json.dumps({"success": True}).encode('utf-8'))
+                self.wfile.write(json.dumps(sync_result, ensure_ascii=False).encode('utf-8'))
             except Exception as e:
                 self._set_headers(500)
                 self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode('utf-8'))
@@ -218,7 +222,7 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
                 if self.cloud_client:
                     threading.Thread(
                         target=self._download_and_open_worker,
-                        args=(file_name, folder_name, cloud_fid or storage_path),
+                        args=(file_name, folder_name, cloud_fid or storage_path, need_refresh),
                         daemon=True
                     ).start()
                     self._set_headers(200)
@@ -348,10 +352,12 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
 
         return None
 
-    def _download_and_open_worker(self, file_name, folder_name="", storage_path=""):
+    def _download_and_open_worker(self, file_name, folder_name="", storage_path="", force_download=False):
         """تنزيل الملف في الخلفية وتشغيله بالبرنامج الأصلي فور اكتماله بدون تجميد اتصال الويب"""
         try:
-            target_path = self._find_or_download_file(file_name, folder_name, storage_path)
+            target_path = self._find_or_download_file(
+                file_name, folder_name, storage_path, force_download=force_download
+            )
             if target_path and target_path.exists():
                 OfficeHandler.open_native_file(str(target_path))
                 if self.sync_engine and hasattr(self.sync_engine, 'watch_active_file'):
@@ -360,7 +366,7 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
         except Exception as e:
             print(f"[LocalBridge] Error opening '{file_name}' in background worker: {e}")
 
-    def _find_or_download_file(self, file_name, folder_name="", storage_path=""):
+    def _find_or_download_file(self, file_name, folder_name="", storage_path="", force_download=False):
         if not self.sync_folder:
             return None
 
@@ -372,34 +378,49 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
         base = Path(self.sync_folder)
         norm_folder = folder_name.replace("\\", "/").strip("/") if folder_name and folder_name not in ('__ALL__', 'المجلد العام', 'القسم العام') else ""
 
+        existing_local = None
         # 1. فحص المسار المباشر داخل المجلد المحدد (يدعم المجلدات الفرعية المتداخلة)
         if norm_folder:
             clean_folder = "/".join(clean_bidi(p) for p in norm_folder.split("/"))
             for cand in [base / norm_folder / file_name, base / clean_folder / clean_file, base / norm_folder / clean_file]:
                 if cand.exists() and cand.is_file():
-                    return cand
+                    existing_local = cand
+                    if not force_download:
+                        return cand
+                    break
 
         # 2. فحص المسار المباشر في جذر مجلد المزامنة
-        for cand in [base / file_name, base / clean_file]:
-            if cand.exists() and cand.is_file():
-                return cand
+        if existing_local is None:
+            for cand in [base / file_name, base / clean_file]:
+                if cand.exists() and cand.is_file():
+                    existing_local = cand
+                    if not force_download:
+                        return cand
+                    break
 
         # 3. بحث متكرر عن الملف في المجلدات الفرعية (مع استبعاد المجلدات المخفية والنظامية تماماً)
-        target_lower = clean_file.lower()
-        for sub in base.rglob("*"):
-            if sub.is_file():
-                if any(part.startswith(".") for part in sub.parts):
-                    continue
-                if sub.name == file_name or clean_bidi(sub.name).lower() == target_lower:
-                    return sub
+        if existing_local is None:
+            target_lower = clean_file.lower()
+            for sub in base.rglob("*"):
+                if sub.is_file():
+                    if any(part.startswith(".") for part in sub.parts):
+                        continue
+                    if sub.name == file_name or clean_bidi(sub.name).lower() == target_lower:
+                        existing_local = sub
+                        if not force_download:
+                            return sub
+                        break
 
-        # 4. إذا لم يكن موجوداً محلياً، جلبه من السحابة فوراً عبر مجلد مؤقت وتطبيقه بأمان
+        # 4. إذا لم يكن موجوداً محلياً أو طُلب التحديث القسري من السحابة، جلبه فوراً عبر مجلد مؤقت وتطبيقه بأمان
         if self.cloud_client:
             temp_dl = None
             try:
-                dest_dir = base / norm_folder if norm_folder else base
-                dest_dir.mkdir(parents=True, exist_ok=True)
-                local_file = dest_dir / file_name
+                if existing_local is not None:
+                    local_file = existing_local
+                else:
+                    dest_dir = base / norm_folder if norm_folder else base
+                    dest_dir.mkdir(parents=True, exist_ok=True)
+                    local_file = dest_dir / file_name
 
                 safe_sp = storage_path
                 if not safe_sp and hasattr(self.cloud_client, 'get_file_by_name'):
@@ -438,7 +459,7 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
                     except Exception:
                         pass
 
-        return None
+        return existing_local
 
     def log_message(self, format, *args):
         pass

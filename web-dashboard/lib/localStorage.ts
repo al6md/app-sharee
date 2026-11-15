@@ -15,6 +15,7 @@ export const UPLOADS_DIR = path.join(STORAGE_ROOT, 'uploads');
 export const PERMISSIONS_PATH = path.join(STORAGE_ROOT, 'permissions.json');
 export const SEED_PERMISSIONS_PATH = path.join(process.cwd(), 'data', 'access-hub', 'permissions.seed.json');
 export const GDRIVE_ID_MAP_PATH = path.join(STORAGE_ROOT, 'gdrive-id-map.json');
+export const MD5_CACHE_PATH = path.join(STORAGE_ROOT, 'md5-cache.json');
 
 export const ROOT_FOLDER_ID = 'root';
 export const DEFAULT_DEPARTMENT_NAME = 'سجل التجاري';
@@ -449,11 +450,132 @@ export function resolveItemById(rawId: string): ResolvedLocalItem {
 }
 
 // ============================================================================
-// File Metadata Cache
+// File Metadata & MD5 Cache
 // ============================================================================
 
 const FILE_META_TTL_MS = 15_000;
 const fileMetaCache = new Map<string, { at: number; data: any }>();
+
+const SYNC_MD5_THRESHOLD_BYTES = 64 * 1024 * 1024;
+interface Md5CacheEntry {
+  size: number;
+  mtimeMs: number;
+  md5: string;
+}
+let _md5Cache: Record<string, Md5CacheEntry> | null = null;
+let _md5CacheDirty = false;
+const _bgMd5InFlight = new Set<string>();
+
+function loadMd5Cache(): Record<string, Md5CacheEntry> {
+  if (_md5Cache !== null) return _md5Cache;
+  try {
+    if (fs.existsSync(MD5_CACHE_PATH)) {
+      const raw = fs.readFileSync(MD5_CACHE_PATH, 'utf-8');
+      const parsed = JSON.parse(raw.replace(/^\uFEFF/, '').trim() || '{}');
+      _md5Cache = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+      return _md5Cache!;
+    }
+  } catch {
+    // ignore corrupt md5 cache and rebuild lazily
+  }
+  _md5Cache = {};
+  return _md5Cache;
+}
+
+function flushMd5CacheIfDirty(): void {
+  if (!_md5CacheDirty || !_md5Cache) return;
+  try {
+    fs.mkdirSync(STORAGE_ROOT, { recursive: true });
+    atomicWriteFileSync(MD5_CACHE_PATH, JSON.stringify(_md5Cache, null, 2));
+    _md5CacheDirty = false;
+  } catch {
+    // non-fatal
+  }
+}
+
+function updateMd5CacheEntry(relPath: string, size: number, mtimeMs: number, md5: string, flushNow: boolean = false): void {
+  const norm = normalizeRelPath(relPath);
+  if (!norm || !md5) return;
+  const cache = loadMd5Cache();
+  cache[norm] = { size, mtimeMs: Math.round(mtimeMs), md5 };
+  _md5CacheDirty = true;
+  if (flushNow) {
+    flushMd5CacheIfDirty();
+  }
+}
+
+function computeFileMd5Sync(fullPath: string): string {
+  const hash = crypto.createHash('md5');
+  const fd = fs.openSync(fullPath, 'r');
+  try {
+    const buf = Buffer.allocUnsafe(1024 * 1024);
+    let bytesRead = 0;
+    while ((bytesRead = fs.readSync(fd, buf, 0, buf.length, null)) > 0) {
+      hash.update(buf.subarray(0, bytesRead));
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  return hash.digest('hex');
+}
+
+async function computeFileMd5Async(fullPath: string): Promise<string> {
+  return await new Promise<string>((resolve, reject) => {
+    const hash = crypto.createHash('md5');
+    const stream = fs.createReadStream(fullPath, { highWaterMark: 1024 * 1024 });
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('end', () => resolve(hash.digest('hex')));
+    stream.on('error', reject);
+  });
+}
+
+function computeLargeFileMd5Background(relPath: string, fullPath: string, size: number, mtimeMs: number): void {
+  const norm = normalizeRelPath(relPath);
+  const roundedMtime = Math.round(mtimeMs);
+  const key = `${norm}:${size}:${roundedMtime}`;
+  if (!norm || _bgMd5InFlight.has(key)) return;
+  _bgMd5InFlight.add(key);
+
+  computeFileMd5Async(fullPath)
+    .then((md5) => {
+      updateMd5CacheEntry(norm, size, roundedMtime, md5, true);
+      invalidateDriveFileMeta(encodeLocalId(norm));
+      invalidateCloudFilesCache();
+    })
+    .catch(() => {
+      // non-fatal
+    })
+    .finally(() => {
+      _bgMd5InFlight.delete(key);
+    });
+}
+
+export function getOrComputeFileMd5(relPath: string, fullPath: string, size: number, mtimeMs: number): string {
+  const norm = normalizeRelPath(relPath);
+  const roundedMtime = Math.round(mtimeMs);
+  const cache = loadMd5Cache();
+  const cached = norm ? cache[norm] : undefined;
+  if (cached && cached.size === size && cached.mtimeMs === roundedMtime && cached.md5) {
+    return cached.md5;
+  }
+
+  if (size <= SYNC_MD5_THRESHOLD_BYTES) {
+    try {
+      const md5 = computeFileMd5Sync(fullPath);
+      if (norm) {
+        cache[norm] = { size, mtimeMs: roundedMtime, md5 };
+        _md5CacheDirty = true;
+      }
+      return md5;
+    } catch {
+      // fall through to deterministic fallback if file vanished mid-walk
+    }
+  } else {
+    computeLargeFileMd5Background(norm, fullPath, size, roundedMtime);
+  }
+
+  return crypto.createHash('md5').update(`${norm}:${size}:${roundedMtime}`).digest('hex');
+}
 
 export async function getCachedDriveFileMeta(fileId: string) {
   const now = Date.now();
@@ -474,14 +596,22 @@ export async function getCachedDriveFileMeta(fileId: string) {
     ? FOLDER_MIME
     : resolved.trashEntry?.mimeType || inferMimeType(resolved.name);
   const size = resolved.kind === 'trash' && resolved.trashEntry ? resolved.trashEntry.size : stat.size;
+  const md5Checksum =
+    !isDir && resolved.kind === 'active'
+      ? getOrComputeFileMd5(resolved.relPath, resolved.fullPath, stat.size, stat.mtimeMs)
+      : undefined;
+  flushMd5CacheIfDirty();
 
-  const data = {
+  const data: any = {
     id: resolved.id,
     name: resolved.name,
     mimeType,
     size: String(size),
     modifiedTime: stat.mtime.toISOString(),
   };
+  if (md5Checksum) {
+    data.md5Checksum = md5Checksum;
+  }
 
   fileMetaCache.set(fileId, { at: now, data });
   if (resolved.id !== fileId) {
@@ -1544,13 +1674,17 @@ export async function checkCloudChanges(clientSig?: string | null): Promise<{ ch
     const trashMtime = fs.existsSync(TRASH_INDEX_PATH) ? fs.statSync(TRASH_INDEX_PATH).mtimeMs : 0;
     const permMtime = fs.existsSync(PERMISSIONS_PATH) ? fs.statSync(PERMISSIONS_PATH).mtimeMs : 0;
 
-    const sortedTopFiles = [...files]
-      .sort((a, b) => b.mtimeMs - a.mtimeMs)
-      .slice(0, 6)
+    const allFolderPaths = [...folders]
+      .sort((a, b) => a.relPath.localeCompare(b.relPath))
+      .map((f) => f.relPath)
+      .join('|');
+
+    const allFilesSig = [...files]
+      .sort((a, b) => a.relPath.localeCompare(b.relPath))
       .map((f) => `${f.relPath}:${Math.round(f.mtimeMs)}:${f.size}`)
       .join('|');
 
-    const rawSig = `F:${folders.length}|N:${files.length}|T:${Math.round(trashMtime)}|P:${Math.round(permMtime)}|${sortedTopFiles}`;
+    const rawSig = `F:${folders.length}|N:${files.length}|T:${Math.round(trashMtime)}|P:${Math.round(permMtime)}|D:${allFolderPaths}|FILES:${allFilesSig}`;
     const currentSig = crypto.createHash('sha1').update(rawSig).digest('hex').slice(0, 16);
 
     const compareSig = clientSig || _lastCloudStateSig;
@@ -1838,10 +1972,12 @@ export async function getAllCloudFiles(forceRefresh: boolean = false) {
       const deptName = f.relFolder ? f.relFolder.split('/')[0] : 'القسم العام';
       const subFolder = f.relFolder.includes('/') ? f.relFolder.split('/').slice(1).join('/') : '';
       const streamUrl = buildStreamLink(id, f.name);
+      const md5Checksum = getOrComputeFileMd5(f.relPath, path.join(FILES_DIR, f.relPath), f.size, f.mtimeMs);
       return {
         id,
         name: f.name,
         size: Number(f.size || 0),
+        md5Checksum,
         mimeType: inferMimeType(f.name),
         modifiedTime: f.modifiedTime,
         folder: f.relFolder || 'القسم العام',
@@ -1855,6 +1991,7 @@ export async function getAllCloudFiles(forceRefresh: boolean = false) {
         isDeleted: false,
       };
     });
+  flushMd5CacheIfDirty();
 
   let trashFiles: any[] = [];
   try {
@@ -1954,6 +2091,8 @@ export async function uploadFileToDrive(
   const isUpdate = fs.existsSync(targetFullPath);
   atomicWriteFileSync(targetFullPath, buffer);
   const stat = fs.statSync(targetFullPath);
+  const md5 = crypto.createHash('md5').update(buffer).digest('hex');
+  updateMd5CacheEntry(targetRelPath, stat.size, stat.mtimeMs, md5, true);
   const id = encodeLocalId(targetRelPath);
   const streamUrl = buildStreamLink(id, cleanName);
 
@@ -1964,6 +2103,7 @@ export async function uploadFileToDrive(
     id,
     name: cleanName,
     size: String(stat.size),
+    md5Checksum: md5,
     mimeType: mimeType || inferMimeType(cleanName),
     modifiedTime: stat.mtime.toISOString(),
     webViewLink: streamUrl,
@@ -1982,6 +2122,8 @@ export async function updateDriveFileContent(fileId: string, buffer: Buffer, mim
 
   atomicWriteFileSync(resolved.fullPath, buffer);
   const stat = fs.statSync(resolved.fullPath);
+  const md5 = crypto.createHash('md5').update(buffer).digest('hex');
+  updateMd5CacheEntry(resolved.relPath, stat.size, stat.mtimeMs, md5, true);
   const streamUrl = buildStreamLink(resolved.id, resolved.name);
 
   invalidateCloudFilesCache();
@@ -1992,6 +2134,7 @@ export async function updateDriveFileContent(fileId: string, buffer: Buffer, mim
     id: resolved.id,
     name: resolved.name,
     size: String(stat.size),
+    md5Checksum: md5,
     mimeType: mimeType || inferMimeType(resolved.name),
     modifiedTime: stat.mtime.toISOString(),
     webViewLink: streamUrl,
@@ -2121,11 +2264,14 @@ export async function uploadResumableChunk(params: {
   const stat = fs.statSync(targetFullPath);
   const fileId = encodeLocalId(meta.targetRelPath);
   const streamUrl = buildStreamLink(fileId, meta.fileName);
+  const md5 = getOrComputeFileMd5(meta.targetRelPath, targetFullPath, stat.size, stat.mtimeMs);
+  flushMd5CacheIfDirty();
 
   const fileResult = {
     id: fileId,
     name: meta.fileName,
     size: String(stat.size),
+    md5Checksum: md5,
     mimeType: meta.mimeType || inferMimeType(meta.fileName),
     modifiedTime: stat.mtime.toISOString(),
     webViewLink: streamUrl,

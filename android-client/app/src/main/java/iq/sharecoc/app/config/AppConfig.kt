@@ -2,14 +2,15 @@ package iq.sharecoc.app.config
 
 object AppConfig {
     const val APP_NAME = "Share COC"
-    const val DEFAULT_ROOT_FOLDER_ID = "1BF6mDMuwuaS5c4Ekq9KPcEXaAOxGOmfB"
+    const val SERVER_BASE_URL = "https://share.162.35.16.252.sslip.io"
+    const val DEFAULT_ROOT_FOLDER_ID = "root"
     const val PERMISSIONS_CONFIG_FILENAME = ".sharecoc_permissions.json"
     const val FOLDER_MIME = "application/vnd.google-apps.folder"
 
-    // Google OAuth2 Token Endpoint
-    const val OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
-    const val DRIVE_API_BASE_URL = "https://www.googleapis.com/drive/v3"
-    const val DRIVE_UPLOAD_BASE_URL = "https://www.googleapis.com/upload/drive/v3"
+    // Legacy OAuth constants retained for compatibility
+    const val OAUTH_TOKEN_URL = "$SERVER_BASE_URL/api/drive/files"
+    const val DRIVE_API_BASE_URL = "$SERVER_BASE_URL/api/drive"
+    const val DRIVE_UPLOAD_BASE_URL = "$SERVER_BASE_URL/api/drive"
 
     private fun decryptBytes(bytes: ByteArray, key: Byte = 0x5C): String {
         val result = ByteArray(bytes.size)

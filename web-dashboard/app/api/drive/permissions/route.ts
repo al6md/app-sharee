@@ -256,7 +256,10 @@ export async function POST(req: NextRequest) {
         isValid = passVal === expectedDeptPass || (userVal && passVal === expectedDeptPass);
       }
 
-      // حساب الأدمن الرئيسي يدخل دائماً كصلاحية طارئة
+      // حساب الأدمن الرئيسي أو التوثيق الإداري يدخل كصلاحية معتمدة
+      if (!isValid && isCallerAdmin) {
+        isValid = true;
+      }
       if (!isValid && masterUser && masterPass) {
         if (userVal.toLowerCase() === masterUser.toLowerCase() && passVal === masterPass) {
           isValid = true;
@@ -377,7 +380,10 @@ export async function POST(req: NextRequest) {
         isValid = true;
       }
 
-      // حساب الأدمن الرئيسي كصلاحية طارئة
+      // حساب الأدمن الرئيسي أو التوثيق الإداري كصلاحية طارئة
+      if (!isValid && isCallerAdmin) {
+        isValid = true;
+      }
       if (!isValid && masterUser && masterPass) {
         if (userVal.toLowerCase() === masterUser.toLowerCase() && passVal === masterPass) {
           isValid = true;
