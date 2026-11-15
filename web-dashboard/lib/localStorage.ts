@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { Readable } from 'stream';
+import { spawn } from 'child_process';
 
 export const STORAGE_ROOT =
   process.env.SHARE_STORAGE_DIR ||
@@ -21,7 +22,7 @@ const LEGACY_ROOT_FOLDER_ID = '1BF6mDMuwuaS5c4Ekq9KPcEXaAOxGOmfB';
 
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
 const IGNORED_EXACT = new Set(['desktop.ini', 'thumbs.db', '.ds_store']);
-const IGNORED_SUFFIXES = ['.tmp', '.laccdb', '.ldb', '.crdownload', '.partial', '~'];
+const IGNORED_SUFFIXES = ['.tmp', '.part', '.laccdb', '.ldb', '.crdownload', '.partial', '~'];
 
 const EXT_MIME_MAP: Record<string, string> = {
   accdb: 'application/msaccess',
@@ -1712,7 +1713,82 @@ export async function ensureCloudFolderPathsBatch(
   return resultMap;
 }
 
+const BOOTSTRAP_MARKER_FILENAME = '.gdrive_migrated_v1.json';
+const BOOTSTRAP_LOCK_FILENAME = 'bootstrap.lock';
+const BOOTSTRAP_LOCK_TTL_MS = 10 * 60 * 1000;
+let _bootstrapTriggered = false;
+let _lastBootstrapAttemptAt = 0;
+
+function isBootstrapLockActive(lockPath: string, now: number = Date.now()): boolean {
+  try {
+    if (!fs.existsSync(lockPath)) return false;
+    const stat = fs.statSync(lockPath);
+    let newestTs = stat.mtimeMs;
+    try {
+      const raw = fs.readFileSync(lockPath, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.updatedAt !== undefined && parsed.updatedAt !== null) {
+        const parsedTs =
+          typeof parsed.updatedAt === 'number'
+            ? parsed.updatedAt
+            : Date.parse(String(parsed.updatedAt));
+        if (Number.isFinite(parsedTs)) {
+          newestTs = Math.max(newestTs, parsedTs);
+        }
+      }
+    } catch {
+      // Fall back to stat.mtimeMs if lock JSON is partially written or unreadable.
+    }
+    return now - newestTs < BOOTSTRAP_LOCK_TTL_MS;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Lazily spawns the resumable background Google Drive -> local disk bootstrapper
+ * once per cooldown window when storage has not finished migrating yet.
+ */
+function maybeTriggerBackgroundBootstrap(): void {
+  try {
+    if (process.env.NEXT_PHASE === 'phase-production-build') return;
+
+    const now = Date.now();
+    if (_bootstrapTriggered && now - _lastBootstrapAttemptAt < BOOTSTRAP_LOCK_TTL_MS) {
+      return;
+    }
+
+    const markerPath = path.join(STORAGE_ROOT, BOOTSTRAP_MARKER_FILENAME);
+    if (fs.existsSync(markerPath)) return;
+
+    const lockPath = path.join(STORAGE_ROOT, BOOTSTRAP_LOCK_FILENAME);
+    if (isBootstrapLockActive(lockPath, now)) return;
+
+    const scriptPath = path.join(process.cwd(), 'scripts', 'bootstrap-storage.mjs');
+    if (!fs.existsSync(scriptPath)) return;
+
+    _bootstrapTriggered = true;
+    _lastBootstrapAttemptAt = now;
+
+    const child = spawn(process.execPath, [scriptPath, '--background'], {
+      cwd: process.cwd(),
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+      env: process.env,
+    });
+    child.on('error', () => {
+      // Never propagate background spawn errors into request handling.
+    });
+    child.unref();
+  } catch {
+    // Bootstrap check must never break getAllCloudFiles().
+  }
+}
+
 export async function getAllCloudFiles(forceRefresh: boolean = false) {
+  maybeTriggerBackgroundBootstrap();
+
   if (!forceRefresh && _cloudFilesCache && Date.now() - _cloudFilesCache.ts < CLOUD_FILES_CACHE_TTL_MS) {
     return _cloudFilesCache.data;
   }

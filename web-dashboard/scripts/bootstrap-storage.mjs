@@ -12,7 +12,13 @@ const APP_ROOT = path.resolve(__dirname, '..');
 const DEFAULT_GDRIVE_FOLDER_ID = '1BF6mDMuwuaS5c4Ekq9KPcEXaAOxGOmfB';
 
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
-const LARGE_FILE_BYTES = 50 * 1024 * 1024; // 50 MB
+export const LARGE_FILE_BYTES = 50 * 1024 * 1024; // 50 MB
+export const RANGE_CHUNK_BYTES = 32 * 1024 * 1024; // 32 MB
+const LOCK_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const CHUNK_MAX_ATTEMPTS = 5;
+const CHUNK_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes per 32 MB chunk
+
+let _tmpSeq = 0;
 
 const SKIP_EXACT = new Set([
   '.sharecoc_permissions.json',
@@ -41,7 +47,7 @@ function resolveStorageDir() {
 
 function atomicWriteFileSync(targetPath, content) {
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-  const tmpPath = `${targetPath}.${process.pid}.${Date.now()}.tmp`;
+  const tmpPath = `${targetPath}.${process.pid}.${Date.now()}.${++_tmpSeq}.tmp`;
   fs.writeFileSync(tmpPath, content, 'utf-8');
   if (fs.existsSync(targetPath)) {
     try {
@@ -52,6 +58,72 @@ function atomicWriteFileSync(targetPath, content) {
     }
   }
   fs.renameSync(tmpPath, targetPath);
+}
+
+function isPidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return Boolean(err && err.code === 'EPERM');
+  }
+}
+
+export function readActiveLock(lockPath, now = Date.now()) {
+  if (!fs.existsSync(lockPath)) return null;
+  try {
+    const stat = fs.statSync(lockPath);
+    const raw = fs.readFileSync(lockPath, 'utf-8').trim();
+    const parsed = raw ? JSON.parse(raw) : {};
+    const updatedAt =
+      typeof parsed?.updatedAt === 'number' && Number.isFinite(parsed.updatedAt)
+        ? parsed.updatedAt
+        : stat.mtimeMs;
+    if (now - updatedAt >= LOCK_TTL_MS) return null;
+    if (parsed?.pid !== undefined) {
+      const pid = Number(parsed.pid);
+      if (pid !== process.pid && !isPidAlive(pid)) return null;
+      return { pid, updatedAt };
+    }
+    return { pid: null, updatedAt };
+  } catch {
+    return null;
+  }
+}
+
+export function touchMigrationLock(lockPath, pid = process.pid) {
+  atomicWriteFileSync(lockPath, JSON.stringify({ pid, updatedAt: Date.now() }) + '\n');
+}
+
+export function acquireMigrationLock(lockPath) {
+  const active = readActiveLock(lockPath);
+  if (active && active.pid !== process.pid) {
+    return { acquired: false, active };
+  }
+  touchMigrationLock(lockPath, process.pid);
+  return { acquired: true, active: null };
+}
+
+export function releaseMigrationLock(lockPath) {
+  if (!fs.existsSync(lockPath)) return;
+  try {
+    const raw = fs.readFileSync(lockPath, 'utf-8').trim();
+    const parsed = raw ? JSON.parse(raw) : {};
+    if (parsed?.pid !== undefined) {
+      const pid = Number(parsed.pid);
+      if (pid !== process.pid && isPidAlive(pid)) {
+        return;
+      }
+    }
+  } catch {
+    // if unreadable, still remove lock owned/left behind
+  }
+  try {
+    fs.rmSync(lockPath, { force: true });
+  } catch {
+    // ignore cleanup error
+  }
 }
 
 function parseEnvFile(filePath) {
@@ -331,7 +403,184 @@ async function runWithConcurrency(items, concurrency, worker) {
   await Promise.all(runners);
 }
 
-async function downloadFileIfNeeded(file, filesDir, tokenMgr) {
+function preserveModifiedTime(targetPath, modifiedTime) {
+  if (!modifiedTime) return;
+  const dt = new Date(modifiedTime);
+  if (Number.isNaN(dt.getTime())) return;
+  try {
+    fs.utimesSync(targetPath, dt, dt);
+  } catch {
+    // ignore mtime errors on restricted filesystems
+  }
+}
+
+function replaceFileSync(srcPath, destPath) {
+  if (fs.existsSync(destPath)) {
+    try {
+      fs.renameSync(srcPath, destPath);
+      return;
+    } catch {
+      fs.rmSync(destPath, { force: true });
+    }
+  }
+  fs.renameSync(srcPath, destPath);
+}
+
+async function downloadLargeFileResumable(file, destPath, tokenMgr, touchLock) {
+  const partPath = `${destPath}.part`;
+  const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(file.id)}?alt=media`;
+
+  let offset = fs.existsSync(partPath) ? fs.statSync(partPath).size : 0;
+  if (offset > file.size) {
+    fs.rmSync(partPath, { force: true });
+    offset = 0;
+  }
+
+  if (offset === file.size) {
+    replaceFileSync(partPath, destPath);
+    preserveModifiedTime(destPath, file.modifiedTime);
+    return { status: 'downloaded', bytes: file.size };
+  }
+
+  while (offset < file.size) {
+    const end = Math.min(offset + RANGE_CHUNK_BYTES - 1, file.size - 1);
+    const expectedChunkLen = end - offset + 1;
+    const rangeHeader = `bytes=${offset}-${end}`;
+
+    let chunkDone = false;
+    let lastChunkErr;
+
+    for (let attempt = 0; attempt < CHUNK_MAX_ATTEMPTS && !chunkDone; attempt++) {
+      let wroteFromZero = false;
+      try {
+        const token = await tokenMgr.getToken(attempt > 0);
+        const res = await fetch(url, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Range: rangeHeader,
+          },
+          signal: AbortSignal.timeout(CHUNK_TIMEOUT_MS),
+        });
+
+        if (res.status === 401) {
+          try {
+            await res.body?.cancel();
+          } catch {
+            // ignore
+          }
+          await tokenMgr.getToken(true);
+          throw new Error(`HTTP 401 unauthorized on ${rangeHeader}`);
+        }
+
+        if (res.status >= 500 || res.status === 429) {
+          const body = await res.text().catch(() => '');
+          throw new Error(`HTTP ${res.status} for ${rangeHeader}: ${body.slice(0, 200)}`);
+        }
+
+        if (res.status !== 206 && res.status !== 200) {
+          const body = await res.text().catch(() => '');
+          throw new Error(`HTTP ${res.status} for ${rangeHeader}: ${body.slice(0, 300)}`);
+        }
+
+        if (!res.body) {
+          throw new Error(`Empty response body for ${file.relativePath} (${rangeHeader})`);
+        }
+
+        if (res.status === 200) {
+          wroteFromZero = true;
+          await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(partPath, { flags: 'w' }));
+          const totalWritten = fs.statSync(partPath).size;
+          if (totalWritten !== file.size) {
+            throw new Error(
+              `Full-stream size mismatch for ${file.relativePath}: expected ${file.size}, got ${totalWritten}`
+            );
+          }
+          offset = totalWritten;
+          chunkDone = true;
+        } else {
+          // 206 Partial Content
+          const contentRange = res.headers.get('content-range');
+          if (contentRange) {
+            const m = /^bytes\s+(\d+)-(\d+)\/(\d+|\*)$/i.exec(contentRange.trim());
+            if (m && Number(m[1]) !== offset) {
+              try {
+                await res.body.cancel();
+              } catch {
+                // ignore
+              }
+              throw new Error(
+                `Content-Range start mismatch for ${file.relativePath}: expected ${offset}, got ${m[1]}`
+              );
+            }
+          }
+
+          const preSize = fs.existsSync(partPath) ? fs.statSync(partPath).size : 0;
+          if (preSize !== offset) {
+            throw new Error(
+              `Part file offset mismatch before append for ${file.relativePath}: expected ${offset}, got ${preSize}`
+            );
+          }
+
+          await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(partPath, { flags: 'a' }));
+
+          const postSize = fs.statSync(partPath).size;
+          const written = postSize - offset;
+          if (written !== expectedChunkLen) {
+            throw new Error(
+              `Chunk byte count mismatch for ${file.relativePath} (${rangeHeader}): expected ${expectedChunkLen}, wrote ${written}`
+            );
+          }
+
+          offset = postSize;
+          chunkDone = true;
+        }
+      } catch (err) {
+        lastChunkErr = err;
+        if (wroteFromZero) {
+          offset = 0;
+        }
+        if (fs.existsSync(partPath)) {
+          const curSize = fs.statSync(partPath).size;
+          if (curSize > offset) {
+            try {
+              fs.truncateSync(partPath, offset);
+            } catch {
+              // ignore
+            }
+          }
+        }
+        if (attempt < CHUNK_MAX_ATTEMPTS - 1) {
+          await new Promise((r) => setTimeout(r, Math.min(30_000, 1000 * 2 ** attempt)));
+        }
+      }
+    }
+
+    if (!chunkDone) {
+      throw lastChunkErr || new Error(`Failed chunk ${rangeHeader} for ${file.relativePath}`);
+    }
+
+    if (typeof touchLock === 'function') {
+      touchLock();
+    }
+    const pct = Math.round((offset / file.size) * 100);
+    console.log(
+      `[bootstrap] Chunk ${file.relativePath}: ${offset}/${file.size} bytes (${pct}%)`
+    );
+  }
+
+  const finalSize = fs.statSync(partPath).size;
+  if (finalSize !== file.size) {
+    throw new Error(
+      `Final size mismatch for ${file.relativePath}: expected ${file.size}, got ${finalSize}`
+    );
+  }
+
+  replaceFileSync(partPath, destPath);
+  preserveModifiedTime(destPath, file.modifiedTime);
+  return { status: 'downloaded', bytes: finalSize };
+}
+
+export async function downloadFileIfNeeded(file, filesDir, tokenMgr, touchLock = null) {
   const destPath = path.join(filesDir, ...file.relativePath.split('/'));
   fs.mkdirSync(path.dirname(destPath), { recursive: true });
 
@@ -341,18 +590,18 @@ async function downloadFileIfNeeded(file, filesDir, tokenMgr) {
       if (file.modifiedTime) {
         const dt = new Date(file.modifiedTime);
         if (!Number.isNaN(dt.getTime()) && Math.abs(stat.mtimeMs - dt.getTime()) > 2000) {
-          try {
-            fs.utimesSync(destPath, dt, dt);
-          } catch {
-            // ignore mtime errors on restricted filesystems
-          }
+          preserveModifiedTime(destPath, file.modifiedTime);
         }
       }
       return { status: 'skipped-existing', bytes: stat.size };
     }
   }
 
-  const tmpPath = `${destPath}.download.${process.pid}.${Date.now()}.tmp`;
+  if (file.size !== null && file.size > LARGE_FILE_BYTES) {
+    return downloadLargeFileResumable(file, destPath, tokenMgr, touchLock);
+  }
+
+  const tmpPath = `${destPath}.download.${process.pid}.${Date.now()}.${++_tmpSeq}.tmp`;
   const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(file.id)}?alt=media`;
   try {
     const res = await fetchWithAuth(url, tokenMgr, 3);
@@ -368,27 +617,8 @@ async function downloadFileIfNeeded(file, filesDir, tokenMgr) {
       );
     }
 
-    if (fs.existsSync(destPath)) {
-      try {
-        fs.renameSync(tmpPath, destPath);
-      } catch {
-        fs.rmSync(destPath, { force: true });
-        fs.renameSync(tmpPath, destPath);
-      }
-    } else {
-      fs.renameSync(tmpPath, destPath);
-    }
-
-    if (file.modifiedTime) {
-      const dt = new Date(file.modifiedTime);
-      if (!Number.isNaN(dt.getTime())) {
-        try {
-          fs.utimesSync(destPath, dt, dt);
-        } catch {
-          // ignore
-        }
-      }
-    }
+    replaceFileSync(tmpPath, destPath);
+    preserveModifiedTime(destPath, file.modifiedTime);
 
     return { status: 'downloaded', bytes: tmpStat.size };
   } catch (err) {
@@ -401,7 +631,7 @@ async function downloadFileIfNeeded(file, filesDir, tokenMgr) {
   }
 }
 
-async function migrateFromGoogleDrive(storageDir, { skipLarge }) {
+async function migrateFromGoogleDrive(storageDir, { skipLarge, touchLock = null }) {
   const markerPath = path.join(storageDir, '.gdrive_migrated_v1.json');
   if (fs.existsSync(markerPath)) {
     console.log(`[bootstrap] Migration marker already exists at ${markerPath}; skipping Drive sync.`);
@@ -420,6 +650,7 @@ async function migrateFromGoogleDrive(storageDir, { skipLarge }) {
   console.log(`[bootstrap] Traversing Google Drive folder ${creds.folderId}...`);
   const { folders, files } = await traverseDriveTree(creds.folderId, tokenMgr);
   console.log(`[bootstrap] Found ${folders.length} folders and ${files.length} active user files.`);
+  if (typeof touchLock === 'function') touchLock();
 
   const filesDir = path.join(storageDir, 'files');
   const idMapPath = path.join(storageDir, 'gdrive-id-map.json');
@@ -466,8 +697,9 @@ async function migrateFromGoogleDrive(storageDir, { skipLarge }) {
 
   const handleFile = async (file) => {
     try {
-      const res = await downloadFileIfNeeded(file, filesDir, tokenMgr);
+      const res = await downloadFileIfNeeded(file, filesDir, tokenMgr, touchLock);
       idMap[file.id] = file.relativePath;
+      if (typeof touchLock === 'function') touchLock();
       if (res.status === 'downloaded') {
         downloadedCount++;
         downloadedBytes += res.bytes;
@@ -550,7 +782,17 @@ async function main() {
     return;
   }
 
+  const lockPath = path.join(storageDir, 'bootstrap.lock');
+
   if (isBackground) {
+    const active = readActiveLock(lockPath);
+    if (active) {
+      console.log(
+        `[bootstrap] Active migration lock exists (pid=${active.pid ?? 'unknown'}); skipping duplicate background spawn.`
+      );
+      return;
+    }
+
     const childArgs = [__filename, ...args.filter((a) => a !== '--background')];
     const logPath = path.join(storageDir, 'bootstrap.log');
     const logFd = fs.openSync(logPath, 'a');
@@ -561,6 +803,9 @@ async function main() {
       stdio: ['ignore', logFd, logFd],
       env: process.env,
     });
+    if (child.pid && child.exitCode === null) {
+      touchMigrationLock(lockPath, child.pid);
+    }
     child.unref();
     fs.closeSync(logFd);
     console.log(
@@ -569,10 +814,45 @@ async function main() {
     return;
   }
 
-  await migrateFromGoogleDrive(storageDir, { skipLarge });
+  const lockResult = acquireMigrationLock(lockPath);
+  if (!lockResult.acquired) {
+    console.log(
+      `[bootstrap] Another migration process is active (pid=${lockResult.active?.pid ?? 'unknown'}); exiting.`
+    );
+    return;
+  }
+
+  const onSignal = (sig) => {
+    releaseMigrationLock(lockPath);
+    process.exit(128 + (sig === 'SIGINT' ? 2 : 15));
+  };
+  process.once('SIGINT', onSignal);
+  process.once('SIGTERM', onSignal);
+
+  try {
+    await migrateFromGoogleDrive(storageDir, {
+      skipLarge,
+      touchLock: () => touchMigrationLock(lockPath),
+    });
+  } finally {
+    process.off('SIGINT', onSignal);
+    process.off('SIGTERM', onSignal);
+    releaseMigrationLock(lockPath);
+  }
 }
 
-main().catch((err) => {
-  console.error('[bootstrap] Error:', err);
-  process.exit(1);
-});
+const isMain = (() => {
+  if (!process.argv[1]) return false;
+  try {
+    return fs.realpathSync(process.argv[1]) === fs.realpathSync(__filename);
+  } catch {
+    return path.resolve(process.argv[1]) === path.resolve(__filename);
+  }
+})();
+
+if (isMain) {
+  main().catch((err) => {
+    console.error('[bootstrap] Error:', err);
+    process.exit(1);
+  });
+}
