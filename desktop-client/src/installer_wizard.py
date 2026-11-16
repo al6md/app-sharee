@@ -1,5 +1,5 @@
 """
-Share COC Enterprise v4.0 – غرفة تجارة كربلاء المقدسة
+Share COC Enterprise v5.0 – غرفة تجارة كربلاء المقدسة
 معالج التثبيت الرسمي لنظام Windows (Official Windows Setup Wizard & Uninstaller)
 يقوم بتثبيت التطبيق في المسار القياسي، وتسجيله في البرامج المثبتة (Add/Remove Programs)،
 وإنشاء اختصارات سطح المكتب وقائمة ابدأ وقائمة الزر الأيمن (Send To) والتشغيل التلقائي.
@@ -33,6 +33,7 @@ from windows_integration import (
     setup_all_system_integrations,
     unregister_from_windows,
 )
+from offline_queue import LocalStateManager
 
 
 def _clean_child_env():
@@ -87,7 +88,7 @@ class InstallWorker(QThread):
                 self.finished_install.emit(False, "تعذر العثور على حزمة التطبيق التنفيذية داخل معالج التثبيت.", "")
                 return
 
-            self.progress.emit(45, "جاري نسخ ملفات منظومة Share COC v4.0 إلى القرص الصلب...")
+            self.progress.emit(45, "جاري نسخ ملفات منظومة Share COC v5.0 إلى القرص الصلب...")
             dest_exe = self.install_dir / APP_EXE_NAME
             shutil.copy2(str(src_exe), str(dest_exe))
 
@@ -125,7 +126,12 @@ class InstallWorker(QThread):
                 uninstaller_path=uninstaller_dest if uninstaller_dest.exists() else dest_exe,
             )
 
-            self.progress.emit(100, "✅ اكتمل تثبيت منظومة Share COC v4.0 بنجاح!")
+            try:
+                LocalStateManager().set_setting("sync_folder", str(self.sync_dir))
+            except Exception as cfg_err:
+                print(f"[Installer] Could not persist sync_folder: {cfg_err}")
+
+            self.progress.emit(100, "✅ اكتمل تثبيت منظومة Share COC v5.0 بنجاح!")
             self.finished_install.emit(True, "تم تثبيت المنظومة بنجاح.", str(dest_exe))
         except Exception as e:
             self.finished_install.emit(False, f"حدث خطأ أثناء التثبيت:\n{e}", "")
@@ -185,7 +191,7 @@ class ShareCOCInstallerWizard(QMainWindow):
 
         title_col = QVBoxLayout()
         title_col.setSpacing(2)
-        lbl_t = QLabel("معالج التنصيب الرسمي – منظومة Share COC v4.0")
+        lbl_t = QLabel("معالج التنصيب الرسمي – منظومة Share COC v5.0")
         lbl_t.setFont(QFont("Cairo", 14, QFont.Weight.Bold))
         lbl_t.setStyleSheet("color: #ffffff; background: transparent; border: none;")
         lbl_s = QLabel("غرفة تجارة كربلاء المقدسة • منظومة التبادل السحابي وأرشفة المستندات الرسمية")
@@ -287,7 +293,7 @@ class ShareCOCInstallerWizard(QMainWindow):
         cl = QVBoxLayout(card)
         cl.setSpacing(12)
 
-        t = QLabel("مرحباً بك في معالج تثبيت منظومة Share COC (الإصدار المؤسسي 4.0)")
+        t = QLabel("مرحباً بك في معالج تثبيت منظومة Share COC (الإصدار المؤسسي 5.0)")
         t.setFont(QFont("Cairo", 13, QFont.Weight.Bold))
         t.setStyleSheet("color: #14372e; border: none;")
         cl.addWidget(t)
@@ -295,7 +301,7 @@ class ShareCOCInstallerWizard(QMainWindow):
         desc = QLabel(
             "سيقوم هذا المعالج بتنصيب منظومة التبادل السحابي وأرشفة المستندات الرسمية الخاصة بغرفة تجارة كربلاء المقدسة "
             "على جهاز الحاسوب الخاص بك وفق المعايير القياسية لنظام التشغيل Windows.\n\n"
-            "✨ أهم مميزات النسخة المؤسسية v4.0:\n"
+            "✨ أهم مميزات النسخة المؤسسية v5.0:\n"
             "  • مزامنة سحابية فورية ومباشرة مع سيرفر Share COC لكافة الملفات والمجلدات الفرعية.\n"
             "  • دعم كامل للملفات الكبيرة وقواعد بيانات Access (.accdb) عبر الرفع المجزأ الذكي.\n"
             "  • تكامل كامل مع نظام Windows (قائمة ابدأ، سطح المكتب، قائمة الزر الأيمن Send To، وشريط المهام System Tray).\n"
@@ -449,7 +455,7 @@ class ShareCOCInstallerWizard(QMainWindow):
         cl = QVBoxLayout(card)
         cl.setSpacing(16)
 
-        self.lbl_install_title = QLabel("⏳ جاري تثبيت منظومة Share COC v4.0 على الحاسوب...")
+        self.lbl_install_title = QLabel("⏳ جاري تثبيت منظومة Share COC v5.0 على الحاسوب...")
         self.lbl_install_title.setFont(QFont("Cairo", 13, QFont.Weight.Bold))
         self.lbl_install_title.setStyleSheet("color: #14372e; border: none;")
         cl.addWidget(self.lbl_install_title)
@@ -479,7 +485,7 @@ class ShareCOCInstallerWizard(QMainWindow):
         """)
         cl.addWidget(self.progress_bar)
 
-        self.chk_launch_now = QCheckBox("🚀 تشغيل منظومة Share COC v4.0 فور النقر على «إنهاء»")
+        self.chk_launch_now = QCheckBox("🚀 تشغيل منظومة Share COC v5.0 فور النقر على «إنهاء»")
         self.chk_launch_now.setChecked(True)
         self.chk_launch_now.setVisible(False)
         self.chk_launch_now.setStyleSheet("color: #14372e; font-size: 12px; font-weight: bold; border: none;")
@@ -558,7 +564,7 @@ class ShareCOCInstallerWizard(QMainWindow):
     def _on_install_finished(self, ok: bool, msg: str, exe_path: str):
         if ok:
             self.installed_exe_path = exe_path
-            self.lbl_install_title.setText("🎉 اكتمل تنصيب منظومة Share COC v4.0 بنجاح!")
+            self.lbl_install_title.setText("🎉 اكتمل تنصيب منظومة Share COC v5.0 بنجاح!")
             self.lbl_install_step.setText(
                 "تم تثبيت البرنامج، وتسجيله رسمياً في نظام Windows، وإنشاء اختصارات سطح المكتب وقائمة ابدأ."
             )

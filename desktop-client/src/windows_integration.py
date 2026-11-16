@@ -1,5 +1,5 @@
 """
-Share COC Enterprise v4.0 – غرفة تجارة كربلاء المقدسة
+Share COC Enterprise v5.0 – غرفة تجارة كربلاء المقدسة
 وحدة التكامل الرسمي مع نظام التشغيل Windows:
 - إنشاء اختصارات سطح المكتب (Desktop) وقائمة ابدأ (Start Menu) وقائمة إرسال إلى (Send To)
 - تسجيل البرنامج رسمياً في "البرامج والميزات / التطبيقات المثبتة" (Windows Uninstall Registry)
@@ -15,7 +15,7 @@ from pathlib import Path
 APP_ID = "ShareCOC"
 APP_DISPLAY_NAME = "Share COC – منظومة التبادل السحابي (غرفة تجارة كربلاء المقدسة)"
 APP_SHORT_NAME = "Share COC"
-APP_VERSION = "4.0.0"
+APP_VERSION = "5.0.0"
 APP_PUBLISHER = "غرفة تجارة كربلاء المقدسة – قسم تقنية المعلومات"
 APP_EXE_NAME = "share coc.exe"
 UNINSTALL_EXE_NAME = "Uninstall_ShareCOC.exe"

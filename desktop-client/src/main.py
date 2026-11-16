@@ -111,6 +111,52 @@ from gui import FileExchangeMainWindow
 from local_bridge import start_local_bridge
 
 
+def _get_configured_sync_folder(state_mgr=None) -> Path:
+    """قراءة مجلد المزامنة المخصص من LocalStateManager مع الرجوع للمسار الافتراضي."""
+    default_dir = Path(os.environ.get('USERPROFILE', 'C:')) / "FileExchangeShared"
+    try:
+        mgr = state_mgr if state_mgr is not None else LocalStateManager()
+        saved = mgr.get_setting("sync_folder")
+        if saved and str(saved).strip():
+            return Path(str(saved).strip())
+    except Exception:
+        pass
+    return default_dir
+
+
+def _enqueue_pending_watch_file(state_mgr, file_path):
+    """حفظ مسار الملف المفتوح مؤقتاً ليتم تسجيل مراقبته فور بدء SyncEngine في العملية الخلفية."""
+    if state_mgr is None or not file_path:
+        return
+    try:
+        import json
+        raw = state_mgr.get_setting("pending_watch_files", "[]")
+        items = json.loads(raw) if raw else []
+        if not isinstance(items, list):
+            items = []
+        p_str = str(file_path)
+        if p_str not in items:
+            items.append(p_str)
+        state_mgr.set_setting("pending_watch_files", json.dumps(items, ensure_ascii=False))
+    except Exception:
+        pass
+
+
+def _pop_pending_watch_files(state_mgr):
+    """استرجاع ومسح قائمة الملفات المفتوحة المعلقة لمراقبتها عبر SyncEngine."""
+    if state_mgr is None:
+        return []
+    try:
+        import json
+        raw = state_mgr.get_setting("pending_watch_files", "[]")
+        items = json.loads(raw) if raw else []
+        if raw and raw != "[]":
+            state_mgr.set_setting("pending_watch_files", "[]")
+        return [str(x) for x in items if x] if isinstance(items, list) else []
+    except Exception:
+        return []
+
+
 def _parse_sharecoc_target(raw_target):
     """تحليل رابط sharecoc:// أو اسم الملف واستخراج معاملات الفتح بما فيها md5 الاختياري"""
     import urllib.parse
@@ -249,8 +295,34 @@ def _resolve_and_prepare_open_target(
     want_md5 = server_md5 or str(expected_md5 or "").strip().lower()
     effective_sp = str((remote_meta or {}).get("id") or target_storage_path or "").strip()
 
+    is_local_unsynced = False
+    if target_cand is not None and target_cand.exists() and state_mgr is not None:
+        try:
+            rel_cand = norm_rel(Path(target_cand).relative_to(sync_root))
+            st = state_mgr.get_file_state(rel_cand)
+            if not st and hasattr(state_mgr, "get_all_states_map"):
+                rk = norm_key(rel_cand)
+                for sr, srow in (state_mgr.get_all_states_map() or {}).items():
+                    if norm_key(sr) == rk:
+                        st = srow
+                        break
+            if st:
+                if st.get("sync_status") in ("pending_upload", "syncing", "failed"):
+                    is_local_unsynced = True
+                elif (
+                    st.get("sha256_hash")
+                    and st.get("remote_md5")
+                    and str(st.get("sha256_hash")).lower() != str(st.get("remote_md5")).lower()
+                ):
+                    is_local_unsynced = True
+                elif want_md5 and str(st.get("remote_md5") or "").lower() == want_md5 and st.get("sha256_hash"):
+                    if _md5_file(str(target_cand)).lower() != str(st.get("sha256_hash")).lower():
+                        is_local_unsynced = True
+        except Exception:
+            pass
+
     need_download = target_cand is None
-    if target_cand is not None and want_md5:
+    if target_cand is not None and want_md5 and not is_local_unsynced:
         try:
             local_md5 = _md5_file(str(target_cand)).lower()
             if local_md5 != want_md5:
@@ -278,6 +350,25 @@ def _resolve_and_prepare_open_target(
                 if success and temp_path.exists():
                     if OfficeHandler.safe_apply_file(str(dest_path), str(temp_path)):
                         target_cand = dest_path
+                        if state_mgr is not None:
+                            try:
+                                rel_saved = norm_rel(dest_path.relative_to(sync_root))
+                            except Exception:
+                                rel_saved = norm_rel(remote_rel or dest_path.name)
+                            try:
+                                st_after = dest_path.stat()
+                                dl_md5 = _md5_file(str(dest_path)).lower()
+                                state_mgr.set_file_state(
+                                    relative_path=rel_saved,
+                                    file_name=dest_path.name,
+                                    sha256_hash=dl_md5,
+                                    file_size=st_after.st_size,
+                                    sync_status="synced",
+                                    server_file_id=effective_sp or None,
+                                    remote_md5=server_md5 or want_md5 or dl_md5,
+                                )
+                            except Exception as state_err:
+                                _safe_log_err(f"[CLI Save State Error]: {state_err}")
             finally:
                 if temp_path.exists():
                     try:
@@ -463,7 +554,6 @@ def main():
                 _safe_log_err(f"[CLI Bridge Forward Notice]: {bridge_err}")
 
             # 2. إذا لم يستجب الجسر، فحصه محلياً والتحقق من حداثته أمام الخادم ثم تنزيل الأحدث عند الحاجة
-            sync_folder = Path(os.environ.get('USERPROFILE', 'C:')) / "FileExchangeShared"
             from office_handler import OfficeHandler
 
             cli_state_mgr = None
@@ -471,6 +561,7 @@ def main():
                 cli_state_mgr = LocalStateManager()
             except Exception:
                 pass
+            sync_folder = _get_configured_sync_folder(cli_state_mgr)
             target_cand = _resolve_and_prepare_open_target(
                 sync_folder=sync_folder,
                 target_file=target_file,
@@ -482,11 +573,12 @@ def main():
 
             if target_cand and target_cand.exists():
                 OfficeHandler.open_native_file(str(target_cand), synchronous=True)
+                _enqueue_pending_watch_file(cli_state_mgr, target_cand)
                 # تشغيل تطبيق الحاسوب في صينية النظام (System Tray) ليبقى متصلاً ومتاحاً للطلبات التالية
                 try:
                     if getattr(sys, 'frozen', False):
                         subprocess.Popen(
-                            [sys.executable],
+                            [sys.executable, f"--watch-file={str(target_cand)}"],
                             env=_clean_pyinstaller_child_env(),
                             creationflags=getattr(subprocess, 'DETACHED_PROCESS', 0x00000008),
                             close_fds=True,
@@ -505,11 +597,28 @@ def main():
 
     # 1.5 معالجة الملفات المرسلة عبر قائمة الزر الأيمن في ويندوز (Send To -> Share COC)
     cli_upload_paths = []
+    cli_watch_files = []
     if len(sys.argv) > 1:
         raw_args = sys.argv[1:]
         if raw_args[0] == "--upload":
             raw_args = raw_args[1:]
-        for arg in raw_args:
+        skip_next = False
+        for idx, arg in enumerate(raw_args):
+            if skip_next:
+                skip_next = False
+                continue
+            if arg.startswith("--watch-file="):
+                wf = arg.split("=", 1)[1].strip(' "\'')
+                if wf:
+                    cli_watch_files.append(wf)
+                continue
+            if arg == "--watch-file":
+                if idx + 1 < len(raw_args):
+                    wf = raw_args[idx + 1].strip(' "\'')
+                    if wf:
+                        cli_watch_files.append(wf)
+                    skip_next = True
+                continue
             if not arg.startswith("-") and not arg.startswith("sharecoc://"):
                 p = Path(arg)
                 if p.exists():
@@ -524,7 +633,7 @@ def main():
         # إذا تم إرسال ملفات عبر Send To وهناك نسخة تعمل بالفعل، انسخها لمجلد المزامنة وأيقظ المحرك فوراً
         if cli_upload_paths:
             import shutil
-            sync_folder = Path(os.environ.get('USERPROFILE', 'C:')) / "FileExchangeShared"
+            sync_folder = _get_configured_sync_folder()
             sync_folder.mkdir(parents=True, exist_ok=True)
             for src_p in cli_upload_paths:
                 try:
@@ -606,10 +715,10 @@ def main():
     threading.Thread(target=ensure_desktop_shortcut, daemon=True).start()
 
     # مجلد المزامنة المحلي على جهاز المستخدم
-    sync_folder = Path(os.environ.get('USERPROFILE', 'C:')) / "FileExchangeShared"
+    state_mgr = LocalStateManager()
+    sync_folder = _get_configured_sync_folder(state_mgr)
     sync_folder.mkdir(parents=True, exist_ok=True)
 
-    state_mgr = LocalStateManager()
     cloud_client = GoogleDriveClient(state_mgr=state_mgr)
     cloud_client.sync_folder = sync_folder
 
@@ -656,6 +765,13 @@ def main():
         show_window_callback=lambda: window.bridge.show_requested.emit()
     )
     sync_engine.start()
+    pending_watch = _pop_pending_watch_files(state_mgr)
+    for wf in dict.fromkeys([*pending_watch, *cli_watch_files]):
+        try:
+            if wf and Path(wf).exists():
+                sync_engine.watch_active_file(wf)
+        except Exception as watch_err:
+            _safe_log_err(f"[Startup Watch Active File Error]: {watch_err}")
     if cli_upload_paths:
         from PyQt6.QtCore import QTimer
         QTimer.singleShot(600, lambda: window._handle_dropped_paths(cli_upload_paths))

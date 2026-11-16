@@ -24,6 +24,14 @@ Windows Registry Editor Version 5.00
 "1"="https://share.162.35.16.252.sslip.io"
 "2"="http://localhost:3000"
 
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Edge\LocalNetworkAccessAllowedForUrls]
+"1"="https://share.162.35.16.252.sslip.io"
+"2"="http://localhost:3000"
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Edge\InsecurePrivateNetworkRequestsAllowedForUrls]
+"1"="https://share.162.35.16.252.sslip.io"
+"2"="http://localhost:3000"
+
 ; ------------------------- Google Chrome -------------------------
 [HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Google\Chrome]
 "AlwaysOpenPdfExternally"=dword:00000001
@@ -39,5 +47,13 @@ Windows Registry Editor Version 5.00
 "7"="rtf"
 
 [HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Google\Chrome\AutoOpenAllowedForURLs]
+"1"="https://share.162.35.16.252.sslip.io"
+"2"="http://localhost:3000"
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Google\Chrome\LocalNetworkAccessAllowedForUrls]
+"1"="https://share.162.35.16.252.sslip.io"
+"2"="http://localhost:3000"
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Google\Chrome\InsecurePrivateNetworkRequestsAllowedForUrls]
 "1"="https://share.162.35.16.252.sslip.io"
 "2"="http://localhost:3000"

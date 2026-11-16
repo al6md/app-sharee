@@ -263,6 +263,18 @@ class LanSyncService:
                 _safe_log(f"[LAN Turbo-Sync Security] Traversal attempt blocked: {rel_path}")
                 return
 
+        # تجنب الكتابة فوق تعديل محلي جارٍ رفعه حالياً
+        try:
+            rk = rel_path.lower()
+            with self.sync_engine._fast_upload_lock:
+                if any(k.lower() == rk for k in self.sync_engine._fast_upload_timers):
+                    return
+            _, cur_st = self.sync_engine._find_state_normalized(rel_path)
+            if cur_st and cur_st.get("sync_status") in ("syncing", "pending_upload"):
+                return
+        except Exception:
+            pass
+
         # إذا كان الملف موجوداً ومطابقاً للبصمة مسبقاً، لا داعي لإعادة جلبه
         if dest_file.exists() and dest_file.is_file() and remote_md5:
             try:
@@ -302,45 +314,54 @@ class LanSyncService:
             dest_file.parent.mkdir(parents=True, exist_ok=True)
 
             # تطبيق التحديث على الملف باستخدام معالج أوفيس الذكي
-            applied = OfficeHandler.safe_apply_file(str(dest_file), str(temp_dest))
+            apply_status = OfficeHandler.safe_apply_file_with_status(str(dest_file), str(temp_dest))
 
-            if applied:
+            if apply_status == "applied" and dest_file.exists():
                 try:
                     final_stat = dest_file.stat()
                     final_mtime = final_stat.st_mtime
                     final_size = final_stat.st_size
+                    actual_md5 = self.sync_engine.calculate_hash(str(dest_file))
                 except Exception:
                     final_mtime = time.time()
                     final_size = file_size
+                    actual_md5 = remote_md5
 
-                # حفظ الحالة اللحظية أولاً في قاعدة البيانات لمنع إعادة رفعها عند استشعار المراقب للملف
-                self.sync_engine._save_state(
-                    rel=rel_path,
-                    md5=remote_md5,
-                    size=final_size,
-                    mtime=final_mtime,
-                    remote_id=server_file_id,
-                    remote_md5=remote_md5,
-                    status="synced"
-                )
+                if not remote_md5 or actual_md5 == remote_md5:
+                    # حفظ الحالة اللحظية في قاعدة البيانات فقط بعد التأكد من تطابق الملف الفعلي على القرص
+                    self.sync_engine._save_state(
+                        rel=rel_path,
+                        md5=actual_md5,
+                        size=final_size,
+                        mtime=final_mtime,
+                        remote_id=server_file_id,
+                        remote_md5=remote_md5 or actual_md5,
+                        status="synced"
+                    )
+                    self.sync_engine.clear_self_op(rel_path)
+                    _safe_log(f"[LAN Turbo-Sync] Successfully updated '{rel_path}' in < 0.3s from {sender_name}")
+
+                    # إشعار واجهة المستخدم فوراً لإنعاش العرض اللحظي
+                    self.sync_engine.notify_status({
+                        "event": "synced",
+                        "file": rel_path,
+                        "status": f"محدث فورياً من الزميل ({sender_name}) عبر الشبكة المحلية"
+                    })
+
+                    try:
+                        from local_bridge import LocalBridgeHandler
+                        LocalBridgeHandler.last_sync_time = time.time()
+                        LocalBridgeHandler.last_synced_file = rel_path
+                    except Exception:
+                        pass
+                else:
+                    self.sync_engine.clear_self_op(rel_path)
+            elif apply_status == "deferred":
+                # الملف مفتوح ومقفول على هذا الجهاز؛ تم تأجيل التبديل في .sync_shadow دون تعديل local_state.db
                 self.sync_engine.clear_self_op(rel_path)
-
-                _safe_log(f"[LAN Turbo-Sync] Successfully updated '{rel_path}' in < 0.3s from {sender_name}")
-
-                # إشعار واجهة المستخدم فوراً لإنعاش العرض اللحظي
-                self.sync_engine.notify_status({
-                    "event": "synced",
-                    "file": rel_path,
-                    "status": f"محدث فورياً من الزميل ({sender_name}) عبر الشبكة المحلية"
-                })
-                self.sync_engine.wake(delay=0.1)
-
-                try:
-                    from local_bridge import LocalBridgeHandler
-                    LocalBridgeHandler.last_sync_time = time.time()
-                    LocalBridgeHandler.last_synced_file = rel_path
-                except Exception:
-                    pass
+                _safe_log(f"[LAN Turbo-Sync] Deferred shadow update for locked file '{rel_path}' from {sender_name}")
+            else:
+                self.sync_engine.clear_self_op(rel_path)
 
         except Exception as e:
             _safe_log(f"[LAN Turbo-Sync fetch error] {rel_path}: {e}")

@@ -170,7 +170,9 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
                 pass
         if not st:
             return False
-        if st.get("sync_status") in ("syncing", "pending_upload"):
+        if st.get("sync_status") in ("syncing", "pending_upload", "failed"):
+            return True
+        if st.get("sha256_hash") and st.get("remote_md5") and str(st.get("sha256_hash")).lower() != str(st.get("remote_md5")).lower():
             return True
         if expected_md5 and str(st.get("remote_md5") or "").lower() == expected_md5.lower() and st.get("sha256_hash"):
             if local_hash != str(st.get("sha256_hash")).lower():
@@ -184,7 +186,9 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
     def _set_headers(self, status=200, content_type='application/json'):
         self.send_response(status)
         self.send_header('Content-Type', f'{content_type}; charset=utf-8')
-        self.send_header('Access-Control-Allow-Origin', '*')
+        origin = (self.headers.get('Origin') or '').strip() if getattr(self, 'headers', None) else ''
+        self.send_header('Access-Control-Allow-Origin', origin if origin else '*')
+        self.send_header('Vary', 'Origin')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', '*')
         self.send_header('Access-Control-Allow-Private-Network', 'true')
@@ -274,8 +278,17 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
                     if target and target.exists():
                         try:
                             rel = norm_rel(target.relative_to(Path(self.sync_folder)))
-                            ok, meta = self.sync_engine.sync_file_now(str(target), rel_path=rel)
-                            sync_result = {"success": bool(ok), "file": rel}
+                            if OfficeHandler.is_access_db(str(target)) and OfficeHandler.is_access_file_open_locally(str(target)):
+                                sync_result = {
+                                    "success": False,
+                                    "deferred": True,
+                                    "locked": True,
+                                    "file": rel,
+                                    "error": "قاعدة بيانات Access مفتوحة حالياً ومحمية من الرفع حتى يتم إغلاقها.",
+                                }
+                            else:
+                                ok, meta = self.sync_engine.sync_file_now(str(target), rel_path=rel)
+                                sync_result = {"success": bool(ok), "file": rel}
                         except Exception as sync_err:
                             sync_result = {"success": False, "error": str(sync_err)}
                 elif self.sync_engine:

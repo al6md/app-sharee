@@ -326,6 +326,8 @@ async function resolveCallerContext(req: NextRequest, body?: any): Promise<Calle
     } catch (e) {
       // fallback
     }
+
+    return { role: 'data_entry', allowedSections: [], guid };
   } catch (err) {
     console.error('Error resolving caller context:', err);
   }

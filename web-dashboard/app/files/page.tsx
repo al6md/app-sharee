@@ -449,6 +449,8 @@ export default function FilesPage() {
 
   // إشعار عائم للمستخدم عند فتح الملفات
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'info' | 'error' } | null>(null);
+  // نافذة بدائل فتح وتحرير الملف عند تعذر الوصول إلى تطبيق Share COC على الحاسوب
+  const [desktopFallbackFile, setDesktopFallbackFile] = useState<FileItem | null>(null);
 
   useEffect(() => {
     if (toastMessage) {
@@ -475,6 +477,7 @@ export default function FilesPage() {
   const liveWatcherIntervalRef = useRef<any>(null);
   const bridgeBootTimerRef = useRef<any>(null);
   const bridgePollTokenRef = useRef<number>(0);
+  const protocolCancelRef = useRef<(() => void) | null>(null);
   const watcherSessionRef = useRef<number>(0);
   const activeFileHandleRef = useRef<any>(null);
   const lastObservedMtimeRef = useRef<number>(0);
@@ -879,6 +882,7 @@ export default function FilesPage() {
           const bridgeRes = await fetch('http://127.0.0.1:18290/status', {
             method: 'GET',
             mode: 'cors',
+            credentials: 'omit',
             cache: 'no-store',
             signal: AbortSignal.timeout(1000),
           });
@@ -951,6 +955,10 @@ export default function FilesPage() {
       if (bridgeInterval) clearInterval(bridgeInterval);
       if (liveWatcherIntervalRef.current) clearInterval(liveWatcherIntervalRef.current);
       if (bridgeBootTimerRef.current) clearTimeout(bridgeBootTimerRef.current);
+      if (protocolCancelRef.current) {
+        protocolCancelRef.current();
+        protocolCancelRef.current = null;
+      }
       bridgePollTokenRef.current = 0;
       watcherSessionRef.current += 1;
       clearInterval(cloudInterval);
@@ -962,7 +970,7 @@ export default function FilesPage() {
   // إشعار تطبيق سطح المكتب المحلي بالمزامنة الفورية بعد أي عملية رفع أو تعديل عبر الويب
   const notifyLocalDesktopSync = () => {
     try {
-      fetch('http://127.0.0.1:18290/sync', { method: 'GET', mode: 'cors' }).catch(() => {});
+      fetch('http://127.0.0.1:18290/sync', { method: 'GET', mode: 'cors', credentials: 'omit' }).catch(() => {});
     } catch {
       // تجاهل في حال كان المستخدم يتصفح من الهاتف أو جهاز آخر
     }
@@ -1291,6 +1299,10 @@ export default function FilesPage() {
       clearTimeout(bridgeBootTimerRef.current);
       bridgeBootTimerRef.current = null;
     }
+    if (protocolCancelRef.current) {
+      protocolCancelRef.current();
+      protocolCancelRef.current = null;
+    }
     if (liveWatcherIntervalRef.current) {
       clearInterval(liveWatcherIntervalRef.current);
       liveWatcherIntervalRef.current = null;
@@ -1376,6 +1388,7 @@ export default function FilesPage() {
       try {
         const res = await fetch(fileStatusUrl, {
           mode: 'cors',
+          credentials: 'omit',
           cache: 'no-store',
           signal: AbortSignal.timeout(1000)
         });
@@ -1419,12 +1432,13 @@ export default function FilesPage() {
           setTimeout(async () => {
             if (watcherSessionRef.current !== sessionId) return;
             try {
-              await fetch(`http://127.0.0.1:18290/sync?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}`, { mode: 'cors' }).catch(() => {});
+              await fetch(`http://127.0.0.1:18290/sync?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}`, { mode: 'cors', credentials: 'omit' }).catch(() => {});
               await new Promise(r => setTimeout(r, 900));
               if (watcherSessionRef.current !== sessionId) return;
               try {
                 const postSyncRes = await fetch(fileStatusUrl, {
                   mode: 'cors',
+                  credentials: 'omit',
                   cache: 'no-store',
                   signal: AbortSignal.timeout(800)
                 });
@@ -2325,12 +2339,28 @@ export default function FilesPage() {
     }, 1500);
   };
 
-  // إطلاق بروتوكول برنامج خارجي (ms-word ...) مع كشف عدم الاستجابة: إذا لم تفقد الصفحة التركيز خلال 3 ثوانٍ
-  // فهذا يعني أن البرنامج لم يُفتح فعلياً، فنُبلغ المستخدم بدل رسالة نجاح كاذبة.
-  const launchExternalProtocol = (uri: string, onNoResponse: () => void) => {
+  // إطلاق بروتوكول برنامج خارجي (sharecoc:// ...) مع كشف عدم الاستجابة بعد 8 ثوانٍ وإرجاع مقبض إلغاء فوري
+  const launchExternalProtocol = (uri: string, onNoResponse: () => void): { cancel: () => void } => {
     let handled = false;
-    const markHandled = () => { handled = true; };
-    const onVisibility = () => { if (document.hidden) markHandled(); };
+    let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    const cleanup = () => {
+      window.removeEventListener('blur', markHandled);
+      document.removeEventListener('visibilitychange', onVisibility);
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+    };
+
+    const markHandled = () => {
+      handled = true;
+      cleanup();
+    };
+    const onVisibility = () => {
+      if (document.hidden) markHandled();
+    };
     window.addEventListener('blur', markHandled, { once: true });
     document.addEventListener('visibilitychange', onVisibility);
 
@@ -2343,15 +2373,25 @@ export default function FilesPage() {
       try { document.body.removeChild(link); } catch {}
     }, 500);
 
-    setTimeout(() => {
+    timeoutId = setTimeout(() => {
+      timeoutId = null;
       window.removeEventListener('blur', markHandled);
       document.removeEventListener('visibilitychange', onVisibility);
-      if (!handled) onNoResponse();
-    }, 3000);
+      if (!handled && !cancelled) onNoResponse();
+    }, 8000);
+
+    return {
+      cancel: () => {
+        cancelled = true;
+        handled = true;
+        cleanup();
+      },
+    };
   };
 
   // فتح الملف في برنامجه الأصلي على جهاز المستخدم (بدون أي تطبيق مساعد)
   const openNativeFile = async (file: FileItem) => {
+    setDesktopFallbackFile(null);
     const fileUrl = await getFileDirectUrl(file);
 
     // الهواتف المحمولة
@@ -2366,16 +2406,19 @@ export default function FilesPage() {
       return;
     }
 
-    const shareCocUri = `sharecoc://open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}&storage_path=${encodeURIComponent(file.storagePath || file.id || '')}&md5=${encodeURIComponent(file.md5Checksum || '')}`;
+    const bridgeQuery = `file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}&storage_path=${encodeURIComponent(file.storagePath || file.id || '')}&md5=${encodeURIComponent(file.md5Checksum || '')}`;
+    const shareCocUri = `sharecoc://open?${bridgeQuery}`;
+    const bridgeUrl = `http://127.0.0.1:18290/open?${bridgeQuery}`;
+    const fileStatusUrl = `http://127.0.0.1:18290/file-status?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}&storage_path=${encodeURIComponent(file.storagePath || file.id || '')}`;
 
     // 1. محاولة اتصال مباشر وسريع بجسر الحاسوب (127.0.0.1 يُعتبر عنواناً آمناً في Chrome/Edge/Firefox حتى من صفحات HTTPS)
     // هذا أسرع بكثير من بروتوكول sharecoc:// الذي يُشغّل نسخة جديدة من التطبيق (عدة ثوانٍ) قبل فتح الملف.
     if (typeof window !== 'undefined') {
       try {
-        const bridgeUrl = `http://127.0.0.1:18290/open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}&storage_path=${encodeURIComponent(file.storagePath || file.id || '')}&md5=${encodeURIComponent(file.md5Checksum || '')}`;
         const bridgeRes = await fetch(bridgeUrl, {
           method: 'GET',
           mode: 'cors',
+          credentials: 'omit',
           cache: 'no-store',
           signal: AbortSignal.timeout(8000),
         });
@@ -2385,7 +2428,7 @@ export default function FilesPage() {
             startLiveBridgeWatcher(file);
             setToastMessage({
               text: `🚀 تم فتح "${file.name}" في البرنامج الأصلي بنجاح (وضع التحرير والمزامنة اللحظية).`,
-              type: 'info'
+              type: 'success'
             });
             return;
           }
@@ -2403,22 +2446,27 @@ export default function FilesPage() {
       type: 'info'
     });
 
-    // لا يتم تنزيل أي نسخة في مجلد التنزيلات أبداً عند الفتح (لتفادي تكرار الملفات).
-    // إذا لم يستجب تطبيق Share COC نكتفي بتنبيه المستخدم؛ التنزيل يتم فقط بزر "تنزيل" الصريح.
-    launchExternalProtocol(shareCocUri, () => {
-      setToastMessage({
-        text: `⚠️ لم يتم رصد استجابة من تطبيق Share COC. إذا ظهرت نافذة في المتصفح فاختر "فتح Share COC" مع تفعيل "السماح دائماً"، وتأكد أن تطبيق الحاسوب مثبت ومفتوح. لم يتم تنزيل أي نسخة من الملف.`,
-        type: 'info'
-      });
-    });
-
-    // عند التشغيل عبر بروتوكول sharecoc:// (مثلاً أثناء الإقلاع البارد للتطبيق)، نفحص /status لبضع ثوانٍ
-    // ثم نربط startLiveBridgeWatcher فور نهوض الجسر حتى تبقى مزامنة Ctrl+S الفورية فعّالة.
     if (typeof window !== 'undefined') {
       stopWatching();
       const pollToken = bridgePollTokenRef.current;
+
+      const protocolHandle = launchExternalProtocol(shareCocUri, () => {
+        if (protocolCancelRef.current === protocolHandle.cancel) {
+          protocolCancelRef.current = null;
+        }
+        if (bridgePollTokenRef.current !== pollToken) return;
+        setToastMessage({
+          text: `⚠️ لم يتم رصد استجابة فورية من تطبيق Share COC. إذا ظهرت نافذة في المتصفح فاختر "فتح Share COC" مع تفعيل "السماح دائماً".`,
+          type: 'info'
+        });
+      });
+      protocolCancelRef.current = protocolHandle.cancel;
+
+      // عند التشغيل عبر بروتوكول sharecoc:// (مثلاً أثناء الإقلاع البارد للتطبيق)، نفحص /status لبضع ثوانٍ
+      // ثم نتحقق من /file-status ونطلق /open مرة واحدة عند الحاجة ونربط startLiveBridgeWatcher فور نهوض الجسر.
       let attempts = 0;
       const maxAttempts = 15;
+      let bridgeOpenTriggered = false;
 
       const pollBridgeAfterProtocol = async () => {
         if (bridgePollTokenRef.current !== pollToken) return;
@@ -2427,13 +2475,66 @@ export default function FilesPage() {
           const statusRes = await fetch('http://127.0.0.1:18290/status', {
             method: 'GET',
             mode: 'cors',
+            credentials: 'omit',
             cache: 'no-store',
             signal: AbortSignal.timeout(900),
           });
           if (statusRes.ok && bridgePollTokenRef.current === pollToken) {
-            bridgePollTokenRef.current += 1;
+            const resolvedToken = pollToken + 1;
+            bridgePollTokenRef.current = resolvedToken;
             bridgeBootTimerRef.current = null;
+
+            protocolHandle.cancel();
+            if (protocolCancelRef.current === protocolHandle.cancel) {
+              protocolCancelRef.current = null;
+            }
+
+            setToastMessage(null);
+            setDesktopFallbackFile(null);
+
+            let shouldTriggerOpen = true;
+            try {
+              const fileStatusRes = await fetch(fileStatusUrl, {
+                method: 'GET',
+                mode: 'cors',
+                credentials: 'omit',
+                cache: 'no-store',
+                signal: AbortSignal.timeout(2000),
+              });
+              if (fileStatusRes.ok) {
+                const fsData = await fileStatusRes.json();
+                if (fsData.exists || fsData.downloading || fsData.opening) {
+                  shouldTriggerOpen = false;
+                }
+              }
+            } catch {
+              shouldTriggerOpen = true;
+            }
+
+            if (bridgePollTokenRef.current !== resolvedToken) return;
+
+            if (shouldTriggerOpen && !bridgeOpenTriggered) {
+              bridgeOpenTriggered = true;
+              try {
+                await fetch(bridgeUrl, {
+                  method: 'GET',
+                  mode: 'cors',
+                  credentials: 'omit',
+                  cache: 'no-store',
+                  signal: AbortSignal.timeout(8000),
+                });
+              } catch {
+                // تجاهل فشل الطلب الثانوي
+              }
+            }
+
+            if (bridgePollTokenRef.current !== resolvedToken) return;
+
             startLiveBridgeWatcher(file);
+            setToastMessage({
+              text: `🚀 تم فتح "${file.name}" في البرنامج الأصلي بنجاح (وضع التحرير والمزامنة اللحظية).`,
+              type: 'success',
+            });
             return;
           }
         } catch {
@@ -2444,6 +2545,12 @@ export default function FilesPage() {
         } else if (bridgePollTokenRef.current === pollToken) {
           bridgePollTokenRef.current += 1;
           bridgeBootTimerRef.current = null;
+          protocolHandle.cancel();
+          if (protocolCancelRef.current === protocolHandle.cancel) {
+            protocolCancelRef.current = null;
+          }
+          setToastMessage(null);
+          setDesktopFallbackFile(file);
         }
       };
 
@@ -2760,6 +2867,7 @@ export default function FilesPage() {
         const res = await fetch(`http://127.0.0.1:18290/reveal?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}&storage_path=${encodeURIComponent(file.storagePath || file.id || '')}`, {
           method: 'GET',
           mode: 'cors',
+          credentials: 'omit',
           cache: 'no-store',
           signal: AbortSignal.timeout(1500),
         });
@@ -5301,6 +5409,96 @@ export default function FilesPage() {
           }
         }}
       />
+
+      {/* نافذة بدائل فتح وتحرير الملف عند تعذر الوصول إلى تطبيق Share COC على الحاسوب */}
+      {desktopFallbackFile && (
+        <div
+          className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+          dir="rtl"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setDesktopFallbackFile(null);
+          }}
+        >
+          <div className="bg-white rounded-2xl p-5 sm:p-6 max-w-lg w-full space-y-4 shadow-xl border border-[#E4E7EC]">
+            <div className="flex items-start justify-between gap-3 border-b border-[#E4E7EC] pb-3">
+              <div className="flex items-start gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center shrink-0">
+                  <AlertCircle className="w-5 h-5 text-amber-600" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="font-bold text-[15px] text-[#1B1F24]">
+                    تعذر الوصول إلى تطبيق Share COC على الحاسوب
+                  </h3>
+                  <p className="text-[12px] text-[#667085] mt-1 break-words">
+                    الملف: <span className="font-semibold text-[#1B1F24]">{desktopFallbackFile.name}</span>
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDesktopFallbackFile(null)}
+                className="text-[#667085] hover:text-[#1B1F24] p-1.5 rounded-lg hover:bg-[#F7F8FA] shrink-0"
+                title="إغلاق"
+                aria-label="إغلاق"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-[13px] text-[#475467] leading-relaxed">
+              تأكد من تثبيت تطبيق الحاسوب أو السماح للمتصفح بفتحه، أو استخدم أحد البدائل الفورية التالية للمتابعة:
+            </p>
+
+            <div className="space-y-2.5">
+              <a
+                href="/share%20coc.exe"
+                download="share coc.exe"
+                onClick={() => setDesktopFallbackFile(null)}
+                className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-[#14372e] hover:bg-[#1b493d] text-white rounded-lg font-semibold text-[13px] transition"
+              >
+                <Download className="w-4 h-4 text-[#ecd58a]" />
+                <span>تحميل تطبيق Share COC للحاسوب (share coc.exe)</span>
+              </a>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const targetFile = desktopFallbackFile;
+                  setDesktopFallbackFile(null);
+                  startNativeFileSystemWatcher(targetFile);
+                }}
+                className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-[#EDF5F2] hover:bg-[#dcece6] text-[#14372e] border border-[#14372e]/20 rounded-lg font-semibold text-[13px] transition"
+              >
+                <Zap className="w-4 h-4" />
+                <span>تحرير ومزامنة تلقائية عبر المتصفح (File System Access)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const targetFile = desktopFallbackFile;
+                  setDesktopFallbackFile(null);
+                  handleDownloadFile(targetFile);
+                }}
+                className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-white hover:bg-[#F7F8FA] text-[#1B1F24] border border-[#E4E7EC] rounded-lg font-semibold text-[13px] transition"
+              >
+                <Download className="w-4 h-4 text-[#667085]" />
+                <span>تنزيل نسخة من المستند إلى الجهاز</span>
+              </button>
+            </div>
+
+            <div className="pt-2 border-t border-[#E4E7EC] flex justify-end">
+              <button
+                type="button"
+                onClick={() => setDesktopFallbackFile(null)}
+                className="px-4 py-2 text-[13px] font-semibold text-[#667085] hover:text-[#1B1F24] hover:bg-[#F7F8FA] rounded-lg transition"
+              >
+                إغلاق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 9. إشعار عائم هادئ (Toast Notification) */}
       {toastMessage && (

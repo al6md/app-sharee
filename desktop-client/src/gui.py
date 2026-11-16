@@ -1913,7 +1913,7 @@ class FileExchangeMainWindow(QMainWindow):
         # حاوية شاشات العمل الرئيسية (0=المستندات والأقسام، 1=مركز بيانات Access، 2=لوحة تحكم الإدارة)
         self.workspace_stack = QStackedWidget()
         self.workspace_stack.addWidget(explorer_page)
-        self.access_hub_page = AccessHubWidget()
+        self.access_hub_page = AccessHubWidget(auto_start=False)
         self.workspace_stack.addWidget(self.access_hub_page)
         self.admin_page = self._build_admin_page()
         self.workspace_stack.addWidget(self.admin_page)
@@ -1992,7 +1992,10 @@ class FileExchangeMainWindow(QMainWindow):
         elif index == 1 and hasattr(self, 'nav_btn_access'):
             self.nav_btn_access.setChecked(True)
             if hasattr(self, 'access_hub_page'):
-                self.access_hub_page.load_data()
+                if hasattr(self.access_hub_page, 'activate_and_load'):
+                    self.access_hub_page.activate_and_load()
+                else:
+                    self.access_hub_page.load_data()
         elif index == 2 and hasattr(self, 'nav_btn_admin'):
             self.nav_btn_admin.setChecked(True)
     def _build_admin_page(self) -> QWidget:
@@ -2193,7 +2196,7 @@ class FileExchangeMainWindow(QMainWindow):
         self.sync_log_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.sync_log_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         layout.addWidget(self.sync_log_table, stretch=1)
-        self._append_sync_log("بدء التشغيل 🚀", "منظومة Share COC v4.0", "✅ جاهز ومتصل بالسحابة")
+        self._append_sync_log("بدء التشغيل 🚀", "منظومة Share COC v5.0", "✅ جاهز ومتصل بالسحابة")
         return page
     def _append_sync_log(self, action_text: str, file_text: str, status_text: str):
         """إضافة سطر جديد في جدول سجل المزامنة اللحظي"""
@@ -2692,8 +2695,8 @@ class FileExchangeMainWindow(QMainWindow):
         try:
             if hasattr(self.client, 'get_cached_folder_permissions'):
                 perms_map = self.client.get_cached_folder_permissions() or {}
-            elif hasattr(self.client, 'get_folder_permissions'):
-                perms_map = self.client.get_folder_permissions() or {}
+            if not perms_map and hasattr(self.client, 'get_folder_permissions'):
+                perms_map = self.client.get_folder_permissions(force_refresh=True) or {}
         except Exception:
             perms_map = {}
         rule = perms_map.get("مركز بيانات Access") or perms_map.get("__ACCESS_HUB__") or {}
@@ -2775,6 +2778,11 @@ class FileExchangeMainWindow(QMainWindow):
                 self._save_access_hub_local_unlock(epoch=cloud_epoch)
                 if my_guid not in authed_devices:
                     authed_devices.append(my_guid)
+                if hasattr(self.client, 'get_folder_permissions'):
+                    try:
+                        self.client.get_folder_permissions(force_refresh=True)
+                    except Exception:
+                        pass
                 QMessageBox.information(self, "تم الاعتماد بنجاح ✅", f"تم اعتماد هذا الحاسوب ({computer_name}) وتوثيقه لدى مسؤول النظام بنجاح!")
                 return True
             else:
@@ -3211,7 +3219,13 @@ class FileExchangeMainWindow(QMainWindow):
         self._refresh_file_list()
         if self.active_filter == "TRASH":
             self._render_trash_table()
-        if hasattr(self, 'access_hub_page') and self.access_hub_page:
+        if (
+            hasattr(self, 'access_hub_page')
+            and self.access_hub_page
+            and getattr(self.access_hub_page, 'is_activated', False)
+            and hasattr(self, 'workspace_stack')
+            and self.workspace_stack.currentIndex() == 1
+        ):
             try:
                 self.access_hub_page.load_data()
             except Exception:
@@ -6139,11 +6153,13 @@ class FileExchangeMainWindow(QMainWindow):
                             calc_rel = norm_rel(file_path.relative_to(self.sync_folder))
                             st = self.sync_engine.state_mgr.get_file_state(calc_rel)
                             if st:
-                                if st.get("sync_status") in ("syncing", "pending_upload"):
+                                if st.get("sync_status") in ("syncing", "pending_upload", "failed"):
                                     is_local_newer = True
-                                elif st.get("remote_md5") == cloud_md5 and st.get("sha256_hash"):
+                                elif st.get("sha256_hash") and st.get("remote_md5") and str(st.get("sha256_hash")).lower() != str(st.get("remote_md5")).lower():
+                                    is_local_newer = True
+                                elif str(st.get("remote_md5") or "").lower() == str(cloud_md5).lower() and st.get("sha256_hash"):
                                     loc_h = self.sync_engine.calculate_hash(str(file_path))
-                                    if loc_h != st.get("sha256_hash"):
+                                    if loc_h and str(loc_h).lower() != str(st.get("sha256_hash")).lower():
                                         is_local_newer = True
                         except Exception:
                             pass
@@ -6270,7 +6286,7 @@ class FileExchangeMainWindow(QMainWindow):
                             time.sleep(0.5)
                             if hasattr(self, 'sync_engine') and self.sync_engine:
                                 if hasattr(self.sync_engine, 'queue_fast_upload'):
-                                    self.sync_engine.queue_fast_upload(rel_path or file_name, delay=0.5)
+                                    self.sync_engine.queue_fast_upload(rel_path or Path(file_path).name, delay=0.5)
                                 else:
                                     self.sync_engine.wake(delay=0.3)
                     except Exception:
@@ -6656,7 +6672,7 @@ class FileExchangeMainWindow(QMainWindow):
             self.tray.setIcon(QIcon(str(self.logo_path)))
         else:
             self.tray.setIcon(self.windowIcon())
-        self.tray.setToolTip("Share COC v4.0 – غرفة تجارة كربلاء المقدسة (المزامنة السحابية نشطة)")
+        self.tray.setToolTip("Share COC v5.0 – غرفة تجارة كربلاء المقدسة (المزامنة السحابية نشطة)")
         menu = QMenu()
         open_action = menu.addAction("📂 فتح النافذة الرئيسية (Share COC)")
         open_action.triggered.connect(self.bring_to_front)

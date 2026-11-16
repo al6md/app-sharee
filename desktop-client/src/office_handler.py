@@ -309,13 +309,90 @@ class OfficeHandler:
             return True
 
     @staticmethod
-    def safe_apply_file(dest_path_str, source_new_path_str):
+    def can_read_shared(filepath):
+        """التحقق من إمكانية قراءة الملف حتى لو كان مفتوحاً في Word أو Excel عبر مشاركة القراءة في Win32"""
+        if not os.path.exists(filepath):
+            return False
+        try:
+            with open(filepath, 'rb') as f:
+                f.read(1)
+            return True
+        except (OSError, PermissionError):
+            if sys.platform != 'win32':
+                return False
+            try:
+                import ctypes
+                from ctypes import wintypes
+                kernel32 = ctypes.windll.kernel32
+                GENERIC_READ = 0x80000000
+                FILE_SHARE_ALL = 0x00000001 | 0x00000002 | 0x00000004
+                OPEN_EXISTING = 3
+                FILE_ATTRIBUTE_NORMAL = 0x00000080
+                INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+                kernel32.CreateFileW.argtypes = [
+                    wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                    wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE
+                ]
+                kernel32.CreateFileW.restype = wintypes.HANDLE
+                h = kernel32.CreateFileW(
+                    str(filepath), GENERIC_READ, FILE_SHARE_ALL, None, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, None
+                )
+                if h and h != INVALID_HANDLE_VALUE:
+                    kernel32.CloseHandle(h)
+                    return True
+            except Exception:
+                pass
+            return False
+
+    @staticmethod
+    def read_md5_shared(filepath):
+        """حساب بصمة MD5 للملف بأمان حتى أثناء فتحه أو قفله في برامج Office"""
+        import hashlib
+        md5 = hashlib.md5()
+        try:
+            with open(filepath, 'rb') as f:
+                while chunk := f.read(1024 * 1024):
+                    md5.update(chunk)
+            return md5.hexdigest()
+        except (OSError, PermissionError):
+            if sys.platform != 'win32':
+                raise
+            import ctypes
+            from ctypes import wintypes
+            kernel32 = ctypes.windll.kernel32
+            GENERIC_READ = 0x80000000
+            FILE_SHARE_ALL = 0x00000001 | 0x00000002 | 0x00000004
+            OPEN_EXISTING = 3
+            FILE_ATTRIBUTE_NORMAL = 0x00000080
+            INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+            kernel32.CreateFileW.argtypes = [
+                wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE
+            ]
+            kernel32.CreateFileW.restype = wintypes.HANDLE
+            handle = kernel32.CreateFileW(
+                str(filepath), GENERIC_READ, FILE_SHARE_ALL, None, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, None
+            )
+            if handle == INVALID_HANDLE_VALUE or not handle:
+                raise PermissionError(f"Cannot open locked file for shared read: {filepath}")
+            try:
+                buf = ctypes.create_string_buffer(1024 * 1024)
+                bytes_read = wintypes.DWORD(0)
+                while kernel32.ReadFile(handle, buf, len(buf), ctypes.byref(bytes_read), None):
+                    if bytes_read.value == 0:
+                        break
+                    md5.update(buf.raw[:bytes_read.value])
+            finally:
+                kernel32.CloseHandle(handle)
+            return md5.hexdigest()
+
+    @staticmethod
+    def safe_apply_file_with_status(dest_path_str, source_new_path_str):
         """
-        تطبيق التحديث على الملف الهدف بأقصى سرعة وأمان:
-        1. إذا لم يكن مقفولاً بنظام التشغيل: استبدال فوري خلال أقل من 10ms.
-        2. إذا كان مفتوحاً في Excel أو Word:
-           - محاولة الإنعاش التلقائي المباشر (Auto Hot-Reload) إذا لم يكن فيه تعديلات محلية غير محفوظة.
-           - إذا تعذر، حفظه كنسخة ظل مؤقتة مع تبديله فور إغلاق البرنامج تلقائياً.
+        تطبيق التحديث على الملف الهدف بأمان مع إرجاع الحالة الفعلية:
+        - 'applied': تم استبدال الملف فعلياً على القرص الآن.
+        - 'deferred': الملف مقفول حالياً بواسطة Office؛ تم تأجيل التبديل في .sync_shadow (القرص لا يزال بالنسخة القديمة).
+        - 'failed': تعذر تطبيق الملف.
         """
         import shutil
         import threading
@@ -324,16 +401,25 @@ class OfficeHandler:
         dest_p = Path(dest_path_str)
         src_p = Path(source_new_path_str)
         if not src_p.exists():
-            return False
+            return "failed"
 
         # الحالة 1: الملف غير مقفول (مغلق حالياً)
         if not OfficeHandler.is_file_locked_by_os(str(dest_p)):
             try:
                 dest_p.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(str(src_p), str(dest_p))
-                return True
+                return "applied"
             except Exception:
                 pass
+
+        # تسجيل خط الأساس الحالي للملف قبل التأجيل لعدم مسح أي تعديل محلي لاحق
+        try:
+            st_base = dest_p.stat()
+            baseline_mtime = st_base.st_mtime
+            baseline_size = st_base.st_size
+        except OSError:
+            baseline_mtime = None
+            baseline_size = None
 
         # الحالة 2: الملف مقفول محلياً بواسطة Office (Word أو Excel أو Access)
         # أ) حفظ نسخة في مسار الظل فوراً
@@ -346,7 +432,7 @@ class OfficeHandler:
         try:
             shutil.copy2(str(src_p), str(shadow_file))
         except Exception:
-            pass
+            return "failed"
 
         # ب) محاولة الإنعاش التلقائي عبر PowerShell COM لـ Excel أو Word دون إزعاج الموظف
         suffix = dest_p.suffix.lower()
@@ -383,17 +469,26 @@ class OfficeHandler:
                     creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)
                 )
                 if res.returncode == 0:
-                    # تم الإنعاش التلقائي بنجاح في نافذة Office أمام الموظف!
-                    return True
+                    try:
+                        shadow_file.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    return "applied"
             except Exception:
                 pass
 
-        # ج) مراقبة تحرير القفل في خيط خلفي لتطبيق التحديث فور إغلاقه أو حفظه
+        # ج) مراقبة تحرير القفل في خيط خلفي لتطبيق التحديث فور إغلاقه إذا لم يعدّله المستخدم محلياً
         def _wait_and_swap():
             for _ in range(600):  # محاولة كل 0.5 ثانية لمدة 5 دقائق
                 time.sleep(0.5)
                 if not OfficeHandler.is_file_locked_by_os(str(dest_p)):
                     try:
+                        if baseline_mtime is not None and dest_p.exists():
+                            cur_st = dest_p.stat()
+                            if abs(cur_st.st_mtime - baseline_mtime) > 0.5 or cur_st.st_size != baseline_size:
+                                # المستخدم المحلي قام بتعديل وحفظ الملف بنفسه؛ لا نطمس تعديله
+                                shadow_file.unlink(missing_ok=True)
+                                return
                         if shadow_file.exists():
                             shutil.copy2(str(shadow_file), str(dest_p))
                             shadow_file.unlink(missing_ok=True)
@@ -407,5 +502,10 @@ class OfficeHandler:
                 pass
 
         threading.Thread(target=_wait_and_swap, daemon=True).start()
-        return True
+        return "deferred"
+
+    @staticmethod
+    def safe_apply_file(dest_path_str, source_new_path_str):
+        """واجهة متوافقة للتطبيق الآمن للتحديث"""
+        return OfficeHandler.safe_apply_file_with_status(dest_path_str, source_new_path_str) in ("applied", "deferred")
 

@@ -1,5 +1,5 @@
 """
-تبادل الملفات – File Exchange System (Share COC Enterprise v4.0)
+تبادل الملفات – File Exchange System (Share COC Enterprise v5.0)
 سكريبت أتمتة بناء التطبيق التنفيذي ومعالج التثبيت الرسمي ShareCOC_Setup.exe
 """
 import os
@@ -15,7 +15,7 @@ if hasattr(sys.stderr, 'reconfigure'):
 
 def build_exe():
     print("=" * 65)
-    print("بدء بناء وتجميع منظومة Share COC v4.0 ومعالج التثبيت الرسمي لـ Windows")
+    print("بدء بناء وتجميع منظومة Share COC v5.0 ومعالج التثبيت الرسمي لـ Windows")
     print("=" * 65)
 
     current_dir = Path(__file__).parent.resolve()

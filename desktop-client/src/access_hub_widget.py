@@ -48,19 +48,32 @@ LOCAL_DATA_DIR = Path(__file__).parent.parent.parent / "web-dashboard" / "data" 
 # كاش الذاكرة اللحظي للبيانات - In-Memory Ultra-Fast RAM Cache
 _FILE_RAM_CACHE = {}  # path_str -> (mtime, parsed_json_dict)
 
+def _get_writable_appdata_hub_dir() -> Path:
+    base = Path(os.environ.get("APPDATA", "") or Path.home() / "AppData" / "Roaming")
+    return base / "ShareCOC" / "access-hub"
+
 def get_local_data_dir() -> Path:
     """تحديد المسار المحلي الفعلي لبيانات Access Hub"""
+    appdata_dir = _get_writable_appdata_hub_dir()
     candidates = [
         Path(sys.executable).parent / "data" / "access-hub",
         Path(r"C:\Users\tohiba\OneDrive\Desktop\ShareCOC\data\access-hub"),
         Path(__file__).resolve().parent.parent.parent / "web-dashboard" / "data" / "access-hub",
         Path(r"c:\Users\tohiba\OneDrive\Desktop\شييييير\web-dashboard\data\access-hub"),
-        Path(os.environ.get("APPDATA", "")) / "ShareCOC" / "access-hub",
+        appdata_dir,
     ]
     for c in candidates:
-        if c.exists() and (c / "index.json").exists():
-            return c
-    return candidates[0]
+        try:
+            if c.exists() and (c / "index.json").exists():
+                return c
+        except Exception:
+            pass
+    # في نسخة الموظفين دون بيانات محلية: استخدام مجلد AppData القابل للكتابة دائماً لحفظ mutations.json
+    try:
+        appdata_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return appdata_dir
 
 def get_cached_json_file(file_path: Path):
     """قراءة وفك ملف الـ JSON بسرعة الرام اللحظية (0 ميلي ثانية) بعد أول قراءة"""
@@ -83,12 +96,13 @@ def get_cached_json_file(file_path: Path):
 
 def get_all_local_data_dirs() -> list[Path]:
     """إرجاع كافة المسارات المحلية الموجودة لبيانات Access Hub لمزامنتها معاً"""
+    appdata_dir = _get_writable_appdata_hub_dir()
     candidates = [
         Path(sys.executable).parent / "data" / "access-hub",
         Path(r"C:\Users\tohiba\OneDrive\Desktop\ShareCOC\data\access-hub"),
         Path(__file__).resolve().parent.parent.parent / "web-dashboard" / "data" / "access-hub",
         Path(r"c:\Users\tohiba\OneDrive\Desktop\شييييير\web-dashboard\data\access-hub"),
-        Path(os.environ.get("APPDATA", "")) / "ShareCOC" / "access-hub",
+        appdata_dir,
     ]
     existing = []
     seen = set()
@@ -100,7 +114,13 @@ def get_all_local_data_dirs() -> list[Path]:
                 existing.append(res_p)
         except Exception:
             pass
-    return existing if existing else [candidates[0]]
+    if not existing:
+        try:
+            appdata_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        return [appdata_dir]
+    return existing
 
 def load_local_mutations(local_dir=None) -> dict:
     """تحميل سجل الطفرات والتعديلات المخزنة محلياً"""
@@ -469,6 +489,7 @@ def extract_card_fields(row: dict) -> dict:
 class DataLoaderThread(QThread):
     data_loaded = pyqtSignal(dict)
     error_occurred = pyqtSignal(str)
+    auth_required = pyqtSignal(str)
 
     def __init__(self, file_name, table_name, search_query="", page=1, limit=50, sort_dir="none", sort_col="date_auto"):
         super().__init__()
@@ -512,8 +533,21 @@ class DataLoaderThread(QThread):
             if r.status_code == 200:
                 self.data_loaded.emit(r.json())
                 return
+            err_detail = f"خطأ في الخادم السحابي: {r.status_code}"
+            is_locked = (r.status_code == 403)
+            try:
+                err_json = r.json()
+                if isinstance(err_json, dict):
+                    if err_json.get("error"):
+                        err_detail = str(err_json["error"])
+                    if err_json.get("locked"):
+                        is_locked = True
+            except Exception:
+                pass
+            if is_locked:
+                self.auth_required.emit(err_detail)
             else:
-                self.error_occurred.emit(f"خطأ في الخادم السحابي: {r.status_code}")
+                self.error_occurred.emit(err_detail)
         except Exception as e:
             self.error_occurred.emit(f"تعذر استرجاع البيانات: {e}")
 
@@ -1681,22 +1715,22 @@ class RecordDetailsDialog(QDialog):
 
 class AccessHubWidget(QWidget):
     """القسم المستقل لمركز بيانات Access الموحد داخل تطبيق الحاسوب - تصميم بيانات مركّز ومريح"""
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, auto_start=True):
         super().__init__(parent)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
 
         # تحديد القسم الافتراضي من أول ملف محلي متاح
         init_file = "all"
-        if LOCAL_DATA_DIR.exists():
-            idx_p = LOCAL_DATA_DIR / "index.json"
-            if idx_p.exists():
-                try:
-                    with open(idx_p, "r", encoding="utf-8") as f:
-                        _idx = json.load(f)
-                        if _idx.get("files"):
-                            init_file = _idx["files"][0]["name"]
-                except Exception:
-                    pass
+        local_dir = get_local_data_dir()
+        idx_p = local_dir / "index.json"
+        if idx_p.exists():
+            try:
+                with open(idx_p, "r", encoding="utf-8") as f:
+                    _idx = json.load(f)
+                    if _idx.get("files"):
+                        init_file = _idx["files"][0]["name"]
+            except Exception:
+                pass
 
         self.active_file = init_file
         self.active_table = ""
@@ -1707,19 +1741,28 @@ class AccessHubWidget(QWidget):
         self.date_columns = []
         self.current_data = None
         self.loader_thread = None
+        self._retired_loaders = []
         self.view_mode = "table"
+        self.is_activated = bool(auto_start)
+        self._is_auth_blocked = False
 
-        # إدارة المزامنة السحابية اللحظية التلقائية
+        # إدارة المزامنة السحابية اللحظية التلقائية (تُفعّل فقط بعد فتح واعتماد مركز Access)
         self.sync_worker = None
-        self._start_background_sync(force=False)
-
-        # فحص دوري في الخلفية كل 60 ثانية لجلب أي قيود جديدة من الويب أو الأجهزة الأخرى
         self.cloud_sync_timer = QTimer(self)
         self.cloud_sync_timer.setInterval(60000)
         self.cloud_sync_timer.timeout.connect(lambda: self._start_background_sync(force=False))
-        self.cloud_sync_timer.start()
 
         self._build_ui()
+        if self.is_activated:
+            self.activate_and_load()
+
+    def activate_and_load(self):
+        """تفعيل تحميل البيانات والمزامنة عند دخول المستخدم الفعلي إلى مركز Access واعتماده"""
+        self.is_activated = True
+        self._is_auth_blocked = False
+        if not self.cloud_sync_timer.isActive():
+            self.cloud_sync_timer.start()
+        self._start_background_sync(force=False)
         self.load_data()
 
     def _build_ui(self):
@@ -2526,8 +2569,21 @@ class AccessHubWidget(QWidget):
         """
 
     def load_data(self):
+        if not getattr(self, "is_activated", True):
+            return
         self.btn_refresh.setEnabled(False)
         self.btn_refresh.setText("⏳")
+
+        if self.loader_thread and self.loader_thread.isRunning():
+            old_t = self.loader_thread
+            self._retired_loaders.append(old_t)
+            old_t.finished.connect(lambda t=old_t: self._retired_loaders.remove(t) if t in self._retired_loaders else None)
+            try:
+                old_t.data_loaded.disconnect()
+                old_t.error_occurred.disconnect()
+                old_t.auth_required.disconnect()
+            except Exception:
+                pass
 
         query = self.search_input.text().strip()
         self.loader_thread = DataLoaderThread(
@@ -2541,6 +2597,7 @@ class AccessHubWidget(QWidget):
         )
         self.loader_thread.data_loaded.connect(self._on_data_loaded)
         self.loader_thread.error_occurred.connect(self._on_data_error)
+        self.loader_thread.auth_required.connect(self._on_auth_required)
         self.loader_thread.start()
 
     def _on_data_loaded(self, data):
@@ -2887,9 +2944,32 @@ class AccessHubWidget(QWidget):
             grid_c = idx % cards_per_row
             self.cards_grid.addWidget(card, grid_r, grid_c)
 
+    def _on_auth_required(self, msg):
+        self.btn_refresh.setEnabled(True)
+        self.btn_refresh.setText("🔄")
+        self._is_auth_blocked = True
+        if self.cloud_sync_timer.isActive():
+            self.cloud_sync_timer.stop()
+        # لا تُظهر أي رسالة منبثقة إذا لم يكن تبويب Access مرئياً حالياً
+        if not self.isVisible() or not getattr(self, "is_activated", False):
+            return
+        w = self.window()
+        if hasattr(w, '_check_access_hub_permission'):
+            if w._check_access_hub_permission():
+                self._is_auth_blocked = False
+                if not self.cloud_sync_timer.isActive():
+                    self.cloud_sync_timer.start()
+                self.load_data()
+                return
+        QMessageBox.warning(self, "تنبيه الأمان", msg or "مركز بيانات Access محمي برمز مرور، يرجى اعتماد هذا الجهاز أولاً.")
+
     def _on_data_error(self, err):
         self.btn_refresh.setEnabled(True)
         self.btn_refresh.setText("🔄")
+        # منع ظهور النوافذ المنبثقة عند حدوث خطأ في الخلفية أثناء التواجد في شاشات أخرى
+        if not self.isVisible() or not getattr(self, "is_activated", False):
+            print(f"[AccessHub Background Error]: {err}")
+            return
         QMessageBox.warning(self, "تنبيه", f"تعذر استرجاع البيانات: {err}")
 
     def _on_file_combo_changed(self):
@@ -3076,6 +3156,8 @@ class AccessHubWidget(QWidget):
 
     def _start_background_sync(self, force=False):
         """بدء عملية فحص ومزامنة الطفرات السحابية في الخلفية بدون تجميد الواجهة"""
+        if not getattr(self, "is_activated", False) or getattr(self, "_is_auth_blocked", False):
+            return
         if self.sync_worker and self.sync_worker.isRunning():
             return
         self.sync_worker = CloudSyncWorker(force=force)
@@ -3084,7 +3166,7 @@ class AccessHubWidget(QWidget):
 
     def _on_sync_worker_finished(self, updated: bool):
         """عند اكتمال مزامنة الخلفية، إذا تم جلب قيود جديدة نقوم بتحديث الجدول فوراً"""
-        if updated:
+        if updated and getattr(self, "is_activated", False) and not getattr(self, "_is_auth_blocked", False):
             self.load_data()
 
     def _on_refresh_clicked_manual(self):

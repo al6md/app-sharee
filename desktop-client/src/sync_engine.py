@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 تبادل الملفات – File Exchange System
-محرك المزامنة الثنائي (Sync Engine) – الإصدار 4.0 المحكم
+محرك المزامنة الثنائي (Sync Engine) – الإصدار 5.0 المحكم
 
 مبادئ التصميم:
   • أولوية ذكية للملفات الصغيرة والمتوسطة أولاً (Small-Files-First Priority Queue) فلا يتأخر
@@ -182,6 +182,8 @@ class SyncEngine:
         self._watched_active_files = set()
         self._watched_active_baselines = {}
         self._watched_active_lock = threading.Lock()
+        self._upload_path_locks = {}
+        self._upload_path_locks_guard = threading.Lock()
         self._worker = None
         self.last_sync_ok = None
         self.last_sync_time = None
@@ -484,8 +486,8 @@ class SyncEngine:
                     return
             try:
                 cur_size = full_path.stat().st_size
-                with open(full_path, "rb") as f:
-                    f.read(1024)
+                if not OfficeHandler.can_read_shared(str(full_path)):
+                    raise PermissionError("File locked exclusively")
                 if cur_size == last_size and cur_size > 0:
                     stable_count += 1
                     if stable_count >= 2:
@@ -510,8 +512,18 @@ class SyncEngine:
             return
 
         _, st = self._find_state_normalized(rel)
-        if st and st.get("sha256_hash") == curr_hash and st.get("sync_status") == "synced":
+        if st and st.get("sha256_hash") == curr_hash and st.get("sync_status") == "synced" and st.get("remote_md5") == curr_hash:
             return
+
+        # تجنب إعادة الرفع إذا كانت النسخة السحابية مطابقة بالفعل للبصمة الحالية
+        try:
+            snap = self.client.peek_snapshot() if self.client and hasattr(self.client, "peek_snapshot") else None
+            snap_meta = snap.files.get(rel) if (snap and getattr(snap, "files", None)) else None
+            if snap_meta and snap_meta.get("md5Checksum") and snap_meta.get("md5Checksum").lower() == curr_hash.lower():
+                self._save_state(rel, curr_hash, curr_size, curr_mtime, snap_meta.get("id"), curr_hash, status="synced")
+                return
+        except Exception:
+            pass
 
         if not self._has_dept_perm(rel, "edit") and not self._has_dept_perm(rel, "upload"):
             _safe_log(f"[FastAutoSync] Skipped upload for {rel}: No permission")
@@ -596,6 +608,15 @@ class SyncEngine:
 
         threading.Thread(target=_monitor, daemon=True).start()
 
+    def _get_upload_path_lock(self, rel_path):
+        rk = norm_key(rel_path)
+        with self._upload_path_locks_guard:
+            lk = self._upload_path_locks.get(rk)
+            if lk is None:
+                lk = threading.Lock()
+                self._upload_path_locks[rk] = lk
+            return lk
+
     def sync_file_now(self, local_abs_path, rel_path=None, progress_callback=None):
         """
         رفع مباشر وفوري لملف واحد إلى سيرفر Share COC مع تحديث قاعدة البيانات المحلية فوراً.
@@ -618,75 +639,92 @@ class SyncEngine:
         if is_ignored_name(p.name):
             return True, {"ignored": True}
 
-        self.clear_tombstone(rel_path)
-        self.clear_self_op(rel_path)
+        with self._get_upload_path_lock(rel_path):
+            self.clear_tombstone(rel_path)
+            self.clear_self_op(rel_path)
 
-        try:
-            st_stat = p.stat()
-            size, mtime = st_stat.st_size, st_stat.st_mtime
-        except OSError as e:
-            return False, str(e)
+            try:
+                st_stat = p.stat()
+                size, mtime = st_stat.st_size, st_stat.st_mtime
+                curr_hash = self.calculate_hash(str(p))
+            except OSError as e:
+                return False, str(e)
 
-        matched_s_rel, existing_state = self._find_state_normalized(rel_path)
-        if matched_s_rel and matched_s_rel != rel_path:
-            self._upgrade_state_row(matched_s_rel, rel_path)
-        existing_id = existing_state.get("server_file_id") if existing_state else None
-        if existing_id and not str(existing_id).startswith("loc_"):
-            snap = self.client.peek_snapshot() if self.client and hasattr(self.client, "peek_snapshot") else None
-            snap_meta = snap.files.get(rel_path) if (snap and getattr(snap, "files", None)) else None
-            if snap_meta and snap_meta.get("id"):
-                existing_id = snap_meta.get("id")
-                self._upgrade_state_row(rel_path, rel_path, new_server_id=existing_id)
-            else:
-                existing_id = None
+            matched_s_rel, existing_state = self._find_state_normalized(rel_path)
+            if matched_s_rel and matched_s_rel != rel_path:
+                self._upgrade_state_row(matched_s_rel, rel_path)
+                _, existing_state = self._find_state_normalized(rel_path)
 
-        self._save_state(rel_path, "", size, mtime, existing_id, None, status="syncing")
-        self.notify_status({"event": "syncing", "file": rel_path, "status": "جارٍ الرفع المباشر إلى السحابة..."})
+            # منع تكرار الرفع المتزامن لنفس البصمة إذا تم رفعه للتو
+            if (
+                existing_state
+                and existing_state.get("sync_status") == "synced"
+                and existing_state.get("sha256_hash") == curr_hash
+                and existing_state.get("remote_md5") == curr_hash
+            ):
+                return True, {
+                    "id": existing_state.get("server_file_id"),
+                    "md5Checksum": curr_hash,
+                    "deduplicated": True,
+                }
 
-        last_notify_t = [0.0]
+            existing_id = existing_state.get("server_file_id") if existing_state else None
+            if existing_id and not str(existing_id).startswith("loc_"):
+                snap = self.client.peek_snapshot() if self.client and hasattr(self.client, "peek_snapshot") else None
+                snap_meta = snap.files.get(rel_path) if (snap and getattr(snap, "files", None)) else None
+                if snap_meta and snap_meta.get("id"):
+                    existing_id = snap_meta.get("id")
+                    self._upgrade_state_row(rel_path, rel_path, new_server_id=existing_id)
+                else:
+                    existing_id = None
 
-        def _on_chunk(done_bytes, total_bytes):
-            if callable(progress_callback):
-                progress_callback(done_bytes, total_bytes)
-            now_t = time.time()
-            if (now_t - last_notify_t[0]) >= 0.45 or done_bytes >= total_bytes:
-                last_notify_t[0] = now_t
-                pct = int(min(100, round((done_bytes / max(total_bytes, 1)) * 100)))
-                self.notify_status({"event": "syncing", "file": rel_path, "status": f"جارٍ الرفع السحابي ({pct}%)..."})
+            self._save_state(rel_path, "", size, mtime, existing_id, None, status="syncing")
+            self.notify_status({"event": "syncing", "file": rel_path, "status": "جارٍ الرفع المباشر إلى السحابة..."})
 
-        ok, meta = self.client.upload_file(
-            str(p),
-            rel_path=rel_path,
-            existing_id=existing_id,
-            user_name=self.username,
-            device_name=self.device_name,
-            progress_callback=_on_chunk,
-            is_priority=True,
-        )
+            last_notify_t = [0.0]
 
-        if ok and isinstance(meta, dict):
-            if meta.get("ignored"):
+            def _on_chunk(done_bytes, total_bytes):
+                if callable(progress_callback):
+                    progress_callback(done_bytes, total_bytes)
+                now_t = time.time()
+                if (now_t - last_notify_t[0]) >= 0.45 or done_bytes >= total_bytes:
+                    last_notify_t[0] = now_t
+                    pct = int(min(100, round((done_bytes / max(total_bytes, 1)) * 100)))
+                    self.notify_status({"event": "syncing", "file": rel_path, "status": f"جارٍ الرفع السحابي ({pct}%)..."})
+
+            ok, meta = self.client.upload_file(
+                str(p),
+                rel_path=rel_path,
+                existing_id=existing_id,
+                user_name=self.username,
+                device_name=self.device_name,
+                progress_callback=_on_chunk,
+                is_priority=True,
+            )
+
+            if ok and isinstance(meta, dict):
+                if meta.get("ignored"):
+                    return True, meta
+                try:
+                    st_after = p.stat()
+                    size, mtime = st_after.st_size, st_after.st_mtime
+                except OSError:
+                    pass
+                remote_md5 = meta.get("md5Checksum") or curr_hash
+                self._save_state(rel_path, remote_md5, size, mtime, meta.get("id"), remote_md5, status="synced")
+                self.notify_status({"event": "synced", "file": rel_path, "status": "تمت المزامنة السحابية بنجاح"})
+                try:
+                    from local_bridge import LocalBridgeHandler
+                    LocalBridgeHandler.last_sync_time = time.time()
+                    LocalBridgeHandler.last_synced_file = rel_path
+                except Exception:
+                    pass
                 return True, meta
-            try:
-                st_after = p.stat()
-                size, mtime = st_after.st_size, st_after.st_mtime
-            except OSError:
-                pass
-            remote_md5 = meta.get("md5Checksum") or self.calculate_hash(str(p))
-            self._save_state(rel_path, remote_md5, size, mtime, meta.get("id"), remote_md5, status="synced")
-            self.notify_status({"event": "synced", "file": rel_path, "status": "تمت المزامنة السحابية بنجاح"})
-            try:
-                from local_bridge import LocalBridgeHandler
-                LocalBridgeHandler.last_sync_time = time.time()
-                LocalBridgeHandler.last_synced_file = rel_path
-            except Exception:
-                pass
-            return True, meta
 
-        err_msg = str(meta) if meta else "فشل الرفع السحابي"
-        self._save_state(rel_path, "", size, mtime, existing_id, None, status="pending_upload")
-        self.notify_status({"event": "error", "file": rel_path, "status": f"تعذر الرفع الفوري – سيعاد تلقائياً"})
-        return False, err_msg
+            err_msg = str(meta) if meta else "فشل الرفع السحابي"
+            self._save_state(rel_path, "", size, mtime, existing_id, None, status="pending_upload")
+            self.notify_status({"event": "error", "file": rel_path, "status": f"تعذر الرفع الفوري – سيعاد تلقائياً"})
+            return False, err_msg
 
     def on_local_file_saved(self, filepath):
         try:
@@ -839,18 +877,20 @@ class SyncEngine:
                     
                     dl_ok, _ = self.client.download_file(fname or full_p.name, str(temp_path), storage_path=fid)
                     if dl_ok and temp_path.exists():
-                        applied = OfficeHandler.safe_apply_file(str(full_p), str(temp_path))
-                        if applied:
+                        apply_status = OfficeHandler.safe_apply_file_with_status(str(full_p), str(temp_path))
+                        if apply_status == "applied" and full_p.exists():
                             st_after = full_p.stat()
-                            self._save_state(rel, remote_md5, st_after.st_size, st_after.st_mtime, fid, remote_md5, status="synced")
-                            self.clear_self_op(rel)
-                            self.notify_status({"event": "synced", "file": rel, "status": "تم استلام أحدث نسخة معدلة"})
-                            try:
-                                from local_bridge import LocalBridgeHandler
-                                LocalBridgeHandler.last_sync_time = time.time()
-                                LocalBridgeHandler.last_synced_file = rel
-                            except Exception:
-                                pass
+                            actual_md5 = self.calculate_hash(str(full_p))
+                            if not remote_md5 or actual_md5 == remote_md5:
+                                self._save_state(rel, actual_md5, st_after.st_size, st_after.st_mtime, fid, remote_md5 or actual_md5, status="synced")
+                                self.notify_status({"event": "synced", "file": rel, "status": "تم استلام أحدث نسخة معدلة"})
+                                try:
+                                    from local_bridge import LocalBridgeHandler
+                                    LocalBridgeHandler.last_sync_time = time.time()
+                                    LocalBridgeHandler.last_synced_file = rel
+                                except Exception:
+                                    pass
+                        self.clear_self_op(rel)
             except Exception as e:
                 _safe_log(f"[DeltaPull Error]: {e}")
             finally:
@@ -911,11 +951,7 @@ class SyncEngine:
     # ------------------------------------------------------------------ #
     @staticmethod
     def calculate_hash(filepath):
-        md5 = hashlib.md5()
-        with open(filepath, 'rb') as f:
-            while chunk := f.read(1024 * 1024):
-                md5.update(chunk)
-        return md5.hexdigest()
+        return OfficeHandler.read_md5_shared(str(filepath))
 
     def _scan_local(self):
         files, dirs = {}, set()
@@ -957,12 +993,7 @@ class SyncEngine:
             lock = OfficeHandler.get_access_lock_file(str(p))
             if lock and lock.exists():
                 return False
-        try:
-            with open(p, "rb") as f:
-                f.read(1024)
-            return True
-        except (OSError, PermissionError):
-            return False
+        return OfficeHandler.can_read_shared(str(p))
 
     def _move_to_local_trash(self, rel, is_folder=False):
         src = self.sync_folder / rel
@@ -996,23 +1027,28 @@ class SyncEngine:
 
         ok, msg = self.client.download_file(rmeta["name"], str(temp_dest), storage_path=rmeta["id"], progress_callback=_on_dl_chunk)
         if ok and temp_dest.exists():
-            OfficeHandler.safe_apply_file(str(dest), str(temp_dest))
+            apply_status = OfficeHandler.safe_apply_file_with_status(str(dest), str(temp_dest))
             try:
                 temp_dest.unlink(missing_ok=True)
             except Exception:
                 pass
-            if dest.exists():
+            if apply_status == "applied" and dest.exists():
                 st = dest.stat()
-                md5 = rmeta.get("md5Checksum") or self.calculate_hash(str(dest))
-                self._save_state(rel, md5, st.st_size, st.st_mtime, rmeta["id"], rmeta.get("md5Checksum"))
-                self.notify_status({"event": "synced", "file": rel, "status": "محدث من السحابة"})
-                try:
-                    from local_bridge import LocalBridgeHandler
-                    LocalBridgeHandler.last_sync_time = time.time()
-                    LocalBridgeHandler.last_synced_file = rel
-                except Exception:
-                    pass
-                return True
+                actual_md5 = self.calculate_hash(str(dest))
+                expected_md5 = rmeta.get("md5Checksum") or actual_md5
+                if actual_md5 == expected_md5 or not rmeta.get("md5Checksum"):
+                    self._save_state(rel, actual_md5, st.st_size, st.st_mtime, rmeta["id"], expected_md5)
+                    self.clear_self_op(rel)
+                    self.notify_status({"event": "synced", "file": rel, "status": "محدث من السحابة"})
+                    try:
+                        from local_bridge import LocalBridgeHandler
+                        LocalBridgeHandler.last_sync_time = time.time()
+                        LocalBridgeHandler.last_synced_file = rel
+                    except Exception:
+                        pass
+                    return True
+            self.clear_self_op(rel)
+            return False
         _safe_log(f"[Download failed] {rel}: {msg}")
         try:
             if temp_dest.exists():
@@ -1057,7 +1093,7 @@ class SyncEngine:
             except Exception:
                 pass
             return True
-        self._save_state(rel, md5, info["size"], info["mtime"], existing_id, None, status="failed")
+        self._save_state(rel, "", info["size"], info["mtime"], existing_id, None, status="failed")
         return False
 
     def _conflict_name(self, rel):
