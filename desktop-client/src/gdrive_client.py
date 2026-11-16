@@ -17,8 +17,10 @@ import json
 import time
 import shutil
 import hashlib
+import tempfile
 import mimetypes
 import threading
+import unicodedata
 import urllib.parse
 from pathlib import Path
 
@@ -85,10 +87,11 @@ for _stream_name in ("stdout", "stderr"):
         except Exception:
             pass
 
+DEFAULT_SHARECOC_SERVER_URL = "https://share.162.35.16.252.sslip.io"
 SHARECOC_SERVER_URL = os.environ.get(
     "SHARECOC_SERVER_URL",
-    "https://share.162.35.16.252.sslip.io",
-).strip().rstrip("/")
+    DEFAULT_SHARECOC_SERVER_URL,
+).strip().rstrip("/") or DEFAULT_SHARECOC_SERVER_URL
 
 DEFAULT_ROOT_FOLDER_ID = "root"
 LEGACY_GENERAL_DEPT = "المجلد العام"
@@ -144,6 +147,11 @@ def norm_rel(path):
     return "" if p == "." else p
 
 
+def norm_key(path):
+    """توحيد مفتاح المقارنة عبر تطبيع Unicode NFC وتجاهل حالة الأحرف"""
+    return unicodedata.normalize("NFC", norm_rel(path)).lower()
+
+
 def _md5_file(file_path):
     h = hashlib.md5()
     with open(file_path, "rb") as f:
@@ -152,10 +160,37 @@ def _md5_file(file_path):
     return h.hexdigest()
 
 
-def load_gdrive_config():
-    """إرجاع تهيئة الاتصال بخادم Share COC المحلي (للتوافق مع بقية وحدات التطبيق)"""
+def _read_saved_server_url(state_mgr=None):
+    """قراءة رابط السيرفر المحفوظ في إعدادات التطبيق المحلية عند توفره"""
+    if state_mgr is not None and hasattr(state_mgr, "get_setting"):
+        try:
+            val = str(state_mgr.get_setting("server_url", "") or "").strip().rstrip("/")
+            if val.startswith(("http://", "https://")):
+                return val
+        except Exception:
+            pass
+    try:
+        db_path = Path(os.environ.get("APPDATA", ".")) / "FileExchange" / "local_state.db"
+        if db_path.is_file():
+            import sqlite3
+            with sqlite3.connect(str(db_path), timeout=2.0) as conn:
+                row = conn.execute("SELECT value FROM settings WHERE key = 'server_url'").fetchone()
+                if row and row[0]:
+                    val = str(row[0]).strip().rstrip("/")
+                    if val.startswith(("http://", "https://")):
+                        return val
+    except Exception:
+        pass
+    return ""
+
+
+def load_gdrive_config(state_mgr=None):
+    """إرجاع تهيئة الاتصال بخادم Share COC المحلي دون أي اعتماد على ملفات اعتماد خارجية"""
+    env_url = os.environ.get("SHARECOC_SERVER_URL", "").strip().rstrip("/")
+    saved_url = _read_saved_server_url(state_mgr=state_mgr) if not env_url else ""
+    server_url = env_url or saved_url or SHARECOC_SERVER_URL or DEFAULT_SHARECOC_SERVER_URL
     return {
-        "server_url": os.environ.get("SHARECOC_SERVER_URL", SHARECOC_SERVER_URL).strip().rstrip("/"),
+        "server_url": server_url,
         "folder_id": DEFAULT_ROOT_FOLDER_ID,
     }
 
@@ -179,8 +214,9 @@ CloudSnapshot = DriveSnapshot
 class GoogleDriveClient:
     """عميل التزامن الرسمي عبر خادم Share COC المستقل"""
 
-    def __init__(self, root_folder_id=None):
-        self.config = load_gdrive_config()
+    def __init__(self, root_folder_id=None, state_mgr=None):
+        self._state_mgr = state_mgr
+        self.config = load_gdrive_config(state_mgr=state_mgr)
         self.server_url = self.config.get("server_url") or SHARECOC_SERVER_URL
         self.root_folder_id = root_folder_id or DEFAULT_ROOT_FOLDER_ID
         self.sync_folder = None  # يُضبط من main.py لتحديد المسارات النسبية تلقائياً
@@ -225,8 +261,10 @@ class GoogleDriveClient:
             return path
         return f"{self.server_url}{path}"
 
-    def reload_config(self):
-        self.config = load_gdrive_config()
+    def reload_config(self, state_mgr=None):
+        if state_mgr is not None:
+            self._state_mgr = state_mgr
+        self.config = load_gdrive_config(state_mgr=getattr(self, "_state_mgr", None))
         self.server_url = self.config.get("server_url") or SHARECOC_SERVER_URL
         self._local.session = None
 
@@ -713,15 +751,18 @@ class GoogleDriveClient:
         if snap is None or not file_name:
             return None
         folder = norm_rel(folder) if folder and folder not in _GENERAL_FOLDER_ALIASES else None
+        name_k = norm_key(file_name)
+        folder_k = norm_key(folder) if folder is not None else None
         best = None
         for rel, item in snap.files.items():
-            if item.get("name") != file_name:
+            item_name = item.get("name") or ""
+            if item_name != file_name and norm_key(item_name) != name_k:
                 continue
             parent = rel.rsplit("/", 1)[0] if "/" in rel else ""
-            if folder is not None and parent == folder:
+            if folder is not None and (parent == folder or norm_key(parent) == folder_k):
                 best = (rel, item)
                 break
-            if best is None:
+            if best is None and folder is None:
                 best = (rel, item)
         if not best:
             return None
@@ -732,6 +773,7 @@ class GoogleDriveClient:
             "file_path": rel,
             "storage_path": item["id"],
             "file_size": int(item.get("size", 0) or 0),
+            "md5Checksum": item.get("md5Checksum") or "",
         }
 
     # ------------------------------------------------------------------ #
@@ -862,6 +904,148 @@ class GoogleDriveClient:
                 pass
         return Path(local_path).name
 
+    @staticmethod
+    def _create_temp_snapshot(src_path):
+        """إنشاء نسخة قراءة مؤقتة للملف عند قفله مؤقتاً أثناء الحفظ من برامج Office"""
+        src = Path(src_path)
+        tmp_fd, tmp_name = tempfile.mkstemp(prefix="sharecoc_snap_", suffix=src.suffix or ".tmp")
+        os.close(tmp_fd)
+        snap_path = Path(tmp_name)
+        try:
+            try:
+                shutil.copy2(str(src), str(snap_path))
+                return snap_path
+            except (PermissionError, OSError) as copy_err:
+                if sys.platform != "win32":
+                    raise copy_err
+                import ctypes
+                from ctypes import wintypes
+
+                kernel32 = ctypes.windll.kernel32
+                GENERIC_READ = 0x80000000
+                FILE_SHARE_ALL = 0x00000001 | 0x00000002 | 0x00000004
+                OPEN_EXISTING = 3
+                FILE_ATTRIBUTE_NORMAL = 0x00000080
+                INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+                kernel32.CreateFileW.argtypes = [
+                    wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                    wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE
+                ]
+                kernel32.CreateFileW.restype = wintypes.HANDLE
+
+                handle = kernel32.CreateFileW(
+                    str(src), GENERIC_READ, FILE_SHARE_ALL, None, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, None
+                )
+                if handle == INVALID_HANDLE_VALUE or not handle:
+                    raise copy_err
+                try:
+                    buf = ctypes.create_string_buffer(1024 * 1024)
+                    bytes_read = wintypes.DWORD(0)
+                    with open(snap_path, "wb") as out_f:
+                        while kernel32.ReadFile(handle, buf, len(buf), ctypes.byref(bytes_read), None):
+                            if bytes_read.value == 0:
+                                break
+                            out_f.write(buf.raw[:bytes_read.value])
+                finally:
+                    kernel32.CloseHandle(handle)
+                return snap_path
+        except Exception:
+            try:
+                snap_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            raise
+
+    def _upload_source_path(self, sess, source_path, fname, mime, total_size, parent_rel, is_priority, progress_callback):
+        """تنفيذ الرفع الفعلي من مسار قابل للقراءة (أصلي أو نسخة مؤقتة)"""
+        if total_size <= UPLOAD_CHUNK_SIZE:
+            with open(source_path, "rb") as fh:
+                resp = sess.post(
+                    self._api("/api/drive/files"),
+                    files={"file": (fname, fh, mime)},
+                    data={
+                        "fileName": fname,
+                        "folderId": self.root_folder_id,
+                        "folderPath": parent_rel,
+                    },
+                    timeout=TRANSFER_TIMEOUT,
+                )
+            resp.raise_for_status()
+            res_json = resp.json()
+            if not res_json.get("success"):
+                raise RuntimeError(res_json.get("error") or "Upload failed")
+            meta = res_json.get("file") or res_json
+            if callable(progress_callback):
+                try:
+                    progress_callback(total_size, total_size)
+                except Exception:
+                    pass
+            return meta
+
+        init_resp = sess.post(
+            self._api("/api/drive/files"),
+            json={
+                "action": "INIT_UPLOAD",
+                "fileName": fname,
+                "mimeType": mime,
+                "fileSize": total_size,
+                "folderId": self.root_folder_id,
+                "folderPath": parent_rel,
+            },
+            timeout=NETWORK_TIMEOUT,
+        )
+        init_resp.raise_for_status()
+        init_data = init_resp.json()
+        session_uri = init_data.get("sessionUri")
+        if not session_uri:
+            raise RuntimeError(init_data.get("error") or "Missing sessionUri")
+
+        meta = None
+        offset = 0
+        with open(source_path, "rb") as fh:
+            while offset < total_size:
+                if not is_priority and self._priority_uploads_active > 0:
+                    wait_start = time.time()
+                    while self._priority_uploads_active > 0 and (time.time() - wait_start < 120):
+                        time.sleep(0.25)
+
+                fh.seek(offset)
+                chunk_bytes = fh.read(UPLOAD_CHUNK_SIZE)
+                if not chunk_bytes:
+                    break
+                end = offset + len(chunk_bytes) - 1
+
+                chunk_resp = sess.post(
+                    self._api("/api/drive/files"),
+                    data={
+                        "action": "UPLOAD_CHUNK",
+                        "sessionUri": session_uri,
+                        "start": str(offset),
+                        "end": str(end),
+                        "total": str(total_size),
+                    },
+                    files={"chunk": (fname, chunk_bytes, "application/octet-stream")},
+                    timeout=TRANSFER_TIMEOUT,
+                )
+                chunk_resp.raise_for_status()
+                chunk_data = chunk_resp.json()
+                if not chunk_data.get("success"):
+                    raise RuntimeError(chunk_data.get("error") or "Chunk upload failed")
+
+                offset = end + 1
+                if callable(progress_callback):
+                    try:
+                        progress_callback(offset, total_size)
+                    except Exception:
+                        pass
+                if chunk_data.get("done") and chunk_data.get("file"):
+                    meta = chunk_data["file"]
+
+        if not meta:
+            raise RuntimeError("Chunked upload finished without file metadata")
+        return meta
+
     def upload_file(
         self,
         local_path,
@@ -874,7 +1058,7 @@ class GoogleDriveClient:
         progress_callback=None,
         **kwargs,
     ):
-        """رفع ملف مباشر (<= 8MB) أو مجزأ قابل للاستئناف (> 8MB) إلى خادم Share COC"""
+        """رفع ملف مباشر (<= 8MB) أو مجزأ قابل للاستئناف (> 8MB) إلى خادم Share COC مع معالجة أقفال Office"""
         if not self.is_configured():
             return False, "Service not configured"
         p = Path(local_path)
@@ -900,115 +1084,102 @@ class GoogleDriveClient:
 
         try:
             with self._path_lock(rel or fname):
+                temp_snap = None
                 try:
-                    total_size = p.stat().st_size
                     mime = mimetypes.guess_type(str(p))[0] or "application/octet-stream"
                     sess = self._get_session()
+                    source_path = p
+                    last_err = None
+                    max_lock_retries = 3
 
-                    if callable(progress_callback):
+                    for attempt in range(max_lock_retries + 1):
                         try:
-                            progress_callback(0, max(total_size, 1))
-                        except Exception:
-                            pass
+                            if attempt > 0 and temp_snap is None:
+                                time.sleep(0.15 * attempt)
+                                if attempt >= 2:
+                                    temp_snap = self._create_temp_snapshot(p)
+                                    source_path = temp_snap
 
-                    if total_size <= UPLOAD_CHUNK_SIZE:
-                        with open(p, "rb") as fh:
-                            resp = sess.post(
-                                self._api("/api/drive/files"),
-                                files={"file": (fname, fh, mime)},
-                                data={
-                                    "fileName": fname,
-                                    "folderId": self.root_folder_id,
-                                    "folderPath": parent_rel,
-                                },
-                                timeout=TRANSFER_TIMEOUT,
+                            total_size = source_path.stat().st_size
+                            if callable(progress_callback):
+                                try:
+                                    progress_callback(0, max(total_size, 1))
+                                except Exception:
+                                    pass
+
+                            meta = self._upload_source_path(
+                                sess=sess,
+                                source_path=source_path,
+                                fname=fname,
+                                mime=mime,
+                                total_size=total_size,
+                                parent_rel=parent_rel,
+                                is_priority=is_priority,
+                                progress_callback=progress_callback,
                             )
-                        resp.raise_for_status()
-                        res_json = resp.json()
-                        if not res_json.get("success"):
-                            raise RuntimeError(res_json.get("error") or "Upload failed")
-                        meta = res_json.get("file") or res_json
-                        if callable(progress_callback):
-                            try:
-                                progress_callback(total_size, total_size)
-                            except Exception:
-                                pass
-                    else:
-                        init_resp = sess.post(
-                            self._api("/api/drive/files"),
-                            json={
-                                "action": "INIT_UPLOAD",
-                                "fileName": fname,
-                                "mimeType": mime,
-                                "fileSize": total_size,
-                                "folderId": self.root_folder_id,
-                                "folderPath": parent_rel,
-                            },
-                            timeout=NETWORK_TIMEOUT,
-                        )
-                        init_resp.raise_for_status()
-                        init_data = init_resp.json()
-                        session_uri = init_data.get("sessionUri")
-                        if not session_uri:
-                            raise RuntimeError(init_data.get("error") or "Missing sessionUri")
 
-                        meta = None
-                        offset = 0
-                        with open(p, "rb") as fh:
-                            while offset < total_size:
-                                if not is_priority and self._priority_uploads_active > 0:
-                                    wait_start = time.time()
-                                    while self._priority_uploads_active > 0 and (time.time() - wait_start < 120):
-                                        time.sleep(0.25)
+                            if isinstance(meta, dict) and not meta.get("md5Checksum"):
+                                try:
+                                    meta["md5Checksum"] = _md5_file(source_path)
+                                except (PermissionError, OSError):
+                                    if temp_snap is None:
+                                        temp_snap = self._create_temp_snapshot(p)
+                                        source_path = temp_snap
+                                        meta["md5Checksum"] = _md5_file(source_path)
 
-                                fh.seek(offset)
-                                chunk_bytes = fh.read(UPLOAD_CHUNK_SIZE)
-                                if not chunk_bytes:
+                            _safe_log(f"[SHARECOC] Uploaded: {rel} ({total_size} bytes)")
+                            self.invalidate()
+                            return True, meta
+
+                        except requests.RequestException as req_err:
+                            last_err = req_err
+                            break
+                        except (PermissionError, OSError) as lock_err:
+                            last_err = lock_err
+                            _safe_log(f"[SHARECOC UPLOAD LOCK RETRY {attempt + 1}] {rel}: {lock_err}")
+                            if temp_snap is not None:
+                                break
+                            if attempt == max_lock_retries:
+                                try:
+                                    temp_snap = self._create_temp_snapshot(p)
+                                    source_path = temp_snap
+                                    total_size = source_path.stat().st_size
+                                    if callable(progress_callback):
+                                        try:
+                                            progress_callback(0, max(total_size, 1))
+                                        except Exception:
+                                            pass
+                                    meta = self._upload_source_path(
+                                        sess=sess,
+                                        source_path=source_path,
+                                        fname=fname,
+                                        mime=mime,
+                                        total_size=total_size,
+                                        parent_rel=parent_rel,
+                                        is_priority=is_priority,
+                                        progress_callback=progress_callback,
+                                    )
+                                    if isinstance(meta, dict) and not meta.get("md5Checksum"):
+                                        meta["md5Checksum"] = _md5_file(source_path)
+                                    _safe_log(f"[SHARECOC] Uploaded via snapshot: {rel} ({total_size} bytes)")
+                                    self.invalidate()
+                                    return True, meta
+                                except Exception as snap_err:
+                                    last_err = snap_err
                                     break
-                                end = offset + len(chunk_bytes) - 1
+                        except Exception as e:
+                            last_err = e
+                            break
 
-                                chunk_resp = sess.post(
-                                    self._api("/api/drive/files"),
-                                    data={
-                                        "action": "UPLOAD_CHUNK",
-                                        "sessionUri": session_uri,
-                                        "start": str(offset),
-                                        "end": str(end),
-                                        "total": str(total_size),
-                                    },
-                                    files={"chunk": (fname, chunk_bytes, "application/octet-stream")},
-                                    timeout=TRANSFER_TIMEOUT,
-                                )
-                                chunk_resp.raise_for_status()
-                                chunk_data = chunk_resp.json()
-                                if not chunk_data.get("success"):
-                                    raise RuntimeError(chunk_data.get("error") or "Chunk upload failed")
-
-                                offset = end + 1
-                                if callable(progress_callback):
-                                    try:
-                                        progress_callback(offset, total_size)
-                                    except Exception:
-                                        pass
-                                if chunk_data.get("done") and chunk_data.get("file"):
-                                    meta = chunk_data["file"]
-
-                        if not meta:
-                            raise RuntimeError("Chunked upload finished without file metadata")
-
-                    if isinstance(meta, dict) and not meta.get("md5Checksum"):
+                    self.last_error = str(last_err)
+                    _safe_log(f"[SHARECOC UPLOAD ERROR] {rel}: {last_err}")
+                    return False, str(last_err)
+                finally:
+                    if temp_snap is not None:
                         try:
-                            meta["md5Checksum"] = _md5_file(p)
+                            Path(temp_snap).unlink(missing_ok=True)
                         except Exception:
                             pass
-
-                    _safe_log(f"[SHARECOC] Uploaded: {rel} ({total_size} bytes)")
-                    self.invalidate()
-                    return True, meta
-                except Exception as e:
-                    self.last_error = str(e)
-                    _safe_log(f"[SHARECOC UPLOAD ERROR] {rel}: {e}")
-                    return False, str(e)
         finally:
             if is_priority:
                 self._priority_uploads_active = max(0, self._priority_uploads_active - 1)
@@ -1112,8 +1283,13 @@ class GoogleDriveClient:
         if snap is not None:
             if rel_path in snap.files:
                 return snap.files[rel_path]["id"]
+            rk = norm_key(rel_path)
             for f_rel, meta in snap.files.items():
-                if meta.get("name") == rel_path or f_rel.endswith("/" + rel_path):
+                if norm_key(f_rel) == rk:
+                    return meta.get("id")
+            for f_rel, meta in snap.files.items():
+                fname = meta.get("name") or ""
+                if fname == rel_path or f_rel.endswith("/" + rel_path) or norm_key(fname) == rk or norm_key(f_rel).endswith("/" + rk):
                     return meta.get("id")
         return None
 

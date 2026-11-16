@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-خدمة المزامنة السحابية لـ Google Drive
+خدمة المزامنة السحابية لـ سيرفر Share COC
 تستخدم GoogleDriveClient الموحد مع دعم كامل للمجلدات الفرعية المتداخلة
 """
 import sys

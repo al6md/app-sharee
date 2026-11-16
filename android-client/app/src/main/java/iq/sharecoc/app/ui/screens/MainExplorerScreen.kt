@@ -74,7 +74,7 @@ fun MainExplorerScreen(viewModel: DriveViewModel) {
             }
             val mime = contentResolver.getType(uri) ?: AppConfig.getMimeForExtension(tempFile.extension)
             viewModel.uploadFile(tempFile, mime) {
-                Toast.makeText(context, "تم رفع الملف إلى Google Drive بنجاح", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "تم رفع الملف إلى سيرفر Share COC بنجاح", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -99,7 +99,7 @@ fun MainExplorerScreen(viewModel: DriveViewModel) {
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = if (isAuthorized) "🟢 سحابة Google Drive متصلة" else "🟡 الجهاز بانتظار الاعتماد",
+                                text = if (isAuthorized) "🟢 سيرفر Share COC متصل" else "🟡 الجهاز بانتظار الاعتماد",
                                 color = TextMuted,
                                 fontSize = 11.sp
                             )
@@ -266,7 +266,7 @@ fun MainExplorerScreen(viewModel: DriveViewModel) {
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = if (isDl) "جارٍ تنزيل $fileName..." else "جارٍ رفع $fileName إلى Drive...",
+                            text = if (isDl) "جارٍ تنزيل $fileName..." else "جارٍ رفع $fileName إلى سيرفر Share COC...",
                             color = AccentGold,
                             fontSize = 12.sp
                         )
@@ -476,7 +476,7 @@ fun MainExplorerScreen(viewModel: DriveViewModel) {
     if (showNewFolderDialog) {
         AlertDialog(
             onDismissRequest = { showNewFolderDialog = false },
-            title = { Text("إنشاء مجلد جديد في Google Drive", color = AccentGold) },
+            title = { Text("إنشاء مجلد جديد في سيرفر Share COC", color = AccentGold) },
             text = {
                 OutlinedTextField(
                     value = newFolderNameInput,

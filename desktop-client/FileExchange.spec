@@ -12,7 +12,6 @@ a = Analysis(
     binaries=[],
     datas=[
         ('assets', 'assets'),
-        ('gdrive_credentials.json', '.'),
         (certifi.where(), 'certifi'),
     ],
     hiddenimports=[
@@ -30,7 +29,6 @@ a = Analysis(
         'theme',
         'access_hub_widget',
         'local_bridge',
-        'supabase_client',
         'sync_engine',
         'offline_queue',
         'office_handler',

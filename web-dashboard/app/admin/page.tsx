@@ -472,7 +472,7 @@ export default function AdminControlPage() {
           size: formatSize(f.size || 0),
           rawSize: f.size || 0,
           version: 1,
-          lastModifiedBy: 'سحابة Google Drive',
+          lastModifiedBy: 'سيرفر Share COC المركزي',
           lastModifiedAt: f.modifiedTime
             ? new Date(f.modifiedTime).toLocaleDateString('ar-IQ', {
                 month: 'short',
@@ -1212,7 +1212,7 @@ export default function AdminControlPage() {
       notifyLocalDesktopSync();
 
       setToastMessage({
-        text: `🎉 تم إنشاء القسم "${deptName}" بنجاح ومزامنته مع سحابة Google Drive وتطبيق الحاسوب!`,
+        text: `🎉 تم إنشاء القسم "${deptName}" بنجاح ومزامنته مع سيرفر Share COC المركزي وتطبيق الحاسوب!`,
         type: 'success',
       });
     } catch (err: any) {
@@ -3182,7 +3182,7 @@ export default function AdminControlPage() {
                     تغيير اسم المستخدم وكلمة المرور للوحة الأدمن
                   </h3>
                   <p className="text-sm text-slate-500 mt-0.5">
-                    يتم حفظ اليوزر والباسورد الجديد في سحابة Google Drive فوراً ليعملا على جميع المتصفحات والأجهزة.
+                    يتم حفظ اليوزر والباسورد الجديد في سيرفر Share COC المركزي فوراً ليعملا على جميع المتصفحات والأجهزة.
                   </p>
                 </div>
               </div>
@@ -3314,7 +3314,7 @@ export default function AdminControlPage() {
                 </div>
               </div>
               <p className="text-xs text-slate-500 leading-relaxed">
-                💡 ملاحظة أمنية: يتم تشفير وحفظ بيانات الدخول في ملف الإعدادات المركزي داخل Google Drive لضمان عمل نفس اليوزر والباسورد عند فتح لوحة الأدمن من أي حاسوب أو هاتف.
+                💡 ملاحظة أمنية: يتم تشفير وحفظ بيانات الدخول في ملف الإعدادات المركزي داخل سيرفر Share COC المركزي لضمان عمل نفس اليوزر والباسورد عند فتح لوحة الأدمن من أي حاسوب أو هاتف.
               </p>
             </div>
           </div>
@@ -3744,7 +3744,7 @@ export default function AdminControlPage() {
           <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 shadow-xl">
             <h3 className="font-black text-base text-slate-900">إضافة قسم إداري جديد</h3>
             <p className="text-sm text-slate-600">
-              سيتم إنشاء مجلد جديد في Google Drive ومزامنته فوراً مع أجهزة الموظفين في الغرفة.
+              سيتم إنشاء مجلد جديد في سيرفر Share COC المركزي ومزامنته فوراً مع أجهزة الموظفين في الغرفة.
             </p>
 
             <div className="space-y-3">
@@ -3909,7 +3909,7 @@ export default function AdminControlPage() {
                     <span className="text-[#0f6cbd]">{selectedPermDept.folderName}</span>
                   </h3>
                   <p className="text-xs text-slate-600 mt-0.5">
-                    يتم حفظ التعديلات مباشرة في سحابة Google Drive وتطبق فوراً على منصة الويب وتطبيق سطح المكتب.
+                    يتم حفظ التعديلات مباشرة في سيرفر Share COC المركزي وتطبق فوراً على منصة الويب وتطبيق سطح المكتب.
                   </p>
                 </div>
               </div>

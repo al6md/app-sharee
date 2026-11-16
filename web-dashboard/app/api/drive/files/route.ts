@@ -227,6 +227,8 @@ export async function POST(req: NextRequest) {
         const result = await batchPermanentDeleteDriveItems(Array.isArray(body.ids) ? body.ids : []);
         return NextResponse.json({ success: true, ...result });
       }
+
+      return NextResponse.json({ success: false, error: 'Unsupported JSON action' }, { status: 400 });
     }
 
     // رفع ملف أو جزء من ملف (FormData)

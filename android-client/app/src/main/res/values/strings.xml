@@ -1,7 +1,7 @@
 <resources>
     <string name="app_name">Share COC</string>
     <string name="app_full_title">منظومة تبادل وأرشفة مستندات غرفة تجارة كربلاء المقدسة</string>
-    <string name="status_synced">🟢 متزامن مع Google Drive</string>
+    <string name="status_synced">🟢 متزامن مع سيرفر Share COC</string>
     <string name="status_syncing">🟡 جارٍ المزامنة والرفع...</string>
     <string name="status_offline">⏳ بدون اتصال (طابور الحفظ المحلي)</string>
     <string name="status_locked">🔒 محجوز حصرياً</string>

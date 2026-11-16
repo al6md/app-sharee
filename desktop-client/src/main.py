@@ -95,11 +95,8 @@ sys.excepthook = _global_exception_handler
 if hasattr(threading, 'excepthook'):
     threading.excepthook = _thread_exception_handler
 
-from PyQt6.QtWidgets import (
-    QApplication, QDialog, QVBoxLayout,
-    QLabel, QLineEdit, QPushButton, QMessageBox
-)
-from PyQt6.QtCore import Qt, qInstallMessageHandler, QtMsgType
+from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtCore import qInstallMessageHandler, QtMsgType
 
 def _qt_message_handler(msg_type, context, message):
     if msg_type in (QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg):
@@ -107,117 +104,190 @@ def _qt_message_handler(msg_type, context, message):
 
 qInstallMessageHandler(_qt_message_handler)
 
-from supabase_client import SupabaseClient
-from gdrive_client import GoogleDriveClient
+from gdrive_client import GoogleDriveClient, _md5_file, norm_key, norm_rel
 from offline_queue import LocalStateManager
 from sync_engine import SyncEngine
 from gui import FileExchangeMainWindow
 from local_bridge import start_local_bridge
 
 
-def get_machine_guid():
-    """الحصول على الرقم التعريفي الفريد لجهاز الويندوز (Machine GUID)"""
+def _parse_sharecoc_target(raw_target):
+    """تحليل رابط sharecoc:// أو اسم الملف واستخراج معاملات الفتح بما فيها md5 الاختياري"""
+    import urllib.parse
+    raw = str(raw_target or "").strip(' "\'')
+    target_action = "open"
+    target_file = ""
+    target_folder = ""
+    target_storage_path = ""
+    target_md5 = ""
+
+    if raw.lower().startswith("sharecoc:"):
+        url_to_parse = raw
+        if not url_to_parse.lower().startswith("sharecoc://"):
+            url_to_parse = "sharecoc://" + url_to_parse.split(":", 1)[1].lstrip("/")
+        url_to_parse = url_to_parse.rstrip("/")
+        parsed = urllib.parse.urlparse(url_to_parse)
+        target_action = parsed.netloc.lower() if parsed.netloc else "open"
+        qs = urllib.parse.parse_qs(parsed.query)
+        target_file = qs.get("file", [""])[0].strip()
+        target_folder = qs.get("folder", [""])[0].strip()
+        target_storage_path = qs.get("storage_path", [""])[0].strip()
+        target_md5 = qs.get("md5", [""])[0].strip()
+    else:
+        target_file = raw
+
+    return {
+        "action": target_action,
+        "file": urllib.parse.unquote(target_file).strip(' "\'').rstrip('/\\'),
+        "folder": urllib.parse.unquote(target_folder).strip(' "\'').rstrip('/\\'),
+        "storage_path": urllib.parse.unquote(target_storage_path).strip(' "\''),
+        "md5": urllib.parse.unquote(target_md5).strip(' "\'').lower(),
+    }
+
+
+def _find_cli_local_candidate(sync_folder, target_file, target_folder="", clean_bidi_fn=None):
+    """البحث المحلي عن الملف مع تطبيع Unicode NFC وتجاهل حالة الأحرف وعلامات الاتجاه"""
+    import re
+    sync_root = Path(sync_folder)
+    if clean_bidi_fn is None:
+        clean_bidi_fn = lambda s: re.sub(r'[​-‏‪-‮⁦-⁩﻿]', '', str(s)).strip()
+
+    clean_file = clean_bidi_fn(target_file)
+    norm_sub = target_folder.replace("\\", "/").strip("/") if target_folder and target_folder not in ('__ALL__', 'المجلد العام', 'القسم العام') else ""
+    clean_sub = "/".join(clean_bidi_fn(p) for p in norm_sub.split("/") if p) if norm_sub else ""
+
+    candidates = []
+    if norm_sub:
+        candidates.extend([
+            sync_root / norm_sub / target_file,
+            sync_root / clean_sub / clean_file,
+            sync_root / norm_sub / clean_file,
+        ])
+    candidates.extend([
+        sync_root / target_file,
+        sync_root / clean_file,
+    ])
+    for c in candidates:
+        if c.exists() and c.is_file():
+            return c, norm_sub
+
+    expected_rel = norm_key(f"{clean_sub}/{clean_file}" if clean_sub else clean_file)
+    expected_name = norm_key(clean_file)
+    if sync_root.exists():
+        first_name_match = None
+        for sub in sync_root.rglob("*"):
+            if not sub.is_file():
+                continue
+            if any(part.startswith(".") for part in sub.relative_to(sync_root).parts):
+                continue
+            rel_str = norm_rel(sub.relative_to(sync_root))
+            clean_rel_k = norm_key(clean_bidi_fn(rel_str))
+            if clean_rel_k == expected_rel or norm_key(rel_str) == expected_rel:
+                return sub, norm_sub
+            if first_name_match is None and norm_key(clean_bidi_fn(sub.name)) == expected_name:
+                first_name_match = sub
+        if first_name_match is not None:
+            return first_name_match, norm_sub
+
+    return None, norm_sub
+
+
+def _resolve_and_prepare_open_target(
+    sync_folder,
+    target_file,
+    target_folder="",
+    target_storage_path="",
+    expected_md5="",
+    client=None,
+    state_mgr=None,
+):
+    """
+    التحقق من حداثة النسخة المحلية مقارنة بالخادم (عبر md5 وميتاداتا الخادم) قبل فتح أي ملف
+    عبر سطر الأوامر، وتنزيل أحدث نسخة أولاً إذا كانت النسخة المحلية متأخرة وكان الخادم متاحاً.
+    """
+    import re
+    sync_root = Path(sync_folder)
+    sync_root.mkdir(parents=True, exist_ok=True)
+    clean_bidi = lambda s: re.sub(r'[​-‏‪-‮⁦-⁩﻿]', '', str(s)).strip()
+    clean_file = clean_bidi(target_file)
+    target_cand, norm_sub = _find_cli_local_candidate(sync_root, target_file, target_folder, clean_bidi)
+
+    from office_handler import OfficeHandler
+    g_client = client if client is not None else GoogleDriveClient(state_mgr=state_mgr)
+
+    remote_meta = None
+    remote_rel = None
+    snap = None
     try:
-        import winreg
-        key = winreg.HKEY_LOCAL_MACHINE
-        sub_key = r"SOFTWARE\Microsoft\Cryptography"
-        with winreg.OpenKey(key, sub_key, 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as k:
-            guid, _ = winreg.QueryValueEx(k, "MachineGuid")
-            return guid
+        if g_client and g_client.is_configured():
+            snap = g_client.snapshot(force=True, max_age=0)
     except Exception:
-        return str(uuid.getnode())
+        snap = None
 
+    if snap and getattr(snap, "files", None):
+        sp = str(target_storage_path or "").strip()
+        if sp and sp in getattr(snap, "file_ids", {}):
+            remote_rel = snap.file_ids[sp]
+            remote_meta = snap.files.get(remote_rel)
+        if not remote_meta:
+            rel_guess = f"{norm_sub}/{clean_file}" if norm_sub else clean_file
+            rk = norm_key(rel_guess)
+            for r_rel, rmeta in snap.files.items():
+                if norm_key(r_rel) == rk:
+                    remote_rel = r_rel
+                    remote_meta = rmeta
+                    break
+        if not remote_meta and not norm_sub:
+            fn_k = norm_key(clean_file)
+            for r_rel, rmeta in snap.files.items():
+                if norm_key(rmeta.get("name", "")) == fn_k:
+                    remote_rel = r_rel
+                    remote_meta = rmeta
+                    break
 
-class LoginDialog(QDialog):
-    def __init__(self, state_mgr):
-        super().__init__()
-        self.state_mgr = state_mgr
-        self.supabase_client = None
-        self.device_info = None
+    server_md5 = str((remote_meta or {}).get("md5Checksum") or "").strip().lower()
+    want_md5 = server_md5 or str(expected_md5 or "").strip().lower()
+    effective_sp = str((remote_meta or {}).get("id") or target_storage_path or "").strip()
 
-        self.setWindowTitle("تسجيل الدخول وربط السحابة – تبادل الملفات")
-        self.resize(440, 340)
-        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+    need_download = target_cand is None
+    if target_cand is not None and want_md5:
+        try:
+            local_md5 = _md5_file(str(target_cand)).lower()
+            if local_md5 != want_md5:
+                need_download = True
+        except OSError:
+            need_download = True
 
-        self.setStyleSheet("""
-            QDialog { background-color: #f8fafc; font-family: 'Segoe UI', 'Cairo', Tahoma; }
-            QLabel { font-size: 13px; color: #0f172a; font-weight: 600; }
-            QLineEdit {
-                background-color: #ffffff; border: 1.5px solid #cbd5e1; border-radius: 8px;
-                padding: 10px 14px; font-size: 13px; color: #0f172a;
-            }
-            QLineEdit:focus { border: 2px solid #4f46e5; }
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #4f46e5, stop:1 #6366f1);
-                color: white; border-radius: 8px; padding: 11px; font-weight: 800; font-size: 13px; border: none;
-            }
-            QPushButton:hover { background: #4338ca; }
-        """)
+    if need_download and g_client and g_client.is_configured():
+        try:
+            if remote_rel:
+                dest_path = sync_root / remote_rel
+            elif target_cand is not None:
+                dest_path = target_cand
+            else:
+                target_sub_dir = (sync_root / norm_sub) if norm_sub else sync_root
+                dest_path = target_sub_dir / clean_file
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
 
-        layout = QVBoxLayout(self)
-        layout.setSpacing(12)
-        layout.addWidget(QLabel("🔑 ربط جهاز الويندوز بحساب المؤسسة السحابي"))
+            temp_dir = sync_root / ".sync_temp"
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            temp_path = temp_dir / f"cli_dl_{int(time.time() * 1000)}_{dest_path.name}.tmp"
+            try:
+                res = g_client.download_file(clean_file, str(temp_path), storage_path=effective_sp)
+                success = res[0] if isinstance(res, tuple) else bool(res)
+                if success and temp_path.exists():
+                    if OfficeHandler.safe_apply_file(str(dest_path), str(temp_path)):
+                        target_cand = dest_path
+            finally:
+                if temp_path.exists():
+                    try:
+                        temp_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+        except Exception as dl_err:
+            _safe_log_err(f"[CLI Download Error]: {dl_err}")
 
-        saved_url = self.state_mgr.get_setting("supabase_url", "")
-        saved_key = self.state_mgr.get_setting("supabase_key", "")
-        saved_email = self.state_mgr.get_setting("user_email", "")
-
-        layout.addWidget(QLabel("عنوان الخادم السحابي (Supabase URL):"))
-        self.txt_url = QLineEdit(saved_url)
-        self.txt_url.setPlaceholderText("https://your-project-id.supabase.co")
-        layout.addWidget(self.txt_url)
-
-        layout.addWidget(QLabel("المفتاح العام للمشروع (Anon Public Key):"))
-        self.txt_key = QLineEdit(saved_key)
-        self.txt_key.setPlaceholderText("eyJhbGciOi...")
-        layout.addWidget(self.txt_key)
-
-        layout.addWidget(QLabel("البريد الإلكتروني للمستخدم:"))
-        self.txt_email = QLineEdit(saved_email)
-        layout.addWidget(self.txt_email)
-
-        layout.addWidget(QLabel("كلمة المرور:"))
-        self.txt_pass = QLineEdit()
-        self.txt_pass.setEchoMode(QLineEdit.EchoMode.Password)
-        layout.addWidget(self.txt_pass)
-
-        layout.addWidget(QLabel("اسم هذا الجهاز (مثال: محاسبة-جهاز-1):"))
-        default_dev_name = os.environ.get('COMPUTERNAME', 'جهاز-ويندوز')
-        self.txt_device = QLineEdit(default_dev_name)
-        layout.addWidget(self.txt_device)
-
-        btn_login = QPushButton("تسجيل الدخول وبدء المزامنة")
-        btn_login.clicked.connect(self._do_login)
-        layout.addWidget(btn_login)
-
-    def _do_login(self):
-        url = self.txt_url.text().strip()
-        key = self.txt_key.text().strip()
-        email = self.txt_email.text().strip()
-        pwd = self.txt_pass.text().strip()
-        dev_name = self.txt_device.text().strip()
-
-        if not all([url, key, email, pwd, dev_name]):
-            QMessageBox.warning(self, "تنبيه", "يرجى تعبئة كافة الحقول المطلوبة.")
-            return
-
-        client = SupabaseClient(url, key)
-        success, msg = client.sign_in(email, pwd)
-        if not success:
-            QMessageBox.critical(self, "خطأ في تسجيل الدخول", msg)
-            return
-
-        guid = get_machine_guid()
-        _, dev_data = client.register_or_verify_device(dev_name, guid)
-
-        self.state_mgr.set_setting("supabase_url", url)
-        self.state_mgr.set_setting("supabase_key", key)
-        self.state_mgr.set_setting("user_email", email)
-        self.state_mgr.set_setting("device_name", dev_name)
-
-        self.supabase_client = client
-        self.device_info = dev_data
-        self.accept()
+    return target_cand
 
 
 def ensure_desktop_shortcut():
@@ -359,34 +429,16 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == '--open':
         _safe_log_err(f'[CLI ARGV RECEIVED]: {sys.argv}')
         raw_target = sys.argv[2] if len(sys.argv) > 2 else ""
-        target_file = ""
-        target_folder = ""
-        target_storage_path = ""
-
-        raw_target = raw_target.strip(' "\'')
-        target_action = "open"
-        if raw_target.lower().startswith("sharecoc:"):
-            import urllib.parse
-            url_to_parse = raw_target
-            if not url_to_parse.lower().startswith("sharecoc://"):
-                url_to_parse = "sharecoc://" + url_to_parse.split(":", 1)[1].lstrip("/")
-            url_to_parse = url_to_parse.rstrip('/')
-            parsed = urllib.parse.urlparse(url_to_parse)
-            target_action = parsed.netloc.lower() if parsed.netloc else "open"
-            qs = urllib.parse.parse_qs(parsed.query)
-            target_file = qs.get('file', [''])[0].strip()
-            target_folder = qs.get('folder', [''])[0].strip()
-            target_storage_path = qs.get('storage_path', [''])[0].strip()
-        else:
-            target_file = raw_target.strip()
-
-        import urllib.parse
-        target_file = urllib.parse.unquote(target_file).strip(' "\'').rstrip('/\\')
-        target_folder = urllib.parse.unquote(target_folder).strip(' "\'').rstrip('/\\')
-        target_storage_path = urllib.parse.unquote(target_storage_path).strip(' "\'')
+        parsed_target = _parse_sharecoc_target(raw_target)
+        target_action = parsed_target["action"]
+        target_file = parsed_target["file"]
+        target_folder = parsed_target["folder"]
+        target_storage_path = parsed_target["storage_path"]
+        target_md5 = parsed_target["md5"]
 
         if target_file:
             import re
+            import urllib.parse
             def clean_bidi(s):
                 return re.sub(r'[​-‏‪-‮⁦-⁩﻿]', '', str(s)).strip()
 
@@ -402,58 +454,31 @@ def main():
                     f"&folder={urllib.parse.quote(target_folder)}"
                     f"&storage_path={urllib.parse.quote(target_storage_path)}"
                 )
+                if target_md5:
+                    bridge_url += f"&md5={urllib.parse.quote(target_md5)}"
                 with opener.open(bridge_url, timeout=4.0) as req:
                     if req.status == 200:
                         sys.exit(0)
             except Exception as bridge_err:
                 _safe_log_err(f"[CLI Bridge Forward Notice]: {bridge_err}")
 
-            # 2. إذا لم يستجب الجسر، فحصه محلياً في مجلد FileExchangeShared
+            # 2. إذا لم يستجب الجسر، فحصه محلياً والتحقق من حداثته أمام الخادم ثم تنزيل الأحدث عند الحاجة
             sync_folder = Path(os.environ.get('USERPROFILE', 'C:')) / "FileExchangeShared"
             from office_handler import OfficeHandler
 
-            norm_sub = target_folder.replace("\\", "/").strip("/") if target_folder and target_folder not in ('__ALL__', 'المجلد العام', 'القسم العام') else ""
-            clean_sub = "/".join(clean_bidi(p) for p in norm_sub.split("/")) if norm_sub else ""
-            candidates = []
-            if norm_sub:
-                candidates.extend([
-                    sync_folder / norm_sub / target_file,
-                    sync_folder / clean_sub / clean_target_file,
-                    sync_folder / norm_sub / clean_target_file
-                ])
-            candidates.extend([
-                sync_folder / target_file,
-                sync_folder / clean_target_file
-            ])
-
-            target_cand = None
-            for c in candidates:
-                if c.exists() and c.is_file():
-                    target_cand = c
-                    break
-
-            if not target_cand:
-                target_lower = clean_target_file.lower()
-                for sub in sync_folder.rglob("*"):
-                    if sub.is_file() and ".trash" not in sub.parts:
-                        if sub.name == target_file or clean_bidi(sub.name).lower() == target_lower:
-                            target_cand = sub
-                            break
-
-            # 3. إذا لم يكن موجوداً على القرص، تنزيله فوراً من السحابة
-            if not target_cand:
-                try:
-                    target_sub_dir = sync_folder / norm_sub if norm_sub else sync_folder
-                    target_sub_dir.mkdir(parents=True, exist_ok=True)
-                    dest_path = target_sub_dir / target_file
-
-                    g_client = GoogleDriveClient()
-                    res = g_client.download_file(target_file, str(dest_path), storage_path=target_storage_path)
-                    success = res[0] if isinstance(res, tuple) else bool(res)
-                    if success and dest_path.exists():
-                        target_cand = dest_path
-                except Exception as dl_err:
-                    print(f"[CLI Download Error]: {dl_err}")
+            cli_state_mgr = None
+            try:
+                cli_state_mgr = LocalStateManager()
+            except Exception:
+                pass
+            target_cand = _resolve_and_prepare_open_target(
+                sync_folder=sync_folder,
+                target_file=target_file,
+                target_folder=target_folder,
+                target_storage_path=target_storage_path,
+                expected_md5=target_md5,
+                state_mgr=cli_state_mgr,
+            )
 
             if target_cand and target_cand.exists():
                 OfficeHandler.open_native_file(str(target_cand), synchronous=True)
@@ -585,7 +610,7 @@ def main():
     sync_folder.mkdir(parents=True, exist_ok=True)
 
     state_mgr = LocalStateManager()
-    cloud_client = GoogleDriveClient()
+    cloud_client = GoogleDriveClient(state_mgr=state_mgr)
     cloud_client.sync_folder = sync_folder
 
     device_id = str(uuid.uuid4())

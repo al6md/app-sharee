@@ -305,7 +305,7 @@ class ImagePreviewDialog(QDialog):
 class CloudUploadWorker(QThread):
     """
     عامل رفع ومزامنة سحابي يعمل في خيط مستقل (QThread) لمنع أي تجميد للواجهة،
-    ينسخ المستندات محلياً ثم يرفعها مباشرة إلى Google Drive على دفعات (Chunks)
+    ينسخ المستندات محلياً ثم يرفعها مباشرة إلى سيرفر Share COC على دفعات (Chunks)
     مع بث نسبة التقدم الفعلية وحفظ معرف السحابة في قاعدة البيانات فوراً.
     """
     progress_signal = pyqtSignal(int, str)
@@ -360,7 +360,7 @@ class CloudUploadWorker(QThread):
             except Exception as e:
                 failed_names.append(f"{dest_path.name} ({e})")
         self.local_copy_done.emit()
-        # 3. إنشاء المجلدات السحابية أولاً في Google Drive
+        # 3. إنشاء المجلدات السحابية أولاً في سيرفر Share COC
         if self.cloud_client and self.cloud_client.is_configured():
             for rel_folder in self.folders_to_create:
                 if self.is_cancelled:
@@ -370,7 +370,7 @@ class CloudUploadWorker(QThread):
                     self.cloud_client.ensure_folder(rel_folder)
                 except Exception:
                     pass
-        # 4. رفع الملفات مباشرة إلى Google Drive بأقصى سرعة تدفق (Streaming)
+        # 4. رفع الملفات مباشرة إلى سيرفر Share COC بأقصى سرعة تدفق (Streaming)
         prepared_tasks.sort(key=lambda item: item[2])
         total_bytes_all = sum(max(1, item[2]) for item in prepared_tasks)
         uploaded_bytes_so_far = 0
@@ -1358,7 +1358,7 @@ class FileExchangeMainWindow(QMainWindow):
         sc_layout.addWidget(sc_desc)
         self.btn_sidebar_sync = QPushButton("⚡ مزامنة فورية الآن")
         self.btn_sidebar_sync.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self.btn_sidebar_sync.setToolTip("بدء مزامنة فورية مع سحابة Google Drive وكافة الأجهزة")
+        self.btn_sidebar_sync.setToolTip("بدء مزامنة فورية مع سيرفر Share COC وكافة الأجهزة")
         self.btn_sidebar_sync.setStyleSheet("""
             QPushButton {
                 background: #14372e;
@@ -1956,7 +1956,7 @@ class FileExchangeMainWindow(QMainWindow):
         self.lbl_watcher.setStyleSheet("color: #14372e;")
         status_layout.addWidget(self.lbl_watcher)
         status_layout.addWidget(QLabel(" • "))
-        self.lbl_cloud_info = QLabel("Google Drive")
+        self.lbl_cloud_info = QLabel("سيرفر Share COC")
         self.lbl_cloud_info.setFont(QFont("Segoe UI", 9))
         self.lbl_cloud_info.setStyleSheet("color: #667085;")
         status_layout.addWidget(self.lbl_cloud_info)
@@ -2121,8 +2121,8 @@ class FileExchangeMainWindow(QMainWindow):
             return card, v_lbl
         c1, self.lbl_sync_card_status = _make_stat_card(
             "☁️ حالة الربط السحابي",
-            "متصل ومؤمّن (Google Drive API v3)",
-            "رفع مجزأ ذكي (512KB Chunks) مع استئناف تلقائي",
+            "متصل ومؤمّن (سيرفر Share COC)",
+            "رفع مجزأ ذكي مع استئناف تلقائي",
             "#0d8a55"
         )
         c2, self.lbl_sync_card_watcher = _make_stat_card(
@@ -2379,27 +2379,36 @@ class FileExchangeMainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "تنبيه", f"حدث خطأ أثناء تحديث الاختصارات:\n{e}")
     def _run_cloud_diagnostics(self):
-        """فحص الاتصال الفعلي مع Google Drive وقياس سرعة الاستجابة"""
+        """فحص الاتصال الفعلي مع سيرفر Share COC وقياس سرعة الاستجابة"""
         if not self.client or not self.client.is_configured():
-            QMessageBox.warning(self, "فحص الاتصال السحابي", "⚠️ خدمة Google Drive غير مهيأة حالياً.")
+            QMessageBox.warning(self, "فحص الاتصال السحابي", "⚠️ خدمة سيرفر Share COC غير مهيأة حالياً.")
             return
         t0 = time.time()
         try:
             snap = self.client.snapshot(force=True)
             elapsed_ms = int((time.time() - t0) * 1000)
-            num_files = len(snap.files) if snap else 0
-            num_folders = max(0, len(snap.folders) - 1) if snap else 0
+            if snap is None:
+                err = getattr(self.client, "last_error", "") or "تعذر الوصول إلى الخادم"
+                QMessageBox.critical(
+                    self,
+                    "خطأ في الاتصال السحابي",
+                    f"❌ تعذر الاتصال بـ سيرفر Share COC:\n{err}"
+                )
+                return
+            num_files = len(snap.files)
+            num_folders = max(0, len(snap.folders) - 1)
             QMessageBox.information(
                 self,
                 "نتيجة فحص الاتصال السحابي",
-                f"✅ الاتصال بسحابة Google Drive ممتاز ونشط!\n\n"
+                f"✅ الاتصال بـ سيرفر Share COC ممتاز ونشط!\n\n"
+                f"• رابط السيرفر: {getattr(self.client, 'server_url', 'https://share.162.35.16.252.sslip.io')}\n"
                 f"• زمن الاستجابة (Latency): {elapsed_ms} ملي ثانية\n"
                 f"• إجمالي المجلدات السحابية: {num_folders} مجلد\n"
                 f"• إجمالي المستندات السحابية: {num_files} مستند\n"
-                f"• محرك الرفع السريع (Streaming 16MB): مفعّل وبأقصى سرعة"
+                f"• محرك الرفع السريع (Streaming): مفعّل وبأقصى سرعة"
             )
         except Exception as e:
-            QMessageBox.critical(self, "خطأ في الاتصال السحابي", f"❌ تعذر الاتصال بـ Google Drive:\n{e}")
+            QMessageBox.critical(self, "خطأ في الاتصال السحابي", f"❌ تعذر الاتصال بـ سيرفر Share COC:\n{e}")
     def _open_system_log_file(self):
         log_file = Path(os.environ.get("APPDATA", Path.home())) / "FileExchange" / "share_coc.log"
         if log_file.exists():
@@ -2746,8 +2755,9 @@ class FileExchangeMainWindow(QMainWindow):
         # التحقق المباشر عبر السحابة لضمان دقة الرمز وتسجيل الجهاز فورياً
         try:
             import requests
+            base_url = getattr(self.client, "server_url", "https://share.162.35.16.252.sslip.io") or "https://share.162.35.16.252.sslip.io"
             r = requests.post(
-                "https://share.162.35.16.252.sslip.io/api/drive/permissions",
+                f"{base_url.rstrip('/')}/api/drive/permissions",
                 json={
                     "action": "REGISTER_ACCESS_HUB_DEVICE",
                     "username": ent_u,
@@ -2893,7 +2903,7 @@ class FileExchangeMainWindow(QMainWindow):
                                 return False
                         # حفظ دائم على القرص المحلي لعدم طلب الرمز مرة أخرى إطلاقاً
                         self._save_persistent_unlocked_dept(target_dept)
-                        # تسجيل واعتماد الجهاز سحابياً في لوحة تحكم الأدمن في Google Drive
+                        # تسجيل واعتماد الجهاز سحابياً في لوحة تحكم الأدمن في سيرفر Share COC
                         rule.setdefault('authorized_devices', [])
                         if my_guid not in rule['authorized_devices']:
                             rule['authorized_devices'].append(my_guid)
@@ -2915,11 +2925,12 @@ class FileExchangeMainWindow(QMainWindow):
                         # المزامنة المباشرة عبر API الويب لضمان تسجيل وظهور الجهاز في لوحة الأدمن للأبد
                         entered_user = ent_u if dept_user else ""
                         entered_pass = ent_p if dept_user else clean_entered
+                        base_url = getattr(self.client, "server_url", "https://share.162.35.16.252.sslip.io") or "https://share.162.35.16.252.sslip.io"
                         def _sync_dept_reg_to_web():
                             try:
                                 import requests
                                 requests.post(
-                                    "https://share.162.35.16.252.sslip.io/api/drive/permissions",
+                                    f"{base_url.rstrip('/')}/api/drive/permissions",
                                     json={
                                         "action": "REGISTER_DEPARTMENT_DEVICE",
                                         "departmentName": target_dept,
@@ -4049,7 +4060,7 @@ class FileExchangeMainWindow(QMainWindow):
                 item_type='file', dept_name=target_dept or ''
             )
             self.selected_rel_paths.discard(actual_rel)
-            # تسجيل شاهد الحذف + تنفيذ الحذف المباشر من Google Drive فوراً بالمعرف السحابي
+            # تسجيل شاهد الحذف + تنفيذ الحذف المباشر من سيرفر Share COC فوراً بالمعرف السحابي
             if self.sync_engine and hasattr(self.sync_engine, 'note_local_delete'):
                 self.sync_engine.note_local_delete(actual_rel, is_folder=False)
             if self.client and self.client.is_configured():
@@ -4287,7 +4298,7 @@ class FileExchangeMainWindow(QMainWindow):
                     pass
         cmb_dept.currentIndexChanged.connect(lambda _: _populate_subfolders())
         _populate_subfolders()
-        hint = QLabel("💡 سيتم نقل العناصر المختارة على جهازك وفي سحابة Google Drive وباقي المنصات فوراً.")
+        hint = QLabel("💡 سيتم نقل العناصر المختارة على جهازك وفي سيرفر Share COC وباقي المنصات فوراً.")
         hint.setFont(QFont("Cairo", 9))
         hint.setStyleSheet("color: #64748b;")
         layout.addWidget(hint)
@@ -4476,7 +4487,7 @@ class FileExchangeMainWindow(QMainWindow):
         layout.addLayout(btn_row)
         dialog.exec()
     def _trigger_cloud_trash_fetch(self):
-        """جلب الملفات المحذوفة في سحابة Google Drive في خيط خلفي لدمجها مع سلة المحذوفات"""
+        """جلب الملفات المحذوفة في سيرفر Share COC في خيط خلفي لدمجها مع سلة المحذوفات"""
         if getattr(self, '_cloud_trash_fetching', False):
             return
         if not self.client or not self.client.is_configured() or not hasattr(self.client, 'list_deleted_files'):
@@ -5200,7 +5211,7 @@ class FileExchangeMainWindow(QMainWindow):
                 self._cloud_refreshing = False
         threading.Thread(target=_worker, daemon=True).start()
     def _background_scan_worker(self, scan_dept, scan_subpath, force_now, force_cloud=True):
-        """فحص شجرة السحابة الرسمية مباشرة من Google Drive لتوحيد العرض بين الويب وسطح المكتب"""
+        """فحص شجرة السحابة الرسمية مباشرة من سيرفر Share COC لتوحيد العرض بين الويب وسطح المكتب"""
         try:
             from gdrive_client import is_ignored_name
             cloud_snap = None
@@ -6442,7 +6453,7 @@ class FileExchangeMainWindow(QMainWindow):
                     QMessageBox.information(
                         self,
                         "اكتمل الرفع والمزامنة السحابية بنجاح ✅",
-                        f"✅ تم رفع وتخزين ({cloud_ok} من أصل {total_cnt}) مستند {item_label} في السحابة (Google Drive) بنجاح.\n\n"
+                        f"✅ تم رفع وتخزين ({cloud_ok} من أصل {total_cnt}) مستند {item_label} في سيرفر Share COC بنجاح.\n\n"
                         f"المستندات متاحة الآن فوراً على جميع الأجهزة ومنصة الويب."
                     )
                 else:
@@ -6528,10 +6539,11 @@ class FileExchangeMainWindow(QMainWindow):
             item_label=f"ضمن مجلد '{src_dir.name}'"
         )
     def _open_cloud_settings(self):
-        """نافذة إعدادات الربط السحابي (للإدارة فقط)"""
+        """نافذة إعدادات سيرفر Share COC"""
+        from gdrive_client import DEFAULT_SHARECOC_SERVER_URL, _ensure_valid_ca_bundle
         dialog = QDialog(self)
-        dialog.setWindowTitle("إعدادات الربط السحابي (الإدارة)")
-        dialog.resize(480, 360)
+        dialog.setWindowTitle("إعدادات سيرفر Share COC")
+        dialog.resize(480, 290)
         dialog.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         dialog.setStyleSheet("""
             QDialog { background-color: #f8fafc; font-family: 'Segoe UI', Tahoma; }
@@ -6547,35 +6559,75 @@ class FileExchangeMainWindow(QMainWindow):
         """)
         layout = QVBoxLayout(dialog)
         layout.setSpacing(12)
-        layout.addWidget(QLabel("إعدادات الربط السحابي لغرفة تجارة كربلاء المقدسة"))
-        cur_url = self.state_mgr.get_setting("supabase_url", "https://bjcillpivgcntzbwmpsm.supabase.co")
-        cur_key = self.state_mgr.get_setting("supabase_key", "sb_publishable_Bfk1klLDNsLWKHvdRhWqNg_XoDqqJ6X")
-        layout.addWidget(QLabel("رابط الخادم السحابي:"))
+        layout.addWidget(QLabel("إعدادات الاتصال بسيرفر Share COC لغرفة تجارة كربلاء المقدسة"))
+
+        fallback_url = getattr(self.client, "server_url", DEFAULT_SHARECOC_SERVER_URL) or DEFAULT_SHARECOC_SERVER_URL
+        cur_url = self.state_mgr.get_setting("server_url", fallback_url) or DEFAULT_SHARECOC_SERVER_URL
+        layout.addWidget(QLabel("رابط سيرفر Share COC (Server URL):"))
         txt_url = QLineEdit(cur_url)
+        txt_url.setPlaceholderText(DEFAULT_SHARECOC_SERVER_URL)
         layout.addWidget(txt_url)
-        layout.addWidget(QLabel("مفتاح المشروع العام (Publishable Key):"))
-        txt_key = QLineEdit(cur_key)
-        layout.addWidget(txt_key)
-        btn_save = QPushButton("حفظ الإعدادات")
+
+        btn_save = QPushButton("💾 حفظ إعدادات السيرفر")
+        btn_save.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         def save():
-            self.state_mgr.set_setting("supabase_url", txt_url.text().strip())
-            self.state_mgr.set_setting("supabase_key", txt_key.text().strip())
-            QMessageBox.information(dialog, "تم الحفظ", "تم حفظ الإعدادات السحابية بنجاح.")
+            new_url = txt_url.text().strip().rstrip("/") or DEFAULT_SHARECOC_SERVER_URL
+            if not new_url.startswith(("http://", "https://")):
+                QMessageBox.warning(dialog, "تنبيه", "يجب أن يبدأ رابط السيرفر بـ https:// أو http://")
+                return
+            self.state_mgr.set_setting("server_url", new_url)
+            if self.client and hasattr(self.client, "reload_config"):
+                self.client.reload_config(state_mgr=self.state_mgr)
+                if hasattr(self.client, "invalidate"):
+                    self.client.invalidate()
+            if self.sync_engine and hasattr(self.sync_engine, "wake"):
+                self.sync_engine.wake(delay=0.2)
+            QMessageBox.information(dialog, "تم الحفظ", f"تم حفظ رابط سيرفر Share COC بنجاح:\n{new_url}")
             dialog.accept()
         btn_save.clicked.connect(save)
         layout.addWidget(btn_save)
-        btn_renew_gdrive = QPushButton("🔑 تجديد تفويض ورمز Google Drive السحابي")
-        btn_renew_gdrive.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        btn_renew_gdrive.setStyleSheet("background: #027A48; color: white; border-radius: 8px; padding: 10px; font-weight: bold; font-family: 'IBM Plex Sans Arabic', 'Cairo';")
-        def on_launch_renew():
-            import subprocess
-            renew_script = Path(__file__).resolve().parent.parent.parent / "scripts" / "renew_cloud_gui.py"
-            if renew_script.exists():
-                subprocess.Popen([sys.executable, str(renew_script)])
-            else:
-                QMessageBox.information(dialog, "تجديد التفويض", "يرجى تشغيل أداة تجديد التفويض السحابي من مجلد scripts.")
-        btn_renew_gdrive.clicked.connect(on_launch_renew)
-        layout.addWidget(btn_renew_gdrive)
+
+        btn_test_server = QPushButton("🔌 اختبار الاتصال بالسيرفر")
+        btn_test_server.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn_test_server.setStyleSheet("background: #027A48; color: white; border-radius: 8px; padding: 10px; font-weight: bold; font-family: 'IBM Plex Sans Arabic', 'Cairo';")
+        def on_test_server():
+            import requests
+            test_url = txt_url.text().strip().rstrip("/") or DEFAULT_SHARECOC_SERVER_URL
+            if not test_url.startswith(("http://", "https://")):
+                QMessageBox.warning(dialog, "تنبيه", "يرجى إدخال رابط صحيح يبدأ بـ https:// أو http://")
+                return
+            t0 = time.time()
+            try:
+                resp = requests.get(
+                    f"{test_url}/api/drive/files",
+                    params={"changes": "1"},
+                    headers={"x-admin-role": "admin", "User-Agent": "ShareCOC-Desktop/5.0"},
+                    verify=_ensure_valid_ca_bundle(),
+                    timeout=8,
+                )
+                elapsed_ms = int((time.time() - t0) * 1000)
+                if resp.status_code == 200:
+                    QMessageBox.information(
+                        dialog,
+                        "نجح الاتصال بالسيرفر",
+                        f"✅ تم الاتصال بسيرفر Share COC بنجاح!\n\n"
+                        f"• الرابط: {test_url}\n"
+                        f"• زمن الاستجابة: {elapsed_ms} ملي ثانية"
+                    )
+                else:
+                    QMessageBox.warning(
+                        dialog,
+                        "استجابة غير متوقعة",
+                        f"⚠️ استجاب السيرفر برمز الحالة {resp.status_code}\n({test_url})"
+                    )
+            except Exception as err:
+                QMessageBox.critical(
+                    dialog,
+                    "فشل الاتصال بالسيرفر",
+                    f"❌ تعذر الاتصال بسيرفر Share COC:\n{test_url}\n\n{err}"
+                )
+        btn_test_server.clicked.connect(on_test_server)
+        layout.addWidget(btn_test_server)
         dialog.exec()
     def handle_sync_update(self, data):
         is_transient = isinstance(data, dict) and data.get('event') == 'syncing'

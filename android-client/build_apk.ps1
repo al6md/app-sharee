@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 
 Write-Host "========================================================" -ForegroundColor Cyan
-Write-Host "  Building Share COC Android App (Google Drive)" -ForegroundColor Yellow
+Write-Host "  Building Share COC Android App (Share COC Server)" -ForegroundColor Yellow
 Write-Host "========================================================" -ForegroundColor Cyan
 
 $env:JAVA_HOME = "C:\Users\tohiba\.android_build_tools\jdk-17.0.12+7"
@@ -16,6 +16,10 @@ Set-Location "$PSScriptRoot"
 
 Write-Host "[2/3] Compiling and packaging APK..." -ForegroundColor Green
 & $gradleBat assembleDebug --no-daemon --stacktrace
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[!] Gradle build failed with exit code $LASTEXITCODE." -ForegroundColor Red
+    exit $LASTEXITCODE
+}
 
 $apkPath = "$PSScriptRoot\app\build\outputs\apk\debug\app-debug.apk"
 if (Test-Path $apkPath) {
@@ -27,4 +31,5 @@ if (Test-Path $apkPath) {
     Write-Host "========================================================" -ForegroundColor Green
 } else {
     Write-Host "[!] APK file not found after build." -ForegroundColor Red
+    exit 1
 }

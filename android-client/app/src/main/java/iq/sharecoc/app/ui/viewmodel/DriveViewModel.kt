@@ -89,7 +89,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
             _isLoading.value = true
             _errorMessage.value = null
             try {
-                // 1. التحقق من الجهاز وتسجيله في سحابة Google Drive
+                // 1. التحقق من الجهاز وتسجيله في سيرفر Share COC
                 val isAuth = DeviceUuidManager.verifyAndRegisterDevice(getApplication())
                 _isDeviceAuthorized.value = isAuth
 
@@ -101,7 +101,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
                 loadFolderItems(currentFolderId)
             } catch (e: Exception) {
                 Log.e(TAG, "خطأ التهيئة: ${e.message}", e)
-                _errorMessage.value = e.localizedMessage ?: "فشل الاتصال بسحابة Google Drive"
+                _errorMessage.value = e.localizedMessage ?: "فشل الاتصال بسيرفر Share COC"
             } finally {
                 _isLoading.value = false
             }
@@ -169,7 +169,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     fun downloadFile(item: DriveItem, onComplete: (File) -> Unit) {
         viewModelScope.launch {
             val context = getApplication<Application>()
-            val targetFile = File(context.cacheDir, "gdrive_${item.id}_${item.name}")
+            val targetFile = File(context.cacheDir, "sharecoc_${item.id}_${item.name}")
 
             _activeDownloadProgress.value = Pair(item.id, 0f)
             try {
@@ -186,7 +186,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * رفع ملف جديد أو ممسوح ضوئياً إلى Google Drive
+     * رفع ملف جديد أو ممسوح ضوئياً إلى سيرفر Share COC
      */
     fun uploadFile(file: File, mimeType: String, onUploaded: (DriveItem) -> Unit) {
         viewModelScope.launch {
@@ -346,20 +346,20 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * مزامنة التعديل فوراً مع Google Drive
+     * مزامنة التعديل فوراً مع سيرفر Share COC
      */
     fun syncWatchedFileNow(item: DriveItem, file: File, currentMtime: Long = file.lastModified()) {
         if (_isAutoSyncing.value) return
         viewModelScope.launch {
             _isAutoSyncing.value = true
-            _autoSyncStatus.value = "⚡ تم رصد حفظ المستند! جارٍ المزامنة السحابية الفورية..."
+            _autoSyncStatus.value = "⚡ تم رصد حفظ المستند! جارٍ المزامنة الفورية مع سيرفر Share COC..."
             try {
                 val ext = file.extension.lowercase()
                 val mime = AppConfig.getMimeForExtension(ext)
                 apiClient.updateFileContent(item.id, file, mime)
                 watchedFileInitialMtime = currentMtime
                 _autoSyncCount.value += 1
-                _autoSyncStatus.value = "🟢 تمت المزامنة التلقائية بنجاح مع Google Drive!"
+                _autoSyncStatus.value = "🟢 تمت المزامنة التلقائية بنجاح مع سيرفر Share COC!"
                 loadFolderItems(currentFolderId)
             } catch (e: Exception) {
                 Log.e(TAG, "خطأ المزامنة التلقائية: ${e.message}", e)

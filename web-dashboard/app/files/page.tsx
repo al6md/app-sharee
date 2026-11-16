@@ -69,6 +69,7 @@ interface FileItem {
   previewUrl?: string;
   downloadUrl?: string;
   modifiedTime?: string;
+  md5Checksum?: string;
 }
 
 interface DepartmentPermConfig {
@@ -472,6 +473,9 @@ export default function FilesPage() {
   const [autoSyncCount, setAutoSyncCount] = useState<number>(0);
   const [isAutoSyncing, setIsAutoSyncing] = useState<boolean>(false);
   const liveWatcherIntervalRef = useRef<any>(null);
+  const bridgeBootTimerRef = useRef<any>(null);
+  const bridgePollTokenRef = useRef<number>(0);
+  const watcherSessionRef = useRef<number>(0);
   const activeFileHandleRef = useRef<any>(null);
   const lastObservedMtimeRef = useRef<number>(0);
   const isAutoSyncRunningRef = useRef<boolean>(false);
@@ -839,6 +843,7 @@ export default function FilesPage() {
           previewUrl: f.previewUrl,
           downloadUrl: f.downloadUrl,
           modifiedTime: f.modifiedTime,
+          md5Checksum: f.md5Checksum,
         }));
         setFiles(mapped);
       } else {
@@ -945,6 +950,9 @@ export default function FilesPage() {
     return () => {
       if (bridgeInterval) clearInterval(bridgeInterval);
       if (liveWatcherIntervalRef.current) clearInterval(liveWatcherIntervalRef.current);
+      if (bridgeBootTimerRef.current) clearTimeout(bridgeBootTimerRef.current);
+      bridgePollTokenRef.current = 0;
+      watcherSessionRef.current += 1;
       clearInterval(cloudInterval);
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisibilityChange);
@@ -1277,6 +1285,12 @@ export default function FilesPage() {
   // محرك مراقبة التعديلات اللحظية والمزامنة التلقائية فور الحفظ (Live Auto-Sync Engine)
   // ========================================================
   const stopWatching = () => {
+    watcherSessionRef.current += 1;
+    bridgePollTokenRef.current += 1;
+    if (bridgeBootTimerRef.current) {
+      clearTimeout(bridgeBootTimerRef.current);
+      bridgeBootTimerRef.current = null;
+    }
     if (liveWatcherIntervalRef.current) {
       clearInterval(liveWatcherIntervalRef.current);
       liveWatcherIntervalRef.current = null;
@@ -1290,9 +1304,56 @@ export default function FilesPage() {
     setIsAutoSyncing(false);
   };
 
+  const markLiveFileSynced = (watched: FileItem) => {
+    setAutoSyncCount(prev => prev + 1);
+    const timeStr = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+    setMicroSyncInfo({
+      status: 'synced',
+      fileName: watched.name,
+      lastSyncedTime: timeStr,
+      message: `تم حفظ ومزامنة "${watched.name}" بنجاح في ${timeStr}`
+    });
+    setToastMessage({
+      text: `🎉 تم حفظ وتحديث "${watched.name}" ومزامنته سحابياً فورياً!`,
+      type: 'success'
+    });
+    setTimeout(() => {
+      setMicroSyncInfo(prev => {
+        if (prev.fileName === watched.name && prev.status === 'synced') {
+          return { status: 'idle', fileName: watched.name, lastSyncedTime: timeStr, message: 'السحابة متزامنة تلقائياً' };
+        }
+        return prev;
+      });
+    }, 7000);
+  };
+
+  const matchesWatchedFile = (syncedFileRaw: unknown, watched: FileItem): boolean => {
+    if (typeof syncedFileRaw !== 'string' || !syncedFileRaw.trim()) return false;
+    const stripBidi = (s: string) => s.replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, '').trim();
+    const syncedNorm = stripBidi(syncedFileRaw)
+      .replace(/\\/g, '/')
+      .replace(/^\/+/, '')
+      .normalize('NFC')
+      .toLowerCase();
+    const cleanFolder =
+      watched.folder && !['__ALL__', 'القسم العام', 'المجلد العام'].includes(watched.folder)
+        ? stripBidi(watched.folder)
+            .replace(/\\/g, '/')
+            .replace(/^\/+|\/+$/g, '')
+            .normalize('NFC')
+            .toLowerCase()
+        : '';
+    const fileNameNorm = stripBidi(watched.name).normalize('NFC').toLowerCase();
+    const expectedRel = cleanFolder ? `${cleanFolder}/${fileNameNorm}` : fileNameNorm;
+    if (syncedNorm === expectedRel) return true;
+    if (!syncedNorm.includes('/') && syncedNorm === fileNameNorm) return true;
+    return false;
+  };
+
   // 1. مراقبة التعديلات اللحظية عبر جسر تطبيق الحاسوب (Port 18290)
   const startLiveBridgeWatcher = async (file: FileItem) => {
     stopWatching();
+    const sessionId = watcherSessionRef.current;
     setActiveWatchedFile(file);
     setActiveWatchedSource('bridge');
     setAutoSyncCount(0);
@@ -1303,82 +1364,122 @@ export default function FilesPage() {
       message: `مراقبة حفظ "${file.name}" نشطة تلقائياً`
     });
 
-    // استعلام مبدئي لتحديد وقت التعديل الأساسي
-    try {
-      const res = await fetch(`http://127.0.0.1:18290/file-status?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}`, {
-        mode: 'cors',
-        cache: 'no-store',
-        signal: AbortSignal.timeout(1200)
-      });
-      if (res.ok) {
-        const info = await res.json();
-        lastObservedMtimeRef.current = Number(info.mtime || 0);
-      }
-    } catch {
-      lastObservedMtimeRef.current = Date.now() / 1000;
-    }
+    const fileStatusUrl = `http://127.0.0.1:18290/file-status?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}&storage_path=${encodeURIComponent(file.storagePath || file.id || '')}`;
+    let hasCapturedBaseline = false;
+    let lastObservedSyncTime = 0;
+    let pollInFlight = false;
 
-    // بدء حلقة المراقبة فائقة التردد (كل 600 ميلي ثانية)
-    liveWatcherIntervalRef.current = setInterval(async () => {
-      if (isAutoSyncRunningRef.current) return;
+    const pollBridgeFileStatus = async () => {
+      if (watcherSessionRef.current !== sessionId) return;
+      if (isAutoSyncRunningRef.current || pollInFlight) return;
+      pollInFlight = true;
       try {
-        const res = await fetch(`http://127.0.0.1:18290/file-status?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}`, {
+        const res = await fetch(fileStatusUrl, {
           mode: 'cors',
           cache: 'no-store',
           signal: AbortSignal.timeout(1000)
         });
-        if (res.ok) {
-          const info = await res.json();
-          const currentMtime = Number(info.mtime || 0);
+        if (!res.ok || watcherSessionRef.current !== sessionId) return;
 
-          // تم تعديل وحفظ الملف محلياً بـ Ctrl+S!
-          if (currentMtime > 0 && lastObservedMtimeRef.current > 0 && currentMtime > lastObservedMtimeRef.current) {
-            isAutoSyncRunningRef.current = true;
+        const data = await res.json();
+        if (watcherSessionRef.current !== sessionId) return;
+
+        // انتظار اكتمال التنزيل والفتح ووجود الملف فعلياً قبل التقاط initialMtime لمنع إعادة الرفع الكاذبة
+        if (data.downloading || data.opening || !data.exists) {
+          return;
+        }
+
+        const currentMtime = Number(data.mtime || 0);
+        const bridgeSyncTs = Number(data.last_sync_time || 0);
+
+        if (!hasCapturedBaseline) {
+          if (currentMtime > 0) {
             lastObservedMtimeRef.current = currentMtime;
-            setIsAutoSyncing(true);
-            setMicroSyncInfo({
-              status: 'syncing',
-              fileName: file.name,
-              message: `جاري مزامنة "${file.name}" مع السحابة...`
-            });
+            lastObservedSyncTime = bridgeSyncTs;
+            hasCapturedBaseline = true;
+          }
+          return;
+        }
 
-            // مهلة 400ms لفك مقبض أوفيس ثم طلب مزامنة الجسر وتحديث السحابة
-            setTimeout(async () => {
+        // تم تعديل وحفظ الملف محلياً بـ Ctrl+S!
+        if (currentMtime > 0 && lastObservedMtimeRef.current > 0 && currentMtime > lastObservedMtimeRef.current) {
+          isAutoSyncRunningRef.current = true;
+          lastObservedMtimeRef.current = currentMtime;
+          if (bridgeSyncTs > lastObservedSyncTime) {
+            lastObservedSyncTime = bridgeSyncTs;
+          }
+          setIsAutoSyncing(true);
+          setMicroSyncInfo({
+            status: 'syncing',
+            fileName: file.name,
+            message: `جاري مزامنة "${file.name}" مع السحابة...`
+          });
+
+          // مهلة 500ms لفك مقبض أوفيس ثم طلب مزامنة الجسر وتحديث السحابة
+          setTimeout(async () => {
+            if (watcherSessionRef.current !== sessionId) return;
+            try {
+              await fetch(`http://127.0.0.1:18290/sync?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}`, { mode: 'cors' }).catch(() => {});
+              await new Promise(r => setTimeout(r, 900));
+              if (watcherSessionRef.current !== sessionId) return;
               try {
-                await fetch(`http://127.0.0.1:18290/sync?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}`, { mode: 'cors' }).catch(() => {});
-                await new Promise(r => setTimeout(r, 900));
-                await loadData(true, true);
-                setAutoSyncCount(prev => prev + 1);
-                const timeStr = new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
-                setMicroSyncInfo({
-                  status: 'synced',
-                  fileName: file.name,
-                  lastSyncedTime: timeStr,
-                  message: `تم حفظ ومزامنة "${file.name}" بنجاح في ${timeStr}`
+                const postSyncRes = await fetch(fileStatusUrl, {
+                  mode: 'cors',
+                  cache: 'no-store',
+                  signal: AbortSignal.timeout(800)
                 });
-                setToastMessage({
-                  text: `🎉 تم حفظ وتحديث "${file.name}" ومزامنته سحابياً فورياً!`,
-                  type: 'success'
-                });
-                setTimeout(() => {
-                  setMicroSyncInfo(prev => {
-                    if (prev.fileName === file.name && prev.status === 'synced') {
-                      return { status: 'idle', fileName: file.name, lastSyncedTime: timeStr, message: 'السحابة متزامنة تلقائياً' };
-                    }
-                    return prev;
-                  });
-                }, 7000);
-              } finally {
+                if (postSyncRes.ok) {
+                  const postInfo = await postSyncRes.json();
+                  const postSyncTs = Number(postInfo.last_sync_time || 0);
+                  const postMtime = Number(postInfo.mtime || 0);
+                  if (postSyncTs > lastObservedSyncTime) lastObservedSyncTime = postSyncTs;
+                  if (postMtime > lastObservedMtimeRef.current) lastObservedMtimeRef.current = postMtime;
+                }
+              } catch {
+                // تجاهل فشل القراءة اللاحقة
+              }
+              await loadData(true, true);
+              if (watcherSessionRef.current !== sessionId) return;
+              markLiveFileSynced(file);
+            } finally {
+              if (watcherSessionRef.current === sessionId) {
                 setIsAutoSyncing(false);
                 isAutoSyncRunningRef.current = false;
               }
-            }, 500);
+            }
+          }, 500);
+          return;
+        }
+
+        // التحقق من تطابق last_synced_file مع الملف المراقَب قبل اعتبار ارتفاع last_sync_time مزامنةً لهذا الملف
+        if (bridgeSyncTs > 0 && bridgeSyncTs > lastObservedSyncTime) {
+          lastObservedSyncTime = bridgeSyncTs;
+          if (matchesWatchedFile(data.last_synced_file, file)) {
+            isAutoSyncRunningRef.current = true;
+            try {
+              await loadData(true, true);
+              if (watcherSessionRef.current !== sessionId) return;
+              markLiveFileSynced(file);
+            } finally {
+              if (watcherSessionRef.current === sessionId) {
+                isAutoSyncRunningRef.current = false;
+              }
+            }
           }
         }
       } catch {
         // الجسر غير متاح مؤقتاً
+      } finally {
+        pollInFlight = false;
       }
-    }, 600);
+    };
+
+    // فحص فوري أولي (يلتقط initialMtime فقط إذا كان الملف جاهزاً وغير قيد التنزيل/الفتح)
+    await pollBridgeFileStatus();
+    if (watcherSessionRef.current !== sessionId) return;
+
+    // بدء حلقة المراقبة فائقة التردد (كل 600 ميلي ثانية)
+    liveWatcherIntervalRef.current = setInterval(pollBridgeFileStatus, 600);
   };
 
   // 2. مراقبة التعديلات المباشرة من المتصفح عبر Web File System Access API
@@ -2265,18 +2366,18 @@ export default function FilesPage() {
       return;
     }
 
-    const shareCocUri = `sharecoc://open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}&storage_path=${encodeURIComponent(file.storagePath || file.id || '')}`;
+    const shareCocUri = `sharecoc://open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}&storage_path=${encodeURIComponent(file.storagePath || file.id || '')}&md5=${encodeURIComponent(file.md5Checksum || '')}`;
 
     // 1. محاولة اتصال مباشر وسريع بجسر الحاسوب (127.0.0.1 يُعتبر عنواناً آمناً في Chrome/Edge/Firefox حتى من صفحات HTTPS)
     // هذا أسرع بكثير من بروتوكول sharecoc:// الذي يُشغّل نسخة جديدة من التطبيق (عدة ثوانٍ) قبل فتح الملف.
     if (typeof window !== 'undefined') {
       try {
-        const bridgeUrl = `http://127.0.0.1:18290/open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}&storage_path=${encodeURIComponent(file.storagePath || file.id || '')}`;
+        const bridgeUrl = `http://127.0.0.1:18290/open?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}&storage_path=${encodeURIComponent(file.storagePath || file.id || '')}&md5=${encodeURIComponent(file.md5Checksum || '')}`;
         const bridgeRes = await fetch(bridgeUrl, {
           method: 'GET',
           mode: 'cors',
           cache: 'no-store',
-          signal: AbortSignal.timeout(1500),
+          signal: AbortSignal.timeout(8000),
         });
         if (bridgeRes.ok) {
           const bData = await bridgeRes.json();
@@ -2310,6 +2411,44 @@ export default function FilesPage() {
         type: 'info'
       });
     });
+
+    // عند التشغيل عبر بروتوكول sharecoc:// (مثلاً أثناء الإقلاع البارد للتطبيق)، نفحص /status لبضع ثوانٍ
+    // ثم نربط startLiveBridgeWatcher فور نهوض الجسر حتى تبقى مزامنة Ctrl+S الفورية فعّالة.
+    if (typeof window !== 'undefined') {
+      stopWatching();
+      const pollToken = bridgePollTokenRef.current;
+      let attempts = 0;
+      const maxAttempts = 15;
+
+      const pollBridgeAfterProtocol = async () => {
+        if (bridgePollTokenRef.current !== pollToken) return;
+        attempts += 1;
+        try {
+          const statusRes = await fetch('http://127.0.0.1:18290/status', {
+            method: 'GET',
+            mode: 'cors',
+            cache: 'no-store',
+            signal: AbortSignal.timeout(900),
+          });
+          if (statusRes.ok && bridgePollTokenRef.current === pollToken) {
+            bridgePollTokenRef.current += 1;
+            bridgeBootTimerRef.current = null;
+            startLiveBridgeWatcher(file);
+            return;
+          }
+        } catch {
+          // الجسر لا يزال قيد التشغيل
+        }
+        if (bridgePollTokenRef.current === pollToken && attempts < maxAttempts) {
+          bridgeBootTimerRef.current = setTimeout(pollBridgeAfterProtocol, 1000);
+        } else if (bridgePollTokenRef.current === pollToken) {
+          bridgePollTokenRef.current += 1;
+          bridgeBootTimerRef.current = null;
+        }
+      };
+
+      bridgeBootTimerRef.current = setTimeout(pollBridgeAfterProtocol, 1000);
+    }
   };
 
   // تشغيل المستند في تطبيق الهاتف الأصلي (Word / Excel / WPS) عبر Web Share مع نوع MIME دقيق

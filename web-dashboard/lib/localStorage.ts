@@ -1885,6 +1885,7 @@ function isBootstrapLockActive(lockPath: string, now: number = Date.now()): bool
  */
 function maybeTriggerBackgroundBootstrap(): void {
   try {
+    if (process.env.ENABLE_GDRIVE_BOOTSTRAP !== '1') return;
     if (process.env.NEXT_PHASE === 'phase-production-build') return;
 
     const now = Date.now();
@@ -1921,7 +1922,9 @@ function maybeTriggerBackgroundBootstrap(): void {
 }
 
 export async function getAllCloudFiles(forceRefresh: boolean = false) {
-  maybeTriggerBackgroundBootstrap();
+  if (process.env.ENABLE_GDRIVE_BOOTSTRAP === '1') {
+    maybeTriggerBackgroundBootstrap();
+  }
 
   if (!forceRefresh && _cloudFilesCache && Date.now() - _cloudFilesCache.ts < CLOUD_FILES_CACHE_TTL_MS) {
     return _cloudFilesCache.data;
