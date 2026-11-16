@@ -1137,7 +1137,7 @@ class FileExchangeMainWindow(QMainWindow):
         self.logo_path = base_dir / "assets" / "logo.png"
         if not self.logo_path.exists():
             self.logo_path = base_dir / "assets" / "logo.ico"
-        self.setWindowTitle("Share COC – غرفة تجارة كربلاء المقدسة")
+        self.setWindowTitle("Share COC v5 – غرفة تجارة كربلاء المقدسة")
         self.resize(1320, 820)
         self.setMinimumSize(1060, 680)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
@@ -1251,10 +1251,26 @@ class FileExchangeMainWindow(QMainWindow):
         # نصوص الهوية
         title_box = QVBoxLayout()
         title_box.setSpacing(2)
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(6)
         app_title = QLabel("Share COC")
         app_title.setFont(QFont("IBM Plex Sans Arabic", 11, QFont.Weight.Bold))
         app_title.setStyleSheet("color: #1B1F24; font-weight: 700; border: none; background: transparent;")
-        title_box.addWidget(app_title)
+        title_row.addWidget(app_title)
+        self.version_badge = QLabel("v5")
+        self.version_badge.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+        self.version_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.version_badge.setStyleSheet("""
+            background: #ECFDF5;
+            color: #0F533A;
+            border: 1px solid #A7F3D0;
+            border-radius: 7px;
+            padding: 1px 6px;
+        """)
+        title_row.addWidget(self.version_badge)
+        title_row.addStretch()
+        title_box.addLayout(title_row)
         org_subtitle = QLabel("غرفة تجارة كربلاء المقدسة")
         org_subtitle.setFont(QFont("IBM Plex Sans Arabic", 8, QFont.Weight.Medium))
         org_subtitle.setStyleSheet("color: #667085; border: none; background: transparent;")
