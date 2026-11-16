@@ -85,6 +85,66 @@ def get_sendto_folder() -> Path:
     return Path(appdata) / "Microsoft" / "Windows" / "SendTo"
 
 
+BROWSER_POLICY_ALLOWED_ORIGINS = [
+    "https://share.162.35.16.252.sslip.io",
+    "http://localhost:3000",
+]
+
+
+def register_browser_policies() -> bool:
+    """تسجيل سياسات Chrome و Edge تلقائياً لفتح sharecoc:// والوصول للجسر المحلي 127.0.0.1"""
+    if sys.platform != "win32":
+        return False
+    import json
+    import winreg
+
+    protocols_policy = json.dumps(
+        [
+            {"allowed_origins": BROWSER_POLICY_ALLOWED_ORIGINS, "protocol": proto}
+            for proto in ("sharecoc", "ms-word", "ms-excel", "ms-powerpoint", "ms-access")
+        ],
+        ensure_ascii=False,
+    )
+    url_list_subkeys = (
+        "AutoOpenAllowedForURLs",
+        "LocalNetworkAccessAllowedForUrls",
+        "InsecurePrivateNetworkRequestsAllowedForUrls",
+        "LoopbackNetworkAllowedForUrls",
+    )
+    browser_paths = (
+        r"Software\Policies\Microsoft\Edge",
+        r"Software\Policies\Google\Chrome",
+    )
+
+    def _write_policies_to_hive(hive) -> bool:
+        wrote_any = False
+        for base_path in browser_paths:
+            with winreg.CreateKey(hive, base_path) as k:
+                winreg.SetValueEx(k, "AlwaysOpenPdfExternally", 0, winreg.REG_DWORD, 1)
+                winreg.SetValueEx(k, "AutoLaunchProtocolsFromOrigins", 0, winreg.REG_SZ, protocols_policy)
+                wrote_any = True
+            for sub in url_list_subkeys:
+                with winreg.CreateKey(hive, f"{base_path}\\{sub}") as sub_k:
+                    for idx, origin in enumerate(BROWSER_POLICY_ALLOWED_ORIGINS, start=1):
+                        winreg.SetValueEx(sub_k, str(idx), 0, winreg.REG_SZ, origin)
+        return wrote_any
+
+    hkcu_ok = False
+    try:
+        hkcu_ok = _write_policies_to_hive(winreg.HKEY_CURRENT_USER)
+    except Exception as e:
+        print(f"[WindowsIntegration] HKCU browser policy error: {e}")
+
+    try:
+        _write_policies_to_hive(winreg.HKEY_LOCAL_MACHINE)
+    except PermissionError:
+        pass
+    except Exception as e:
+        print(f"[WindowsIntegration] HKLM browser policy notice: {e}")
+
+    return hkcu_ok
+
+
 def register_protocol_handler(exe_path: Path, icon_path: Path = None) -> bool:
     """تسجيل بروتوكول sharecoc:// في سجل ويندوز لفتح الملفات من المتصفح مباشرة"""
     if sys.platform != "win32":
@@ -100,6 +160,7 @@ def register_protocol_handler(exe_path: Path, icon_path: Path = None) -> bool:
             winreg.SetValueEx(k_ico, "", 0, winreg.REG_SZ, f'"{ico}",0')
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, f"{key_path}\\shell\\open\\command") as k_cmd:
             winreg.SetValueEx(k_cmd, "", 0, winreg.REG_SZ, f'"{exe_path}" --open "%1"')
+        register_browser_policies()
         return True
     except Exception as e:
         print(f"[WindowsIntegration] Protocol registration error: {e}")

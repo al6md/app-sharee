@@ -2340,7 +2340,7 @@ export default function FilesPage() {
   };
 
   // إطلاق بروتوكول برنامج خارجي (sharecoc:// ...) مع كشف عدم الاستجابة بعد 8 ثوانٍ وإرجاع مقبض إلغاء فوري
-  const launchExternalProtocol = (uri: string, onNoResponse: () => void): { cancel: () => void } => {
+  const launchExternalProtocol = (uri: string, onNoResponse: () => void): { cancel: () => void; isHandled: () => boolean } => {
     let handled = false;
     let cancelled = false;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -2381,6 +2381,7 @@ export default function FilesPage() {
     }, 8000);
 
     return {
+      isHandled: () => handled,
       cancel: () => {
         cancelled = true;
         handled = true;
@@ -2392,11 +2393,11 @@ export default function FilesPage() {
   // فتح الملف في برنامجه الأصلي على جهاز المستخدم (بدون أي تطبيق مساعد)
   const openNativeFile = async (file: FileItem) => {
     setDesktopFallbackFile(null);
-    const fileUrl = await getFileDirectUrl(file);
 
     // الهواتف المحمولة
     const isMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
     if (isMobile) {
+      const fileUrl = await getFileDirectUrl(file);
       if (['word', 'excel'].includes(file.type)) {
         setSelectedMobileFile(file);
         handleOpenInMobileApp(file);
@@ -2409,32 +2410,44 @@ export default function FilesPage() {
     const bridgeQuery = `file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}&storage_path=${encodeURIComponent(file.storagePath || file.id || '')}&md5=${encodeURIComponent(file.md5Checksum || '')}`;
     const shareCocUri = `sharecoc://open?${bridgeQuery}`;
     const bridgeUrl = `http://127.0.0.1:18290/open?${bridgeQuery}`;
+    const bridgeLocalhostUrl = `http://localhost:18290/open?${bridgeQuery}`;
     const fileStatusUrl = `http://127.0.0.1:18290/file-status?file=${encodeURIComponent(file.name)}&folder=${encodeURIComponent(file.folder || '')}&storage_path=${encodeURIComponent(file.storagePath || file.id || '')}`;
 
-    // 1. محاولة اتصال مباشر وسريع بجسر الحاسوب (127.0.0.1 يُعتبر عنواناً آمناً في Chrome/Edge/Firefox حتى من صفحات HTTPS)
-    // هذا أسرع بكثير من بروتوكول sharecoc:// الذي يُشغّل نسخة جديدة من التطبيق (عدة ثوانٍ) قبل فتح الملف.
+    // 1. محاولة اتصال مباشر وسريع بجسر الحاسوب مع مهلة قصيرة للحفاظ على صلاحية نقرة المستخدم للبروتوكول
     if (typeof window !== 'undefined') {
-      try {
-        const bridgeRes = await fetch(bridgeUrl, {
-          method: 'GET',
-          mode: 'cors',
-          credentials: 'omit',
-          cache: 'no-store',
-          signal: AbortSignal.timeout(8000),
-        });
-        if (bridgeRes.ok) {
-          const bData = await bridgeRes.json();
-          if (bData.success) {
-            startLiveBridgeWatcher(file);
-            setToastMessage({
-              text: `🚀 تم فتح "${file.name}" في البرنامج الأصلي بنجاح (وضع التحرير والمزامنة اللحظية).`,
-              type: 'success'
-            });
-            return;
-          }
+      const probeStart = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      const probeEndpoints = [
+        { url: bridgeUrl, timeoutMs: 1200 },
+        { url: bridgeLocalhostUrl, timeoutMs: 800 },
+      ];
+      for (let i = 0; i < probeEndpoints.length; i++) {
+        const ep = probeEndpoints[i];
+        if (i > 0) {
+          const elapsed = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - probeStart;
+          if (elapsed >= 800) break;
         }
-      } catch {
-        // ننتقل لتشغيل بروتوكول sharecoc://
+        try {
+          const bridgeRes = await fetch(ep.url, {
+            method: 'GET',
+            mode: 'cors',
+            credentials: 'omit',
+            cache: 'no-store',
+            signal: AbortSignal.timeout(ep.timeoutMs),
+          });
+          if (bridgeRes.ok) {
+            const bData = await bridgeRes.json();
+            if (bData.success) {
+              startLiveBridgeWatcher(file);
+              setToastMessage({
+                text: `🚀 تم فتح "${file.name}" في البرنامج الأصلي بنجاح (وضع التحرير والمزامنة اللحظية).`,
+                type: 'success'
+              });
+              return;
+            }
+          }
+        } catch {
+          // ننتقل للمنفذ البديل أو لبروتوكول sharecoc://
+        }
       }
     }
 
@@ -2471,15 +2484,26 @@ export default function FilesPage() {
       const pollBridgeAfterProtocol = async () => {
         if (bridgePollTokenRef.current !== pollToken) return;
         attempts += 1;
+        let statusRes: Response | null = null;
+        for (const statusEndpoint of ['http://127.0.0.1:18290/status', 'http://localhost:18290/status']) {
+          try {
+            const candidate = await fetch(statusEndpoint, {
+              method: 'GET',
+              mode: 'cors',
+              credentials: 'omit',
+              cache: 'no-store',
+              signal: AbortSignal.timeout(900),
+            });
+            if (candidate.ok) {
+              statusRes = candidate;
+              break;
+            }
+          } catch {
+            // نجرب العنوان البديل
+          }
+        }
         try {
-          const statusRes = await fetch('http://127.0.0.1:18290/status', {
-            method: 'GET',
-            mode: 'cors',
-            credentials: 'omit',
-            cache: 'no-store',
-            signal: AbortSignal.timeout(900),
-          });
-          if (statusRes.ok && bridgePollTokenRef.current === pollToken) {
+          if (statusRes && statusRes.ok && bridgePollTokenRef.current === pollToken) {
             const resolvedToken = pollToken + 1;
             bridgePollTokenRef.current = resolvedToken;
             bridgeBootTimerRef.current = null;
@@ -2543,6 +2567,7 @@ export default function FilesPage() {
         if (bridgePollTokenRef.current === pollToken && attempts < maxAttempts) {
           bridgeBootTimerRef.current = setTimeout(pollBridgeAfterProtocol, 1000);
         } else if (bridgePollTokenRef.current === pollToken) {
+          const wasHandledByOs = protocolHandle.isHandled();
           bridgePollTokenRef.current += 1;
           bridgeBootTimerRef.current = null;
           protocolHandle.cancel();
@@ -2550,7 +2575,9 @@ export default function FilesPage() {
             protocolCancelRef.current = null;
           }
           setToastMessage(null);
-          setDesktopFallbackFile(file);
+          if (!wasHandledByOs) {
+            setDesktopFallbackFile(file);
+          }
         }
       };
 

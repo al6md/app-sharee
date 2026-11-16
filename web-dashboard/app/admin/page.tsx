@@ -322,7 +322,12 @@ export default function AdminControlPage() {
   // إشعار تطبيق سطح المكتب المحلي بالمزامنة الفورية بعد أي تغيير في الصلاحيات أو الأقسام
   const notifyLocalDesktopSync = () => {
     try {
-      fetch('http://127.0.0.1:18290/sync', { method: 'GET', mode: 'cors' }).catch(() => {});
+      fetch('http://127.0.0.1:18290/sync', {
+        method: 'GET',
+        mode: 'cors',
+        credentials: 'omit',
+        cache: 'no-store',
+      }).catch(() => {});
     } catch {
       // تجاهل إن لم يكن تطبيق سطح المكتب يعمل على نفس الجهاز
     }

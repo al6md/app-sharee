@@ -188,10 +188,13 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
         self.send_header('Content-Type', f'{content_type}; charset=utf-8')
         origin = (self.headers.get('Origin') or '').strip() if getattr(self, 'headers', None) else ''
         self.send_header('Access-Control-Allow-Origin', origin if origin else '*')
+        if origin:
+            self.send_header('Access-Control-Allow-Credentials', 'true')
         self.send_header('Vary', 'Origin')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', '*')
         self.send_header('Access-Control-Allow-Private-Network', 'true')
+        self.send_header('Access-Control-Max-Age', '86400')
         self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate')
         self.end_headers()
 
@@ -210,11 +213,17 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
             return
 
         if path == '/ping' or path == '/status':
+            try:
+                from windows_integration import APP_VERSION
+            except Exception:
+                APP_VERSION = "5.0.0"
             self._set_headers(200)
             data = {
                 "status": "ok",
                 "app": "share coc",
-                "version": "5.0",
+                "version": APP_VERSION,
+                "bridge_version": "5.0",
+                "exe_path": sys.executable,
                 "pid": os.getpid(),
                 "last_sync_time": getattr(LocalBridgeHandler, "last_sync_time", 0.0),
                 "last_synced_file": getattr(LocalBridgeHandler, "last_synced_file", ""),
@@ -740,17 +749,41 @@ class LocalBridgeHandler(BaseHTTPRequestHandler):
         pass
 
 
-def register_sharecoc_protocol():
-    """تسجيل بروتوكول sharecoc:// في سجل نظام ويندوز (Windows Registry)"""
+class _BridgeThreadingHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = (sys.platform != "win32")
+
+
+def _free_bridge_port_if_held(port: int):
+    """تحرير منفذ الجسر إذا كان محجوزاً من عملية قديمة غير العملية الحالية"""
     try:
-        if getattr(sys, 'frozen', False):
+        import psutil
+        curr_pid = os.getpid()
+        for conn in psutil.net_connections(kind='inet'):
+            if conn.laddr and conn.laddr.port == port and conn.pid and conn.pid != curr_pid:
+                try:
+                    proc = psutil.Process(conn.pid)
+                    proc.terminate()
+                    proc.wait(timeout=1.5)
+                except Exception:
+                    try:
+                        psutil.Process(conn.pid).kill()
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
+
+def register_sharecoc_protocol():
+    """تسجيل بروتوكول sharecoc:// وسياسات المتصفح في سجل نظام ويندوز (Windows Registry)"""
+    try:
+        installed_exe = Path(os.environ.get('LOCALAPPDATA', '')) / "Programs" / "ShareCOC" / "share coc.exe"
+        if installed_exe.exists():
+            target_exe = str(installed_exe)
+        elif getattr(sys, 'frozen', False):
             target_exe = sys.executable
         else:
-            installed_exe = Path(os.environ.get('LOCALAPPDATA', '')) / "Programs" / "ShareCOC" / "share coc.exe"
             desktop_exe = Path(os.environ.get('USERPROFILE', '')) / "OneDrive" / "Desktop" / "share coc.exe"
-            if installed_exe.exists():
-                target_exe = str(installed_exe)
-            elif desktop_exe.exists():
+            if desktop_exe.exists():
                 target_exe = str(desktop_exe)
             else:
                 target_exe = sys.executable
@@ -759,8 +792,17 @@ def register_sharecoc_protocol():
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path) as key:
             winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "URL:Share COC Protocol")
             winreg.SetValueEx(key, "URL Protocol", 0, winreg.REG_SZ, "")
+            with winreg.CreateKey(key, r"DefaultIcon") as ico_key:
+                winreg.SetValueEx(ico_key, "", 0, winreg.REG_SZ, f'"{target_exe}",0')
             with winreg.CreateKey(key, r"shell\open\command") as cmd_key:
                 winreg.SetValueEx(cmd_key, "", 0, winreg.REG_SZ, f'"{target_exe}" --open "%1"')
+
+        try:
+            from windows_integration import register_browser_policies
+            register_browser_policies()
+        except Exception as policy_err:
+            print(f"[LocalBridge] Browser policy registration notice: {policy_err}")
+
         print("[LocalBridge] Registered sharecoc:// protocol successfully.")
     except Exception as e:
         print(f"[LocalBridge] Failed to register protocol: {e}")
@@ -777,16 +819,23 @@ def start_local_bridge(sync_folder, cloud_client=None, sync_engine=None, show_wi
 
     def run_server():
         try:
-            server = ThreadingHTTPServer(('0.0.0.0', BRIDGE_PORT), LocalBridgeHandler)
+            server = _BridgeThreadingHTTPServer(('0.0.0.0', BRIDGE_PORT), LocalBridgeHandler)
             print(f"[LocalBridge] Running on http://0.0.0.0:{BRIDGE_PORT}")
             server.serve_forever()
-        except OSError as e:
+        except OSError:
             try:
-                server = ThreadingHTTPServer(('127.0.0.1', BRIDGE_PORT), LocalBridgeHandler)
+                server = _BridgeThreadingHTTPServer(('127.0.0.1', BRIDGE_PORT), LocalBridgeHandler)
                 print(f"[LocalBridge] Running on http://127.0.0.1:{BRIDGE_PORT}")
                 server.serve_forever()
-            except OSError as e2:
-                print(f"[LocalBridge] Port {BRIDGE_PORT} is already in use: {e2}")
+            except OSError:
+                _free_bridge_port_if_held(BRIDGE_PORT)
+                time.sleep(0.25)
+                try:
+                    server = _BridgeThreadingHTTPServer(('127.0.0.1', BRIDGE_PORT), LocalBridgeHandler)
+                    print(f"[LocalBridge] Recovered and running on http://127.0.0.1:{BRIDGE_PORT}")
+                    server.serve_forever()
+                except OSError as e2:
+                    print(f"[LocalBridge] Port {BRIDGE_PORT} is already in use: {e2}")
 
     thread = threading.Thread(target=run_server, daemon=True)
     thread.start()

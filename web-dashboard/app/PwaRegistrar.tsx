@@ -12,10 +12,11 @@ export default function PwaRegistrar() {
   useEffect(() => {
     // 1. تسجيل Service Worker للـ PWA
     if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/sw.js').then(
+      const registerSw = () => {
+        navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).then(
           (reg) => {
             console.log('[PWA] ServiceWorker registered with scope:', reg.scope);
+            reg.update().catch(() => {});
             reg.onupdatefound = () => {
               const installingWorker = reg.installing;
               if (installingWorker) {
@@ -31,7 +32,12 @@ export default function PwaRegistrar() {
             console.log('[PWA] ServiceWorker registration failed:', err);
           }
         );
-      });
+      };
+      if (document.readyState === 'complete') {
+        registerSw();
+      } else {
+        window.addEventListener('load', registerSw, { once: true });
+      }
     }
 
     // 2. الكشف عن أجهزة iPhone/iPad

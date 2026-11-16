@@ -174,20 +174,21 @@ def _parse_sharecoc_target(raw_target):
         url_to_parse = url_to_parse.rstrip("/")
         parsed = urllib.parse.urlparse(url_to_parse)
         target_action = parsed.netloc.lower() if parsed.netloc else "open"
-        qs = urllib.parse.parse_qs(parsed.query)
+        # parse_qs performs percent-decoding once already; avoid calling unquote a second time
+        qs = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
         target_file = qs.get("file", [""])[0].strip()
         target_folder = qs.get("folder", [""])[0].strip()
         target_storage_path = qs.get("storage_path", [""])[0].strip()
         target_md5 = qs.get("md5", [""])[0].strip()
     else:
-        target_file = raw
+        target_file = urllib.parse.unquote(raw)
 
     return {
         "action": target_action,
-        "file": urllib.parse.unquote(target_file).strip(' "\'').rstrip('/\\'),
-        "folder": urllib.parse.unquote(target_folder).strip(' "\'').rstrip('/\\'),
-        "storage_path": urllib.parse.unquote(target_storage_path).strip(' "\''),
-        "md5": urllib.parse.unquote(target_md5).strip(' "\'').lower(),
+        "file": target_file.strip(' "\'').rstrip('/\\'),
+        "folder": target_folder.strip(' "\'').rstrip('/\\'),
+        "storage_path": target_storage_path.strip(' "\''),
+        "md5": target_md5.strip(' "\'').lower(),
     }
 
 
@@ -381,27 +382,125 @@ def _resolve_and_prepare_open_target(
     return target_cand
 
 
+def _should_replace_running_instance(status_info, current_version="5.0.0") -> bool:
+    """التحقق مما إذا كانت النسخة العاملة قديمة أو لا تستجيب ويجب استبدالها بالنسخة الحالية."""
+    if not isinstance(status_info, dict):
+        return True
+    running_version = str(status_info.get("version") or "").strip()
+    return running_version != str(current_version or "").strip()
+
+
+def _query_running_bridge_status(timeout=1.0):
+    """استعلام سريع لحالة الجسر المحلي على المنفذ 18290 مع تجاوز بروكسي النظام."""
+    import json
+    import urllib.request
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open("http://127.0.0.1:18290/status", timeout=timeout) as resp:
+            if resp.status == 200:
+                return json.loads(resp.read().decode("utf-8", errors="replace"))
+    except Exception:
+        pass
+    return None
+
+
+def _terminate_other_sharecoc_processes():
+    """إغلاق أي نسخة قديمة من share coc.exe بأمان دون المساس بالعملية الحالية أو محمّل PyInstaller الأب."""
+    try:
+        import psutil
+        curr_pid = os.getpid()
+        protected_pids = {curr_pid, os.getppid()}
+        try:
+            for parent in psutil.Process(curr_pid).parents():
+                protected_pids.add(parent.pid)
+        except Exception:
+            pass
+
+        targets = []
+        for proc in psutil.process_iter(["pid", "name"]):
+            try:
+                pid = proc.info.get("pid")
+                name = str(proc.info.get("name") or "").lower()
+                if not pid or pid in protected_pids:
+                    continue
+                if name == "share coc.exe":
+                    targets.append(proc)
+            except Exception:
+                pass
+
+        for proc in targets:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        if targets:
+            _, alive = psutil.wait_procs(targets, timeout=2.0)
+            for proc in alive:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+    except Exception as e:
+        _safe_log_err(f"[Terminate old instances]: {e}")
+
+
+def _ensure_installed_binary_up_to_date():
+    """نسخ النسخة الحالية تلقائياً إلى المسار الرسمي في AppData وتحديث اختصارات وسياسات ويندوز."""
+    try:
+        from windows_integration import get_default_install_dir, register_protocol_handler, APP_EXE_NAME
+        from autostart import set_windows_autostart
+
+        if not getattr(sys, 'frozen', False):
+            register_protocol_handler(Path(sys.executable))
+            return
+
+        current_exe = Path(sys.executable).resolve()
+        install_dir = get_default_install_dir()
+        install_dir.mkdir(parents=True, exist_ok=True)
+        installed_exe = (install_dir / APP_EXE_NAME).resolve()
+        active_exe = current_exe
+
+        if current_exe != installed_exe:
+            try:
+                import shutil
+                tmp_exe = install_dir / f".{APP_EXE_NAME}.{os.getpid()}.tmp"
+                shutil.copy2(str(current_exe), str(tmp_exe))
+                os.replace(str(tmp_exe), str(installed_exe))
+                active_exe = installed_exe
+            except Exception as copy_err:
+                _safe_log_err(f"[Self-Install Copy Notice]: {copy_err}")
+                if installed_exe.exists():
+                    active_exe = installed_exe
+        else:
+            active_exe = installed_exe
+
+        icon_candidate = install_dir / "assets" / "logo.ico"
+        if not icon_candidate.exists():
+            icon_candidate = Path(getattr(sys, "_MEIPASS", install_dir)) / "assets" / "logo.ico"
+
+        register_protocol_handler(active_exe, icon_candidate if icon_candidate.exists() else None)
+        set_windows_autostart(enable=True, exe_path=str(active_exe))
+    except Exception as e:
+        _safe_log_err(f"[Self-Install Notice]: {e}")
+
+
 def ensure_desktop_shortcut():
-    """إنشاء وتأكيد وجود اختصار لتطبيق share coc على سطح المكتب بشعاره الرسمي"""
+    """إنشاء وتحديث اختصار تطبيق share coc على سطح المكتب بشعاره الرسمي"""
     try:
         if getattr(sys, 'frozen', False):
-            target_exe = sys.executable
+            from windows_integration import get_default_install_dir, APP_EXE_NAME
+            installed_exe = get_default_install_dir() / APP_EXE_NAME
+            target_exe = str(installed_exe) if installed_exe.exists() else sys.executable
             app_dir = Path(target_exe).parent
         else:
             target_exe = str(Path(__file__).resolve())
             app_dir = Path(__file__).parent.parent
 
-        desktop_paths = [
-            Path(os.environ.get('USERPROFILE', 'C:')) / "OneDrive" / "Desktop",
-            Path(os.environ.get('USERPROFILE', 'C:')) / "Desktop"
-        ]
-        for dp in desktop_paths:
-            if (dp / "share coc.lnk").exists():
-                return
-
         ico_path = app_dir / "assets" / "logo.ico"
         if not ico_path.exists():
             ico_path = app_dir / "logo.ico"
+        if not ico_path.exists() and hasattr(sys, "_MEIPASS"):
+            ico_path = Path(sys._MEIPASS) / "assets" / "logo.ico"
 
         ps_script = f"""
         $wsh = New-Object -ComObject WScript.Shell
@@ -423,7 +522,7 @@ def ensure_desktop_shortcut():
         """
         subprocess.run(
             ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps_script],
-            capture_output=True, timeout=3,
+            capture_output=True, timeout=5,
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)
         )
     except Exception as e:
@@ -517,9 +616,16 @@ def _kill_unresponsive_zombies():
 
 def main():
     # 1. فحص وسائط سطر الأوامر لفتح الملف مباشرة بالبرنامج الأصلي (مثل Word أو Excel)
-    if len(sys.argv) > 1 and sys.argv[1] == '--open':
+    is_cli_open = len(sys.argv) > 1 and (
+        sys.argv[1] == '--open' or str(sys.argv[1]).strip(' "\'').lower().startswith('sharecoc:')
+    )
+    if is_cli_open:
         _safe_log_err(f'[CLI ARGV RECEIVED]: {sys.argv}')
-        raw_target = sys.argv[2] if len(sys.argv) > 2 else ""
+        raw_target = (
+            (sys.argv[2] if len(sys.argv) > 2 else "")
+            if sys.argv[1] == '--open'
+            else sys.argv[1]
+        )
         parsed_target = _parse_sharecoc_target(raw_target)
         target_action = parsed_target["action"]
         target_file = parsed_target["file"]
@@ -650,47 +756,31 @@ def main():
                 urllib.request.urlopen("http://127.0.0.1:18290/sync", timeout=1.5)
             except Exception:
                 pass
-        # هناك نسخة مسجلة؛ محاولة إيقاظ النافذة وإظهارها فوراً
-        # 1. إرسال طلب صريح إلى المنفذ المحلي /show لإظهار النافذة من شريط المهام وصينية النظام (Tray)
-        try:
-            import urllib.request
-            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-            with opener.open("http://127.0.0.1:18290/show", timeout=1.0) as resp:
-                if resp.status == 200:
-                    sys.exit(0)
-        except Exception:
-            pass
-
-        # 2. محاولة تنشيطها عبر واجهات ويندوز (Win32 Event & HWND)
-        activated = _activate_running_instance(retries=2, delay=0.25)
-        if activated:
-            sys.exit(0)
-
-        # 3. فحص إضافي: هل المنفذ 18290 يستجيب للـ status؟
-        is_alive = False
-        try:
-            import urllib.request
-            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-            with opener.open("http://127.0.0.1:18290/status", timeout=1.0) as resp:
-                if resp.status == 200:
-                    is_alive = True
-        except Exception:
-            is_alive = False
-
-        if is_alive:
+        # فحص إصدار النسخة العاملة حالياً؛ إن كانت قديمة أو لا تستجيب، يتم إغلاقها واستبدالها بهذه النسخة فوراً
+        from windows_integration import APP_VERSION
+        running_status = _query_running_bridge_status(timeout=1.0)
+        if not _should_replace_running_instance(running_status, current_version=APP_VERSION):
+            # النسخة المطابقة (v5.0.0) تعمل بالفعل: نوقظها فقط ونخرج
             try:
-                opener.open("http://127.0.0.1:18290/show", timeout=0.8)
+                import urllib.request
+                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                with opener.open("http://127.0.0.1:18290/show", timeout=1.0) as resp:
+                    if resp.status == 200:
+                        sys.exit(0)
             except Exception:
                 pass
+            if _activate_running_instance(retries=2, delay=0.25):
+                sys.exit(0)
             sys.exit(0)
 
-        # فقط إذا تعذر التنشيط والمنفذ لا يستجيب تماماً، فالعملية السابقة متجمدة؛ إنهاؤها وتحرير المنفذ والقفل
+        # النسخة العاملة قديمة أو عالقة: إغلاقها بأمان، تحرير المنفذ، وإعادة امتلاك القفل للنسخة الجديدة
+        _terminate_other_sharecoc_processes()
         _kill_unresponsive_zombies()
         try:
             kernel32.CloseHandle(_single_instance_mutex)
         except Exception:
             pass
-        time.sleep(0.15)
+        time.sleep(0.3)
         _single_instance_mutex = kernel32.CreateMutexW(None, False, "Global\\KarbalaChamberShareCOCSingleInstanceMutex")
 
     app = QApplication(sys.argv)
@@ -711,8 +801,12 @@ def main():
         from PyQt6.QtGui import QIcon
         app.setWindowIcon(QIcon(str(logo_path)))
 
-    # تأكيد وجود اختصار البرنامج على سطح المكتب في خيط خلفي
-    threading.Thread(target=ensure_desktop_shortcut, daemon=True).start()
+    # تحديث النسخة المثبتة واختصار سطح المكتب وسياسات المتصفح في خيط خلفي
+    def _startup_system_sync():
+        _ensure_installed_binary_up_to_date()
+        ensure_desktop_shortcut()
+
+    threading.Thread(target=_startup_system_sync, daemon=True).start()
 
     # مجلد المزامنة المحلي على جهاز المستخدم
     state_mgr = LocalStateManager()
